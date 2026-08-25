@@ -15,6 +15,7 @@ import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 
 const api: StoryFabricApi = {
   pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
+  getDefaultWorkspaceDir: () => ipcRenderer.invoke(IPC.GetDefaultDir),
   createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
   openWorkspace: (path) => ipcRenderer.invoke(IPC.OpenWorkspace, path),
   closeWorkspace: () => ipcRenderer.invoke(IPC.CloseWorkspace),

@@ -21,6 +21,18 @@ export function WelcomePage(): React.ReactElement {
     if (dir) setParentDir(dir)
   }
 
+  const openCreate = async (): Promise<void> => {
+    setCreateOpen(true)
+    if (!parentDir) {
+      try {
+        const docs = await api.getDefaultWorkspaceDir()
+        setParentDir(docs)
+      } catch {
+        /* 取不到文档目录时保持为空，由用户手动选择 */
+      }
+    }
+  }
+
   const doOpen = async (path?: string): Promise<void> => {
     setBusy(true)
     try {
@@ -67,7 +79,7 @@ export function WelcomePage(): React.ReactElement {
             <Button variant="primary" className="flex-1 justify-center" onClick={() => void doOpen()} loading={busy}>
               <FolderOpen size={16} /> 打开工作区文件夹
             </Button>
-            <Button variant="outline" className="flex-1 justify-center" onClick={() => setCreateOpen(true)} disabled={busy}>
+            <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
               <FolderPlus size={16} /> 创建新工作区
             </Button>
           </div>
@@ -106,15 +118,17 @@ export function WelcomePage(): React.ReactElement {
         </p>
       </div>
 
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description="在指定位置初始化一个新的小说项目文件夹">
+      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description="将在所选文件夹内创建一个以小说名命名的新文件夹">
         <div className="space-y-4">
-          <Field label="工作区名称（小说名）">
+          <Field label="小说名称 *">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：星海拾遗" autoFocus />
           </Field>
-          <Field label="存放位置">
+          <Field label="存放位置（默认为文档目录）" hint={`创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
             <div className="flex gap-2">
-              <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="选择父文件夹…" readOnly />
-              <Button onClick={() => void pickParent()}>浏览</Button>
+              <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="选择存放文件夹…" readOnly className="min-w-0 flex-1" />
+              <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">
+                浏览
+              </Button>
             </div>
           </Field>
           <div className="flex justify-end gap-2 pt-1">

@@ -34,6 +34,8 @@ export interface FetchModelsInput {
 export interface StoryFabricApi {
   /* 工作区 */
   pickFolder(): Promise<string | null>
+  /** 默认新建位置：系统文档目录 */
+  getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
   openWorkspace(path: string): Promise<WorkspaceSummary>
   closeWorkspace(): Promise<void>

@@ -1,5 +1,5 @@
 /** 主进程 IPC 装配：把服务注册到 ipcMain */
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import {
   deleteChapter,
   deleteCharacter,
@@ -48,6 +48,8 @@ export function registerIpc(ctx: AppContext): void {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
   })
+
+  ipcMain.handle(IPC.GetDefaultDir, async () => app.getPath('documents'))
 
   ipcMain.handle(IPC.CreateWorkspace, async (_e, parentDir: string, name: string) => createWorkspace(parentDir, name))
 
