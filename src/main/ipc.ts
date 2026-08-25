@@ -14,7 +14,7 @@ import {
   searchProject
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
-import { createWorkspace, loadSummary, validateWorkspace } from './services/workspaceService'
+import { createWorkspace, loadSummary, validateWorkspace, readGraphLayout, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
@@ -69,6 +69,8 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.RefreshWorkspace, async () => (currentRoot ? loadSummary(currentRoot) : null))
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))
   ipcMain.handle(IPC.SearchProject, async (_e, query: string) => searchProject(requireRoot(), query))
+  ipcMain.handle(IPC.GetGraphLayout, async () => readGraphLayout(requireRoot()))
+  ipcMain.handle(IPC.SaveGraphLayout, async (_e, layout) => writeGraphLayout(requireRoot(), layout))
 
   /* ---------- 实体 ---------- */
   ipcMain.handle(IPC.SaveCharacter, async (_e, doc) => saveCharacter(requireRoot(), doc))

@@ -1,5 +1,5 @@
 import { BookOpen, Plus, Save, Sparkles, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
@@ -28,16 +28,43 @@ export function ChaptersPage(): React.ReactElement {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [reloadHint, setReloadHint] = useState(false)
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false)
+  /** 打开（或最近一次同步）时的磁盘内容，用于检测智能体等外部修改 */
+  const baseRef = useRef<string>('')
+  const lastApplied = useChat((s) => s.lastAppliedChange)
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
   const volumes = useMemo(() => [...new Set(chapters.map((c) => c.volume || '未分卷'))], [chapters])
 
   const openChapter = async (meta: { id: string }): Promise<void> => {
+    if (draft && dirty && meta.id !== draft.id && !window.confirm('当前章节有未保存的修改，放弃并切换？')) return
     setSelectedId(meta.id)
     const body = await api.getChapterBody(meta.id)
+    baseRef.current = body ?? ''
     setDraft({ ...(selected ?? chapters.find((c) => c.id === meta.id)!), content: body ?? '' })
     setDirty(false)
+    setReloadHint(false)
   }
+
+  /** 拉取当前打开章节的最新磁盘内容并同步到草稿 */
+  const reloadOpen = async (): Promise<void> => {
+    if (!draft?.id) return
+    const body = await api.getChapterBody(draft.id)
+    baseRef.current = body ?? ''
+    setDraft((d) => (d ? { ...d, content: body ?? '' } : d))
+    setDirty(false)
+    setReloadHint(false)
+  }
+
+  /** 智能体写回了当前打开的章节：无本地改动则静默同步，有改动则提示 */
+  useEffect(() => {
+    if (lastApplied && lastApplied.entityKind === 'chapter' && draft && lastApplied.entityId === draft.id) {
+      if (dirty) setReloadHint(true)
+      else void reloadOpen()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastApplied])
 
   const create = async (): Promise<void> => {
     await api.saveChapter({
@@ -52,20 +79,37 @@ export function ChaptersPage(): React.ReactElement {
     if (last) {
       setSelectedId(last.id)
       setDraft({ ...last, content: '' })
+      baseRef.current = ''
+      setDirty(false)
+      setReloadHint(false)
     }
-    setDirty(false)
   }
 
-  const save = async (): Promise<void> => {
+  const doSave = async (): Promise<void> => {
     if (!draft) return
     setSaving(true)
     try {
       await api.saveChapter(draft)
+      baseRef.current = draft.content ?? ''
       await refresh()
       setDirty(false)
+      setReloadHint(false)
     } finally {
       setSaving(false)
     }
+  }
+
+  const save = async (): Promise<void> => {
+    if (!draft) return
+    // 保存前比对磁盘内容：智能体等外部修改过则先征求用户意见，避免静默覆盖
+    if (draft.id) {
+      const disk = await api.getChapterBody(draft.id)
+      if (disk !== null && disk !== baseRef.current) {
+        setConfirmOverwrite(true)
+        return
+      }
+    }
+    await doSave()
   }
 
   const remove = async (): Promise<void> => {
@@ -188,6 +232,18 @@ export function ChaptersPage(): React.ReactElement {
             </Button>
           </div>
 
+          {reloadHint && (
+            <div className="flex items-center gap-2 border-b border-line bg-accent-soft px-5 py-2 text-xs text-accent">
+              智能体已更新此章节，而你有未保存的本地修改。
+              <Button size="sm" variant="soft" onClick={() => void reloadOpen()}>
+                载入最新版（放弃本地修改）
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setReloadHint(false)}>
+                继续编辑我的版本
+              </Button>
+            </div>
+          )}
+
           <div className="min-h-0 flex-1 p-4">
             <MarkdownEditor value={draft.content ?? ''} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} />
           </div>
@@ -197,6 +253,32 @@ export function ChaptersPage(): React.ReactElement {
           </div>
         </div>
       )}
+
+      <Modal open={confirmOverwrite} onOpenChange={setConfirmOverwrite} title="章节已被外部修改" description="磁盘上的内容与你打开时不一致（可能来自智能体写回或其他编辑器）">
+        <p className="text-sm text-muted">选择「覆盖」将以你当前编辑器里的内容为准；选择「载入最新版」将放弃本地修改。</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setConfirmOverwrite(false)}>
+            取消
+          </Button>
+          <Button
+            onClick={() => {
+              setConfirmOverwrite(false)
+              void reloadOpen()
+            }}
+          >
+            载入最新版
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setConfirmOverwrite(false)
+              void doSave()
+            }}
+          >
+            覆盖磁盘内容
+          </Button>
+        </div>
+      </Modal>
 
       <Modal open={confirmDelete} onOpenChange={setConfirmDelete} title={`删除「${selected?.title ?? ''}」？`}>
         <p className="text-sm text-muted">此操作不可撤销。</p>

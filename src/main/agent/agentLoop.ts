@@ -90,11 +90,16 @@ export class AgentService {
     const userMsg: ChatMessage = { id: genId('msg'), role: 'user', text: userText }
     session.messages.push(userMsg)
     if (!session.title || session.title === '新会话') session.title = titleFromMessage(req.message)
+    // 记录起始元信息：流式期间用户可能重命名/归档会话，落盘时以磁盘变化为准
+    const titleAtStart = session.title
+    const archivedAtStart = session.archived
 
     const controller = new AbortController()
     this.aborts.set(sid, controller)
 
     this.emit(sid, { type: 'session', session })
+    // 立即落盘：保证流式期间用户可以重命名/归档（updateMeta 依赖文件存在）
+    await store.save(session).catch(() => {})
 
     try {
       const settings = await this.settings.load()
@@ -169,6 +174,12 @@ export class AgentService {
       this.emit(sid, { type: 'error', message: msg })
       this.emit(sid, { type: 'done' })
     } finally {
+      // 合并流式期间发生的元信息变更（重命名/归档），避免整体回存覆盖
+      const disk = await store.load(sid).catch(() => null)
+      if (disk) {
+        if (disk.title !== titleAtStart) session.title = disk.title
+        if (disk.archived !== archivedAtStart) session.archived = disk.archived
+      }
       session.updatedAt = Date.now()
       await store.save(session).catch(() => {})
       this.aborts.delete(sid)

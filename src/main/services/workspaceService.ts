@@ -78,3 +78,21 @@ export async function loadSummary(root: string): Promise<WorkspaceSummary> {
   }
   return { name, path: root, characters, relationships, outline, events, chapters }
 }
+
+/* ---------------- 关系图谱布局 ---------------- */
+
+export type GraphLayout = Record<string, { x: number; y: number }>
+
+export async function readGraphLayout(root: string): Promise<GraphLayout> {
+  try {
+    const raw = JSON.parse(await fs.readFile(join(root, '.storyfabric', 'layout.json'), 'utf-8'))
+    return typeof raw === 'object' && raw !== null ? (raw as GraphLayout) : {}
+  } catch {
+    return {}
+  }
+}
+
+export async function writeGraphLayout(root: string, layout: GraphLayout): Promise<void> {
+  await fs.mkdir(join(root, '.storyfabric'), { recursive: true })
+  await fs.writeFile(join(root, '.storyfabric', 'layout.json'), JSON.stringify(layout, null, 2), 'utf-8')
+}

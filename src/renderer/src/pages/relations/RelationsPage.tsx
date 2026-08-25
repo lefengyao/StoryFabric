@@ -5,13 +5,15 @@ import {
   Handle,
   Position,
   ReactFlow,
+  useEdgesState,
+  useNodesState,
   type Edge,
   type Node,
   type NodeProps
 } from '@xyflow/react'
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force'
 import { Network, Plus, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { api } from '../../lib/api'
 import { cn, factionColor } from '../../lib/utils'
@@ -48,7 +50,24 @@ function CharNode({ data, selected }: NodeProps<Node<CharNodeData>>): React.Reac
 
 const nodeTypes = { charNode: CharNode }
 
-function layoutGraph(chars: CharacterDoc[], rels: Relationship[]): { nodes: Node<CharNodeData>[]; edges: Edge[] } {
+type Position2D = { x: number; y: number }
+type RememberedPos = Position2D & { id: string }
+
+function positionsOf(nodes: Node<CharNodeData>[]): Record<string, Position2D> {
+  const map: Record<string, Position2D> = {}
+  for (const n of nodes) map[n.id] = { x: n.position.x, y: n.position.y }
+  return map
+}
+
+/**
+ * 生成图谱：先用力导向算一版，再用已保存/当前画布上的坐标覆盖，
+ * 保证「新增人物参与布局、老人物位置不漂移」。
+ */
+function buildGraph(
+  chars: CharacterDoc[],
+  rels: Relationship[],
+  remembered: RememberedPos[]
+): { nodes: Node<CharNodeData>[]; edges: Edge[] } {
   const simNodes = chars.map((c) => ({ id: c.id, x: (Math.random() - 0.5) * 400, y: (Math.random() - 0.5) * 400 }))
   const simLinks = rels
     .filter((r) => chars.some((c) => c.id === r.fromId) && chars.some((c) => c.id === r.toId))
@@ -68,10 +87,11 @@ function layoutGraph(chars: CharacterDoc[], rels: Relationship[]): { nodes: Node
 
   const nodes: Node<CharNodeData>[] = simNodes.map((n) => {
     const c = chars.find((x) => x.id === n.id)
+    const rememberedPos = remembered.find((p) => p.id === n.id)
     return {
       id: n.id,
       type: 'charNode',
-      position: { x: n.x, y: n.y },
+      position: rememberedPos ? { x: rememberedPos.x, y: rememberedPos.y } : { x: n.x, y: n.y },
       data: { name: c?.name ?? '?', role: c?.role ?? '', faction: c?.faction ?? '', ringColor: factionColor(c?.faction) },
       draggable: true
     }
@@ -99,11 +119,56 @@ export function RelationsPage(): React.ReactElement {
   const [editing, setEditing] = useState<Relationship | null>(null)
   const [isNew, setIsNew] = useState(false)
 
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<CharNodeData>>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+
   const chars = summary?.characters ?? []
   const rels = useMemo(() => [...(summary?.relationships ?? [])].sort((a, b) => a.id.localeCompare(b.id)), [summary?.relationships])
   const nameOf = (id: string): string => chars.find((c) => c.id === id)?.name ?? '？'
 
-  const graph = useMemo(() => layoutGraph(chars, rels), [chars, rels])
+  /* 已记忆的坐标：磁盘布局 + 当前画布位置（后者优先） */
+  const savedLayoutRef = useRef<Record<string, Position2D>>({})
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+
+  const rebuild = (): void => {
+    const remembered: RememberedPos[] = Object.entries({ ...savedLayoutRef.current, ...positionsOf(nodesRef.current) }).map(
+      ([id, p]) => ({ id, x: p.x, y: p.y })
+    )
+    const built = buildGraph(chars, rels, remembered)
+    setNodes(built.nodes)
+    setEdges(built.edges)
+  }
+
+  /* 工作区切换时载入磁盘布局；人物/关系变化时重建（保留已记忆坐标） */
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getGraphLayout()
+      .then((layout) => {
+        if (!cancelled) {
+          savedLayoutRef.current = layout ?? {}
+          rebuild()
+        }
+      })
+      .catch(() => rebuild())
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary?.path])
+
+  useEffect(() => {
+    if (savedLayoutRef.current) rebuild()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chars, rels])
+
+  const persistPositions = (source?: Node<CharNodeData>[]): void => {
+    const merged = { ...savedLayoutRef.current, ...positionsOf(nodesRef.current) }
+    if (source) for (const n of source) merged[n.id] = { x: n.position.x, y: n.position.y }
+    savedLayoutRef.current = merged
+    void api.saveGraphLayout(merged)
+  }
 
   const startNew = (): void => {
     setEditing({ id: '', fromId: chars[0]?.id ?? '', toId: chars[1]?.id ?? '', type: '', label: '', description: '', directed: false })
@@ -167,12 +232,15 @@ export function RelationsPage(): React.ReactElement {
               <EmptyState icon={<Network size={32} />} title="还没有关系连线" hint="点击右上角「新增关系」开始编织关系网" />
             ) : (
               <ReactFlow
-                nodes={graph.nodes}
-                edges={graph.edges}
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
                 fitView
                 minZoom={0.3}
                 proOptions={{ hideAttribution: true }}
+                onNodeDragStop={(_, __, dragged) => persistPositions(dragged)}
                 onEdgeClick={(_, edge) => {
                   const hit = rels.find((r) => r.id === edge.id)
                   if (hit) {

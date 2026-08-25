@@ -23,6 +23,8 @@ const api: StoryFabricApi = {
   refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),
   getChapterBody: (id) => ipcRenderer.invoke(IPC.GetChapterBody, id),
   searchProject: (query) => ipcRenderer.invoke(IPC.SearchProject, query),
+  getGraphLayout: () => ipcRenderer.invoke(IPC.GetGraphLayout),
+  saveGraphLayout: (layout) => ipcRenderer.invoke(IPC.SaveGraphLayout, layout),
 
   saveCharacter: (doc: Partial<CharacterDoc>) => ipcRenderer.invoke(IPC.SaveCharacter, doc),
   deleteCharacter: (id) => ipcRenderer.invoke(IPC.DeleteCharacter, id),

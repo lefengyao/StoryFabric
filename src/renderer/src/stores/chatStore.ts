@@ -29,6 +29,10 @@ interface ChatState {
   streaming: boolean
   liveTools: LiveToolRun[]
   pendingChange: PendingChange | null
+  /** 最近一次推送给用户确认的变更（change-applied 时据此识别） */
+  lastPendingChange: PendingChange | null
+  /** 最近一次被用户确认写入的变更（供编辑页联动重载） */
+  lastAppliedChange: PendingChange | null
   attachments: Attachment[]
   error: string | null
 
@@ -70,6 +74,8 @@ export const useChat = create<ChatState>((set, get) => ({
   streaming: false,
   liveTools: [],
   pendingChange: null,
+  lastPendingChange: null,
+  lastAppliedChange: null,
   attachments: [],
   error: null,
 
@@ -200,10 +206,13 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       }))
       break
     case 'pending-change':
-      set({ pendingChange: ev.change })
+      set({ pendingChange: ev.change, lastPendingChange: ev.change })
       break
     case 'change-applied':
       if (get().pendingChange?.id === ev.changeId) set({ pendingChange: null })
+      if (ev.approved && get().lastPendingChange?.id === ev.changeId) {
+        set({ lastAppliedChange: get().lastPendingChange })
+      }
       break
     case 'error':
       set({ error: ev.message })

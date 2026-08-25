@@ -72,9 +72,22 @@ export function keyPreview(plain: string): string {
 }
 
 export class SettingsService {
+  private queue: Promise<unknown> = Promise.resolve()
+
   constructor(private filePath: string) {}
 
-  async load(): Promise<AppSettings> {
+  /** IPC handler 并发执行，读写必须排队避免读改写互相覆盖 */
+  private serialized<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn)
+    this.queue = run.catch(() => {})
+    return run
+  }
+
+  load(): Promise<AppSettings> {
+    return this.serialized(() => this.loadRaw())
+  }
+
+  private async loadRaw(): Promise<AppSettings> {
     try {
       const raw = JSON.parse(await fs.readFile(this.filePath, 'utf-8')) as Partial<AppSettings>
       return { ...DEFAULT_SETTINGS, ...raw }
@@ -83,55 +96,64 @@ export class SettingsService {
     }
   }
 
-  async save(settings: AppSettings): Promise<void> {
+  private async saveRaw(settings: AppSettings): Promise<void> {
     await fs.mkdir(join(this.filePath, '..'), { recursive: true })
     await fs.writeFile(this.filePath, JSON.stringify(settings, null, 2), 'utf-8')
   }
 
-  async update(patch: Partial<AppSettings>): Promise<AppSettings> {
-    const next = { ...(await this.load()), ...patch }
-    await this.save(next)
-    return next
+  update(patch: Partial<AppSettings>): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const next = { ...(await this.loadRaw()), ...patch }
+      await this.saveRaw(next)
+      return next
+    })
   }
 
-  /** 新增或更新供应商；apiKey 缺省表示沿用旧密钥 */
-  async saveProvider(input: ProviderInput): Promise<AppSettings> {
-    const settings = await this.load()
-    const list = [...settings.providers]
-    const idx = input.id ? list.findIndex((p) => p.id === input.id) : -1
-    let stored: ProviderStored
-    if (idx >= 0) {
-      const old = list[idx]
-      stored = {
-        ...old,
-        name: input.name,
-        protocol: input.protocol,
-        baseUrl: input.baseUrl,
-        models: input.models,
-        apiKeyEncrypted: input.apiKey ? encryptApiKey(input.apiKey) : old.apiKeyEncrypted
+  saveProvider(input: ProviderInput): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      const list = [...settings.providers]
+      const idx = input.id ? list.findIndex((p) => p.id === input.id) : -1
+      let stored: ProviderStored
+      if (idx >= 0) {
+        const old = list[idx]
+        stored = {
+          ...old,
+          name: input.name,
+          protocol: input.protocol,
+          baseUrl: input.baseUrl,
+          models: input.models,
+          apiKeyEncrypted: input.apiKey ? encryptApiKey(input.apiKey) : old.apiKeyEncrypted
+        }
+        list[idx] = stored
+      } else {
+        stored = {
+          id: `prov_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+          name: input.name,
+          protocol: input.protocol,
+          baseUrl: input.baseUrl,
+          models: input.models,
+          apiKeyEncrypted: encryptApiKey(input.apiKey ?? '')
+        }
+        list.push(stored)
       }
-      list[idx] = stored
-    } else {
-      stored = {
-        id: `prov_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-        name: input.name,
-        protocol: input.protocol,
-        baseUrl: input.baseUrl,
-        models: input.models,
-        apiKeyEncrypted: encryptApiKey(input.apiKey ?? '')
-      }
-      list.push(stored)
-    }
-    return this.update({ providers: list })
+      const next = { ...settings, providers: list }
+      await this.saveRaw(next)
+      return next
+    })
   }
 
-  async deleteProvider(id: string): Promise<AppSettings> {
-    const settings = await this.load()
-    const providers = settings.providers.filter((p) => p.id !== id)
-    const patch: Partial<AppSettings> = { providers }
-    if (settings.defaultChatModel?.providerId === id) patch.defaultChatModel = undefined
-    if (settings.quickActionModel?.providerId === id) patch.quickActionModel = undefined
-    return this.update(patch)
+  deleteProvider(id: string): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      const providers = settings.providers.filter((p) => p.id !== id)
+      const patch: Partial<AppSettings> = { providers }
+      if (settings.defaultChatModel?.providerId === id) patch.defaultChatModel = undefined
+      if (settings.quickActionModel?.providerId === id) patch.quickActionModel = undefined
+      const next = { ...settings, ...patch }
+      await this.saveRaw(next)
+      return next
+    })
   }
 
   toPublic(settings: AppSettings): PublicAppSettings {

@@ -181,6 +181,44 @@ describe('AgentService', () => {
     expect(chars.some((f) => f.includes('确认君'))).toBe(true)
   })
 
+  it('流式期间的重命名/归档在落盘时保留', async () => {
+    stubFetch()
+    fetchQueue = [
+      sseResponse(
+        openaiSse(
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, id: 'w3', function: { name: 'save_character', arguments: JSON.stringify({ character: { name: '改名君' } }) } }]
+                }
+              }
+            ]
+          },
+          'tool_calls'
+        )
+      ),
+      sseResponse(openaiSse({ choices: [{ delta: { content: '完成。' } }] }, 'stop'))
+    ]
+
+    const agent = makeAgent()
+    const runPromise = agent.run(root, { message: '建一个人物', providerId, model: 'mock-model' })
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
+    })
+    const sid = events[0].sessionId
+    // 用户在等待确认期间重命名并归档了会话
+    await new SessionStore(root).updateMeta(sid, { title: '用户改的名字', archived: true })
+    const changeEv = events.find((e) => e.event.type === 'pending-change')!
+    agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
+
+    await runPromise
+    const persisted = (await loadPersisted(sid))!
+    expect(persisted.title).toBe('用户改的名字')
+    expect(persisted.archived).toBe(true)
+  })
+
   it('中止会话时循环退出且不抛出', async () => {
     // 永不返回、但响应 abort 信号的流
     globalThis.fetch = vi.fn(

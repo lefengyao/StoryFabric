@@ -314,6 +314,7 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
 /* ---------------- 写入工具：生成待确认变更 ---------------- */
 
 interface SimulatedChange {
+  entityId: string
   beforeText: string
   afterText: string
   title: string
@@ -338,6 +339,7 @@ async function simulateCharacter(root: string, patch: Partial<CharacterDoc> & { 
         content: newPatch.content ?? ''
       }
   return {
+    entityId: afterDoc.id,
     beforeText: existing ? serializeCharacter(existing) : '',
     afterText: serializeCharacter(afterDoc),
     title: `${existing ? '更新' : '新建'}人物卡：${afterDoc.name}`,
@@ -367,6 +369,7 @@ async function simulateEvent(root: string, patch: Partial<StoryEvent> & { id?: s
         content: effPatch.content ?? ''
       }
   return {
+    entityId: afterDoc.id,
     beforeText: existing ? serializeEvent(existing) : '',
     afterText: serializeEvent(afterDoc),
     title: `${existing ? '更新' : '新建'}事件：${afterDoc.title}`,
@@ -400,6 +403,7 @@ async function simulateChapter(root: string, patch: Partial<ChapterDoc> & { id?:
       }
   afterDoc.wordCount = countWords(afterDoc.content)
   return {
+    entityId: afterDoc.id,
     beforeText: existing ? serializeChapter(existing) : '',
     afterText: serializeChapter(afterDoc),
     title: `${existing ? '更新' : '新建'}章节：${afterDoc.title}`,
@@ -423,6 +427,7 @@ async function simulateOutline(root: string, patch: Partial<OutlineDoc> & { id?:
         content: effPatch.content ?? ''
       }
   return {
+    entityId: afterDoc.id,
     beforeText: existing ? serializeOutlineDoc(existing) : '',
     afterText: serializeOutlineDoc(afterDoc),
     title: `${existing ? '更新' : '新建'}大纲：${afterDoc.title}`,
@@ -456,6 +461,7 @@ async function simulateRelationship(
   ]
   const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id
   return {
+    entityId: 'relationships',
     beforeText: oldList.length ? serializeRelationships(oldList, nameOf) : '（当前无关系数据）',
     afterText: serializeRelationships(newList, nameOf),
     title: `新增关系：${from.name} → ${to.name}【${input.type}】`,
@@ -503,6 +509,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
       id: genId('chg'),
       toolName: name,
       entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' ? 'chapter' : 'outline',
+      entityId: sim.entityId,
       title: sim.title,
       beforeText: sim.beforeText,
       afterText: sim.afterText

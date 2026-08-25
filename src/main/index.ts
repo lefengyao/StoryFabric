@@ -45,27 +45,41 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-app.whenReady().then(() => {
-  // 与 electron-builder appId 一致，保证任务栏分组/图标行为正确
-  app.setAppUserModelId('com.storyfabric.app')
-  const win = createWindow()
-
-  const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
-
-  const agent = new AgentService(settings, (sessionId, event) => {
-    const envelope: AgentEventEnvelope = { sessionId, event }
-    for (const w of BrowserWindow.getAllWindows()) {
-      w.webContents.send(IPC.AgentEvent, envelope)
+// 单实例锁：避免多开同时写同一份 userData（设置/密钥）
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.focus()
     }
   })
 
-  const ctx: AppContext = { win: () => win, settings, agent }
-  registerIpc(ctx)
+  app.whenReady().then(() => {
+    // 与 electron-builder appId 一致，保证任务栏分组/图标行为正确
+    app.setAppUserModelId('com.storyfabric.app')
+    const win = createWindow()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
+
+    const agent = new AgentService(settings, (sessionId, event) => {
+      const envelope: AgentEventEnvelope = { sessionId, event }
+      for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send(IPC.AgentEvent, envelope)
+      }
+    })
+
+    const ctx: AppContext = { win: () => win, settings, agent }
+    registerIpc(ctx)
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
   })
-})
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

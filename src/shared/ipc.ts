@@ -11,6 +11,8 @@ export const IPC = {
   RefreshWorkspace: 'workspace:refresh',
   GetChapterBody: 'workspace:chapter-body',
   SearchProject: 'workspace:search',
+  GetGraphLayout: 'workspace:graph-layout:get',
+  SaveGraphLayout: 'workspace:graph-layout:save',
 
   /* 实体保存 */
   SaveCharacter: 'entity:save-character',

@@ -80,6 +80,7 @@ export function CharactersPage(): React.ReactElement {
   const selected = characters.find((c) => c.id === selectedId) ?? null
 
   const openEditor = (c: CharacterDoc | null): void => {
+    if (draft && dirty && (c?.id ?? '') !== (draft.id ?? '') && !window.confirm('当前人物有未保存的修改，放弃并切换？')) return
     setSelectedId(c?.id ?? null)
     setDraft(c ? { ...c } : emptyCharacter())
     setDirty(false)

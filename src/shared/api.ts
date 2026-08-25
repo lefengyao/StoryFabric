@@ -45,6 +45,9 @@ export interface StoryFabricApi {
   refreshWorkspace(): Promise<WorkspaceSummary | null>
   getChapterBody(id: string): Promise<string | null>
   searchProject(query: string): Promise<SearchHit[]>
+  /** 关系图谱节点坐标（按人物 id） */
+  getGraphLayout(): Promise<Record<string, { x: number; y: number }>>
+  saveGraphLayout(layout: Record<string, { x: number; y: number }>): Promise<void>
 
   /* 实体 */
   saveCharacter(doc: Partial<CharacterDoc>): Promise<CharacterDoc>

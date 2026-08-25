@@ -205,6 +205,8 @@ export interface PendingChange {
   id: string
   toolName: string
   entityKind: EntityKind | 'relationship'
+  /** 涉及的实体 id（relationship 固定为 "relationships"） */
+  entityId: string
   title: string
   beforeText: string
   afterText: string
