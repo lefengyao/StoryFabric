@@ -37,3 +37,13 @@ export function formatTime(ts: number): string {
   if (sameDay) return hm
   return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
 }
+
+/** 阵营配色：同一阵营名稳定映射到同一颜色（用于分组标识与关系图谱着色） */
+const FACTION_PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#f43f5e', '#0ea5e9', '#8b5cf6', '#14b8a6', '#f97316']
+
+export function factionColor(name: string | undefined | null): string {
+  if (!name || !name.trim()) return '#a1a1aa'
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0
+  return FACTION_PALETTE[Math.abs(hash) % FACTION_PALETTE.length]
+}

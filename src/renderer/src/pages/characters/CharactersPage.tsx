@@ -1,15 +1,16 @@
-import { Plus, Search, Trash2, UserRound } from 'lucide-react'
+import { ChevronRight, Plus, Search, Trash2, UserRound, Users } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { factionColor } from '../../lib/utils'
 import type { CharacterDoc } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 
 function emptyCharacter(): CharacterDoc {
-  return { id: '', name: '', aliases: [], role: '', gender: '', age: '', tags: [], summary: '', content: '' }
+  return { id: '', name: '', aliases: [], role: '', faction: '', gender: '', age: '', tags: [], summary: '', content: '' }
 }
 
 function parseTags(text: string): string[] {
@@ -28,6 +29,16 @@ export function CharactersPage(): React.ReactElement {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+
+  const toggleGroup = (faction: string): void => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(faction)) next.delete(faction)
+      else next.add(faction)
+      return next
+    })
+  }
 
   const characters = summary?.characters ?? []
   const filtered = useMemo(() => {
@@ -37,10 +48,34 @@ export function CharactersPage(): React.ReactElement {
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.aliases.some((a) => a.toLowerCase().includes(q)) ||
+        (c.faction ?? '').toLowerCase().includes(q) ||
         c.tags.some((t) => t.toLowerCase().includes(q)) ||
         c.summary.toLowerCase().includes(q)
     )
   }, [characters, query])
+
+  /** 按阵营分组：具名阵营按出现顺序，未分组排最后 */
+  const groups = useMemo<[string, CharacterDoc[]][]>(() => {
+    const named = new Map<string, CharacterDoc[]>()
+    const ungrouped: CharacterDoc[] = []
+    for (const c of filtered) {
+      const f = (c.faction ?? '').trim()
+      if (f) {
+        if (!named.has(f)) named.set(f, [])
+        named.get(f)!.push(c)
+      } else {
+        ungrouped.push(c)
+      }
+    }
+    const out: [string, CharacterDoc[]][] = [...named.entries()]
+    if (ungrouped.length) out.push(['', ungrouped])
+    return out
+  }, [filtered])
+
+  const factionPresets = useMemo(
+    () => [...new Set(characters.map((c) => (c.faction ?? '').trim()).filter(Boolean))],
+    [characters]
+  )
 
   const selected = characters.find((c) => c.id === selectedId) ?? null
 
@@ -91,32 +126,53 @@ export function CharactersPage(): React.ReactElement {
             <Plus size={14} />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1.5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
           {filtered.length === 0 && (
             <EmptyState icon={<UserRound size={28} />} title={query ? '没有匹配的人物' : '还没有人物'} hint="点击右上角 + 创建第一张人物卡" />
           )}
-          {filtered.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => selectedId !== c.id && openEditor(c)}
-              className={`w-full rounded-lg border p-2.5 text-left transition cursor-pointer ${
-                selectedId === c.id ? 'border-accent bg-accent-soft' : 'border-line bg-panel hover:bg-elevated'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{c.name}</span>
-                {c.role && <Badge tone="accent">{c.role}</Badge>}
+          {groups.map(([faction, chars]) => {
+            const isCollapsed = collapsed.has(faction)
+            return (
+              <div key={faction || '_ungrouped'} className="mb-2">
+                <button
+                  onClick={() => toggleGroup(faction)}
+                  className="group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left transition cursor-pointer hover:bg-elevated"
+                >
+                  <ChevronRight size={13} className={`shrink-0 text-faint transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+                  <Users size={12} className="shrink-0" style={{ color: faction ? factionColor(faction) : undefined }} />
+                  <span className="truncate text-xs font-semibold text-muted">{faction || '未分组'}</span>
+                  <span className="ml-auto text-[10px] text-faint">{chars.length}</span>
+                </button>
+                {!isCollapsed && (
+                  <div className="mt-1 space-y-1.5">
+                    {chars.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => selectedId !== c.id && openEditor(c)}
+                        className={`w-full rounded-lg border p-2.5 text-left transition cursor-pointer ${
+                          selectedId === c.id ? 'border-accent bg-accent-soft' : 'border-line bg-panel hover:bg-elevated'
+                        } ${faction ? 'ml-4 w-[calc(100%-1rem)]' : ''}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: factionColor(c.faction ?? '') }} />
+                          <span className="truncate text-sm font-medium">{c.name}</span>
+                          {c.role && <Badge tone="accent">{c.role}</Badge>}
+                        </div>
+                        {c.summary && <div className="mt-0.5 truncate text-xs text-muted">{c.summary}</div>}
+                        {c.tags.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {c.tags.slice(0, 4).map((t) => (
+                              <Badge key={t}>{t}</Badge>
+                            ))}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              {c.summary && <div className="mt-0.5 truncate text-xs text-muted">{c.summary}</div>}
-              {c.tags.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {c.tags.slice(0, 4).map((t) => (
-                    <Badge key={t}>{t}</Badge>
-                  ))}
-                </div>
-              )}
-            </button>
-          ))}
+            )
+          })}
         </div>
       </div>
 
@@ -134,6 +190,7 @@ export function CharactersPage(): React.ReactElement {
           draft={draft}
           dirty={dirty}
           saving={saving}
+          factionPresets={factionPresets}
           onChange={(patch) => {
             setDraft({ ...draft, ...patch })
             setDirty(true)
@@ -170,6 +227,12 @@ function ReadOnlyCard({ c, onEdit }: { c: CharacterDoc; onEdit: () => void }): R
           <h2 className="text-lg font-semibold">{c.name}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {c.role && <Badge tone="accent">{c.role}</Badge>}
+            {c.faction && (
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full" style={{ background: factionColor(c.faction) }} />
+                <Badge>{c.faction}</Badge>
+              </span>
+            )}
             {c.gender && <Badge>{c.gender}</Badge>}
             {c.age && <Badge>{c.age}</Badge>}
             {c.tags.map((t) => (
@@ -191,6 +254,7 @@ function CharacterForm({
   draft,
   dirty,
   saving,
+  factionPresets,
   onChange,
   onSave,
   onDelete,
@@ -199,6 +263,7 @@ function CharacterForm({
   draft: CharacterDoc
   dirty: boolean
   saving: boolean
+  factionPresets: string[]
   onChange: (patch: Partial<CharacterDoc>) => void
   onSave: () => void
   onDelete: () => void
@@ -230,6 +295,19 @@ function CharacterForm({
           </Field>
           <Field label="别名 / 称呼（逗号分隔）">
             <Input value={draft.aliases.join('，')} onChange={(e) => onChange({ aliases: parseTags(e.target.value) })} placeholder="晚晚" />
+          </Field>
+          <Field label="阵营 / 组织（可从已有选择）">
+            <Input
+              value={draft.faction ?? ''}
+              onChange={(e) => onChange({ faction: e.target.value })}
+              placeholder="如 星环学院 / 旧王朝"
+              list="faction-presets"
+            />
+            <datalist id="faction-presets">
+              {factionPresets.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="身份 / 定位">

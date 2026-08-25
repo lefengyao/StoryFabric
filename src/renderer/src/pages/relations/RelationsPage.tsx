@@ -14,7 +14,7 @@ import { Network, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { api } from '../../lib/api'
-import { cn } from '../../lib/utils'
+import { cn, factionColor } from '../../lib/utils'
 import type { CharacterDoc, Relationship } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 
@@ -25,17 +25,18 @@ const REL_SELECT_CLS =
 
 /* ---------------- 图谱节点 ---------------- */
 
-type CharNodeData = { name: string; role: string }
+type CharNodeData = { name: string; role: string; faction: string; ringColor: string }
 
 function CharNode({ data, selected }: NodeProps<Node<CharNodeData>>): React.ReactElement {
   return (
-    <div className="flex flex-col items-center gap-1 cursor-grab">
+    <div className="flex flex-col items-center gap-1 cursor-grab" title={data.faction ? `阵营：${data.faction}` : undefined}>
       <Handle type="target" position={Position.Top} className="!opacity-0" />
       <div
         className={cn(
-          'flex h-14 w-14 items-center justify-center rounded-full border-2 text-lg font-semibold shadow-md transition-colors',
-          selected ? 'border-accent bg-accent text-accent-fg' : 'border-line bg-panel text-fg'
+          'flex h-14 w-14 items-center justify-center rounded-full border-[3px] text-lg font-semibold shadow-md transition-colors',
+          selected ? 'bg-accent text-accent-fg' : 'bg-panel text-fg'
         )}
+        style={{ borderColor: selected ? undefined : data.ringColor || 'var(--line)' }}
       >
         {(data.name || '?').slice(0, 1)}
       </div>
@@ -65,13 +66,16 @@ function layoutGraph(chars: CharacterDoc[], rels: Relationship[]): { nodes: Node
     .stop()
   sim.tick(220)
 
-  const nodes: Node<CharNodeData>[] = simNodes.map((n) => ({
-    id: n.id,
-    type: 'charNode',
-    position: { x: n.x, y: n.y },
-    data: { name: chars.find((c) => c.id === n.id)?.name ?? '?', role: chars.find((c) => c.id === n.id)?.role ?? '' },
-    draggable: true
-  }))
+  const nodes: Node<CharNodeData>[] = simNodes.map((n) => {
+    const c = chars.find((x) => x.id === n.id)
+    return {
+      id: n.id,
+      type: 'charNode',
+      position: { x: n.x, y: n.y },
+      data: { name: c?.name ?? '?', role: c?.role ?? '', faction: c?.faction ?? '', ringColor: factionColor(c?.faction) },
+      draggable: true
+    }
+  })
   const edges: Edge[] = rels.map((r) => ({
     id: r.id,
     source: r.fromId,
@@ -142,6 +146,13 @@ export function RelationsPage(): React.ReactElement {
           <span className="text-xs text-faint">
             {chars.length} 位人物 · {rels.length} 条关系
           </span>
+          {/* 阵营图例 */}
+          {[...new Set(chars.map((c) => (c.faction ?? '').trim()).filter(Boolean))].slice(0, 6).map((f) => (
+            <span key={f} className="flex items-center gap-1 text-[11px] text-muted">
+              <span className="h-2 w-2 rounded-full" style={{ background: factionColor(f) }} />
+              {f}
+            </span>
+          ))}
           <div className="flex-1" />
           <Button size="sm" variant="primary" onClick={startNew} disabled={chars.length < 2}>
             <Plus size={13} /> 新增关系

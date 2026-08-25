@@ -35,18 +35,27 @@ afterEach(async () => {
 
 describe('character store', () => {
   it('创建、读取、按名称查找人物', async () => {
-    const c = await saveCharacter(root, { name: '林晚', role: '主角', tags: ['法师'], summary: '星图修复师', content: '# 林晚\n冷静、执着。' })
+    const c = await saveCharacter(root, { name: '林晚', role: '主角', faction: '星环学院', tags: ['法师'], summary: '星图修复师', content: '# 林晚\n冷静、执着。' })
     expect(c.id).toMatch(/^char_/)
 
     const all = await listCharacters(root)
     expect(all).toHaveLength(1)
     expect(all[0].name).toBe('林晚')
+    expect(all[0].faction).toBe('星环学院')
     expect(all[0].content).toContain('冷静')
 
     const byName = await findCharacter(root, { name: '林晚' })
     expect(byName?.id).toBe(c.id)
     const byAlias = await saveCharacter(root, { name: '沈屹', aliases: ['老师'] })
     expect((await findCharacter(root, { name: '老师' }))?.id).toBe(byAlias.id)
+  })
+
+  it('更新阵营字段不影响其他内容', async () => {
+    const c = await saveCharacter(root, { name: '阿澈', content: '原始设定正文', faction: '旧王朝' })
+    await saveCharacter(root, { id: c.id, faction: '自由港' })
+    const [doc] = await listCharacters(root)
+    expect(doc.faction).toBe('自由港')
+    expect(doc.content.trim()).toBe('原始设定正文')
   })
 
   it('更新人物时重命名文件并保留 id', async () => {
@@ -146,6 +155,7 @@ describe('serialization', () => {
       name: '测试',
       aliases: [],
       role: '',
+      faction: '',
       gender: '',
       age: '',
       tags: [],

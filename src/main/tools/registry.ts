@@ -138,6 +138,7 @@ export const TOOL_DEFS: ToolDefJson[] = [
             name: { type: 'string' },
             aliases: { type: 'array', items: { type: 'string' } },
             role: { type: 'string', description: '如 主角/反派/配角' },
+            faction: { type: 'string', description: '所属阵营/组织/势力' },
             gender: { type: 'string' },
             age: { type: 'string' },
             tags: { type: 'array', items: { type: 'string' } },
@@ -250,7 +251,7 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
   switch (name) {
     case 'list_characters': {
       const chars = await listCharacters(root)
-      return ok(J(chars.map(({ id, name, aliases, role, tags, summary }) => ({ id, name, aliases, role, tags, summary }))))
+      return ok(J(chars.map(({ id, name, aliases, role, faction, tags, summary }) => ({ id, name, aliases, role, faction, tags, summary }))))
     }
     case 'get_character': {
       const c = await findCharacter(root, { id: a.characterId, name: a.name })
@@ -329,6 +330,7 @@ async function simulateCharacter(root: string, patch: Partial<CharacterDoc> & { 
         name: newPatch.name ?? '未命名人物',
         aliases: newPatch.aliases ?? [],
         role: newPatch.role ?? '',
+        faction: newPatch.faction ?? '',
         gender: newPatch.gender ?? '',
         age: newPatch.age ?? '',
         tags: newPatch.tags ?? [],

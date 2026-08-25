@@ -9,6 +9,8 @@ export interface CharacterDoc {
   name: string
   aliases: string[]
   role: string
+  /** 阵营 / 组织 / 势力分组 */
+  faction: string
   gender: string
   age: string
   tags: string[]
