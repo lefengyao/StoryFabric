@@ -15,7 +15,7 @@ function createWindow(): BrowserWindow {
     minHeight: 680,
     show: false,
     backgroundColor: '#fafafa',
-    title: 'StoryFabric',
+    title: '织章 · StoryFabric',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

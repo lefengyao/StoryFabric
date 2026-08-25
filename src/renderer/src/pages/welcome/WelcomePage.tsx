@@ -1,5 +1,6 @@
-import { BookOpen, FolderOpen, FolderPlus, History, Sparkles } from 'lucide-react'
+import { BookOpen, FolderOpen, FolderPlus, History } from 'lucide-react'
 import { useState } from 'react'
+import { AppLogo } from '../../components/icons/AppLogo'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
@@ -67,11 +68,12 @@ export function WelcomePage(): React.ReactElement {
     <div className="flex h-full items-center justify-center bg-app p-8">
       <div className="w-full max-w-xl">
         <div className="mb-10 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-accent-fg shadow-lg shadow-accent/25">
-            <Sparkles size={26} />
+          <div className="mx-auto mb-5 flex justify-center">
+            <AppLogo size={64} className="drop-shadow-lg shadow-accent/25 rounded-[14px]" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">StoryFabric</h1>
-          <p className="mt-2 text-sm text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
+          <h1 className="text-3xl font-bold tracking-wide">织章</h1>
+          <p className="mt-1 text-sm font-medium tracking-[0.2em] text-muted">STORYFABRIC</p>
+          <p className="mt-3 text-sm text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
         </div>
 
         <Card className="p-5">

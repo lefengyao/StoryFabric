@@ -1,5 +1,6 @@
 import { BookOpen, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, Users, Waypoints } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { AppLogo } from '../components/icons/AppLogo'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
 
@@ -34,8 +35,8 @@ export function AppLayout(): React.ReactElement {
     <div className="flex h-full">
       {/* 左侧导航栏 */}
       <aside className="flex w-16 shrink-0 flex-col items-center border-r border-line bg-panel py-4 gap-1.5">
-        <NavLink to="/chat" title="StoryFabric" className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-sm">
-          <Sparkles size={18} />
+        <NavLink to="/chat" title="织章 · StoryFabric" className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl shadow-sm">
+          <AppLogo size={36} className="rounded-[9px]" />
         </NavLink>
         {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
           <NavLink
