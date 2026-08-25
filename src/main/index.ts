@@ -7,6 +7,11 @@ import { IPC } from '../shared/ipc'
 import type { AgentEventEnvelope } from '../shared/api'
 import { SettingsService } from './services/settingsService'
 
+function resolveIconPath(): string {
+  // 开发态取项目 resources/；打包后 extraResources 会把 icon.ico 放到 resources 根目录
+  return app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(app.getAppPath(), 'resources', 'icon.ico')
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1360,
@@ -16,6 +21,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#fafafa',
     title: '织章 · StoryFabric',
+    icon: resolveIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -40,6 +46,8 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // 与 electron-builder appId 一致，保证任务栏分组/图标行为正确
+  app.setAppUserModelId('com.storyfabric.app')
   const win = createWindow()
 
   const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))

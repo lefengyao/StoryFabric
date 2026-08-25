@@ -2,6 +2,9 @@ appId: com.storyfabric.app
 productName: StoryFabric
 directories:
   output: release
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
 files:
   - out/**
   - package.json
