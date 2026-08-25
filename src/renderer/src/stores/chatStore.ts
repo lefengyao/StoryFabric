@@ -36,6 +36,8 @@ interface ChatState {
   openSession: (id: string) => Promise<void>
   newSession: () => void
   removeSession: (id: string) => Promise<void>
+  renameSession: (id: string, title: string) => Promise<void>
+  setArchived: (id: string, archived: boolean) => Promise<void>
   setAttachments: (a: Attachment[]) => void
 
   send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'>) => Promise<void>
@@ -93,6 +95,19 @@ export const useChat = create<ChatState>((set, get) => ({
     await window.api.deleteSession(id)
     await reloadSessions(set)
     if (get().activeId === id) get().newSession()
+  },
+
+  renameSession: async (id, title) => {
+    const t = title.trim()
+    if (!t) return
+    await window.api.updateSession(id, { title: t })
+    await reloadSessions(set)
+  },
+
+  setArchived: async (id, archived) => {
+    await window.api.updateSession(id, { archived })
+    await reloadSessions(set)
+    if (archived && get().activeId === id) get().newSession()
   },
 
   setAttachments: (attachments) => set({ attachments }),

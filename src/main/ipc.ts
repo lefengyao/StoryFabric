@@ -111,4 +111,8 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.ListSessions, async () => sessionStore().list())
   ipcMain.handle(IPC.LoadSession, async (_e, id: string) => sessionStore().load(id))
   ipcMain.handle(IPC.DeleteSession, async (_e, id: string) => sessionStore().delete(id))
+  ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: { title?: string; archived?: boolean }) => {
+    const okFlag = await sessionStore().updateMeta(id, patch)
+    if (!okFlag) throw new Error('会话不存在')
+  })
 }

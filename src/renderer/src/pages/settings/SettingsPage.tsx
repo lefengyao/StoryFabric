@@ -25,6 +25,7 @@ export function SettingsPage(): React.ReactElement {
   const [savingProvider, setSavingProvider] = useState(false)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [promptDraft, setPromptDraft] = useState<string | null>(null)
 
   if (!settings) return <div className="flex h-full items-center justify-center"><Spinner /></div>
 
@@ -131,6 +132,40 @@ export function SettingsPage(): React.ReactElement {
               </Card>
             ))}
           </div>
+        </section>
+
+        {/* 智能体 */}
+        <section>
+          <h2 className="mb-3 text-sm font-semibold">智能体</h2>
+          <Card className="space-y-4 p-4">
+            <Field
+              label="自定义提示词"
+              hint="将附加在内置系统提示词之后，用于注入文风偏好、世界观规则等；失焦时自动保存，留空则不附加"
+            >
+              <textarea
+                value={promptDraft ?? settings.customPrompt ?? ''}
+                onChange={(e) => setPromptDraft(e.target.value)}
+                onBlur={() => {
+                  if (promptDraft !== null) {
+                    void update({ customPrompt: promptDraft })
+                    setPromptDraft(null)
+                  }
+                }}
+                rows={6}
+                className="w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+                placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
+              />
+            </Field>
+            <label className="flex items-center gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.showSessionLength}
+                onChange={(e) => void update({ showSessionLength: e.target.checked })}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              在会话顶部显示会话长度（消息数与约计字数）
+            </label>
+          </Card>
         </section>
 
         {/* 默认模型 */}

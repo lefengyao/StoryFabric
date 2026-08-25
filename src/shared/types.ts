@@ -105,6 +105,10 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
   recentWorkspaces: string[]
   lastWorkspacePath?: string
+  /** 用户自定义提示词：附加在内置系统提示词之后 */
+  customPrompt: string
+  /** 是否在会话界面显示会话长度（消息数与约计字数） */
+  showSessionLength: boolean
 }
 
 /** 存储态：API Key 以 safeStorage 密文保存 */
@@ -168,6 +172,7 @@ export interface SessionMeta {
   title: string
   updatedAt: number
   messageCount: number
+  archived: boolean
 }
 
 export interface ChatSession {
@@ -175,6 +180,7 @@ export interface ChatSession {
   title: string
   createdAt: number
   updatedAt: number
+  archived: boolean
   messages: ChatMessage[]
 }
 

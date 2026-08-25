@@ -24,7 +24,17 @@ export class SessionStore {
 
   async create(): Promise<ChatSession> {
     const now = Date.now()
-    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, messages: [] }
+    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, archived: false, messages: [] }
+  }
+
+  /** 更新会话元信息（重命名 / 归档），文件不存在返回 false */
+  async updateMeta(id: string, patch: { title?: string; archived?: boolean }): Promise<boolean> {
+    const session = await this.load(id)
+    if (!session) return false
+    if (patch.title !== undefined) session.title = patch.title.trim() || session.title
+    if (patch.archived !== undefined) session.archived = patch.archived
+    await this.save(session)
+    return true
   }
 
   async load(id: string): Promise<ChatSession | null> {
@@ -61,7 +71,8 @@ export class SessionStore {
           id: s.id,
           title: s.title,
           updatedAt: s.updatedAt,
-          messageCount: s.messages.filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant').length
+          messageCount: s.messages.filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant').length,
+          archived: Boolean(s.archived)
         })
       } catch {
         /* 跳过损坏文件 */

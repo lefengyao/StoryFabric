@@ -46,6 +46,7 @@ const api: StoryFabricApi = {
   listSessions: () => ipcRenderer.invoke(IPC.ListSessions),
   loadSession: (id) => ipcRenderer.invoke(IPC.LoadSession, id),
   deleteSession: (id) => ipcRenderer.invoke(IPC.DeleteSession, id),
+  updateSession: (id, patch) => ipcRenderer.invoke(IPC.UpdateSession, id, patch),
   onAgentEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
     ipcRenderer.on(IPC.AgentEvent, listener)

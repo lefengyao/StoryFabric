@@ -37,5 +37,6 @@ export const IPC = {
   ListSessions: 'agent:sessions:list',
   LoadSession: 'agent:sessions:get',
   DeleteSession: 'agent:sessions:delete',
+  UpdateSession: 'agent:sessions:update',
   AgentEvent: 'agent:event'
 } as const

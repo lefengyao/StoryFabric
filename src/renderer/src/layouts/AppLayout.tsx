@@ -1,6 +1,7 @@
 import { BookOpen, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, Users, Waypoints } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { AppLogo } from '../components/icons/AppLogo'
+import { useSettings } from '../stores/settingsStore'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
 
@@ -27,9 +28,20 @@ export function AppLayout(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
   const close = useWorkspace((s) => s.close)
   const refresh = useWorkspace((s) => s.refresh)
+  const settings = useSettings((s) => s.settings)
+  const updateSettings = useSettings((s) => s.update)
   const location = useLocation()
   const seg = location.pathname.split('/')[1] ?? ''
   const title = TITLE_MAP[seg] ?? ''
+
+  const modelOptions = (settings?.providers ?? []).filter((p) => p.models.length > 0)
+  const modelValue = settings?.defaultChatModel ? `${settings.defaultChatModel.providerId}::${settings.defaultChatModel.model}` : ''
+
+  const changeModel = async (v: string): Promise<void> => {
+    if (!v) return
+    const [providerId, model] = v.split('::')
+    await updateSettings({ defaultChatModel: { providerId, model } })
+  }
 
   return (
     <div className="flex h-full">
@@ -73,6 +85,26 @@ export function AppLayout(): React.ReactElement {
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
           <h1 className="text-sm font-semibold">{title}</h1>
           <div className="flex-1" />
+          {/* 便捷模型快选：全局默认对话模型 */}
+          {modelOptions.length > 0 && (
+            <select
+              value={modelValue}
+              onChange={(e) => void changeModel(e.target.value)}
+              title="默认对话模型（智能体工作台同步使用）"
+              className="h-7 max-w-52 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent cursor-pointer"
+            >
+              {!modelValue && <option value="">选择模型…</option>}
+              {modelOptions.map((p) => (
+                <optgroup key={p.id} label={p.name}>
+                  {p.models.map((m) => (
+                    <option key={m} value={`${p.id}::${m}`}>
+                      {m}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          )}
           <button
             onClick={() => void refresh()}
             title="重新加载工作区"

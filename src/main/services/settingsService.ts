@@ -35,7 +35,9 @@ function getSafeStorage(): SafeStorageLike | null {
 export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
   theme: 'system',
-  recentWorkspaces: []
+  recentWorkspaces: [],
+  customPrompt: '',
+  showSessionLength: false
 }
 
 const PLAIN_PREFIX = 'plain:'

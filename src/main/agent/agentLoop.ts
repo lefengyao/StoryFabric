@@ -103,6 +103,8 @@ export class AgentService {
       const apiKey = decryptApiKey(provider.apiKeyEncrypted)
       if (!apiKey) throw new Error(`供应商「${provider.name}」的 API Key 不可用，请在设置中重新填写`)
       const adapter = getAdapter(provider.protocol, provider.baseUrl)
+      const custom = settings.customPrompt?.trim()
+      const systemPrompt = custom ? `${SYSTEM_PROMPT}\n\n【用户自定义要求（与内置规则冲突时优先遵守）】\n${custom}` : SYSTEM_PROMPT
 
       let round = 0
       for (; round < MAX_TOOL_ROUNDS; round++) {
@@ -110,7 +112,7 @@ export class AgentService {
         const result = await adapter.stream(
           req.model,
           {
-            system: SYSTEM_PROMPT,
+            system: systemPrompt,
             messages: session.messages.filter((m) => m.role !== 'system'),
             tools: TOOL_DEFS,
             signal: controller.signal

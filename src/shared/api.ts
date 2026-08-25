@@ -21,7 +21,9 @@ export interface AgentEventEnvelope {
   event: AgentEvent
 }
 
-export type SettingsPatch = Partial<Pick<PublicAppSettings, 'theme' | 'defaultChatModel' | 'quickActionModel'>>
+export type SettingsPatch = Partial<
+  Pick<PublicAppSettings, 'theme' | 'defaultChatModel' | 'quickActionModel' | 'customPrompt' | 'showSessionLength'>
+>
 
 export interface FetchModelsInput {
   /** 已保存供应商的 id：省略 apiKey 时使用其存储密钥 */
@@ -69,5 +71,7 @@ export interface StoryFabricApi {
   listSessions(): Promise<SessionMeta[]>
   loadSession(id: string): Promise<ChatSession | null>
   deleteSession(id: string): Promise<void>
+  /** 更新会话元信息：重命名 / 归档 */
+  updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void>
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void
 }
