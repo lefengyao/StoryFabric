@@ -1,0 +1,115 @@
+@import 'tailwindcss';
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --app: #fafafa;
+  --panel: #ffffff;
+  --elevated: #f4f4f5;
+  --line: #e4e4e7;
+  --fg: #18181b;
+  --muted: #71717a;
+  --faint: #a1a1aa;
+  --accent: #6366f1;
+  --accent-strong: #4f46e5;
+  --accent-fg: #ffffff;
+  --accent-soft: #eef2ff;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --ok: #16a34a;
+}
+
+.dark {
+  --app: #111113;
+  --panel: #1a1a1e;
+  --elevated: #232329;
+  --line: #2e2e35;
+  --fg: #ececee;
+  --muted: #9d9da6;
+  --faint: #63636c;
+  --accent: #818cf8;
+  --accent-strong: #6d78ee;
+  --accent-fg: #0f0f12;
+  --accent-soft: #22233a;
+  --danger: #ef4444;
+  --danger-soft: #2a1a1a;
+  --ok: #22c55e;
+}
+
+@theme inline {
+  --color-app: var(--app);
+  --color-panel: var(--panel);
+  --color-elevated: var(--elevated);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--app);
+  color: var(--fg);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 统一的设置/表单下拉样式 */
+.set-select {
+  height: 2.25rem;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0 0.625rem;
+  font-size: 0.875rem;
+  color: var(--fg);
+  outline: none;
+  cursor: pointer;
+}
+.set-select:focus {
+  border-color: var(--accent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--faint) 55%, transparent);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* CodeMirror 容器自适应高度 */
+.cm-editor {
+  height: 100%;
+}
+.cm-editor.cm-focused {
+  outline: none !important;
+}
+.cm-scroller {
+  font-family: var(--font-sans) !important;
+  line-height: 1.75 !important;
+}

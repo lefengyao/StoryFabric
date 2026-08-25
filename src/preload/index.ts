@@ -1,0 +1,55 @@
+/** preload：以最小暴露面把 IPC 能力桥接给渲染进程 */
+import { contextBridge, ipcRenderer } from 'electron'
+import type { IpcRendererEvent } from 'electron'
+import { IPC } from '../shared/ipc'
+import type { StoryFabricApi } from '../shared/api'
+import type {
+  ChapterDoc,
+  CharacterDoc,
+  OutlineDoc,
+  Relationship,
+  RunAgentRequest,
+  StoryEvent
+} from '../shared/types'
+import type { FetchModelsInput, SettingsPatch } from '../shared/api'
+
+const api: StoryFabricApi = {
+  pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
+  createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
+  openWorkspace: (path) => ipcRenderer.invoke(IPC.OpenWorkspace, path),
+  closeWorkspace: () => ipcRenderer.invoke(IPC.CloseWorkspace),
+  getCurrentWorkspace: () => ipcRenderer.invoke(IPC.GetCurrentWorkspace),
+  refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),
+  getChapterBody: (id) => ipcRenderer.invoke(IPC.GetChapterBody, id),
+  searchProject: (query) => ipcRenderer.invoke(IPC.SearchProject, query),
+
+  saveCharacter: (doc: Partial<CharacterDoc>) => ipcRenderer.invoke(IPC.SaveCharacter, doc),
+  deleteCharacter: (id) => ipcRenderer.invoke(IPC.DeleteCharacter, id),
+  saveRelationships: (list: Relationship[]) => ipcRenderer.invoke(IPC.SaveRelationships, list),
+  saveOutlineDoc: (doc: Partial<OutlineDoc>) => ipcRenderer.invoke(IPC.SaveOutlineDoc, doc),
+  deleteOutlineDoc: (id) => ipcRenderer.invoke(IPC.DeleteOutlineDoc, id),
+  saveEvent: (doc: Partial<StoryEvent>) => ipcRenderer.invoke(IPC.SaveEvent, doc),
+  deleteEvent: (id) => ipcRenderer.invoke(IPC.DeleteEvent, id),
+  saveChapter: (doc: Partial<ChapterDoc>) => ipcRenderer.invoke(IPC.SaveChapter, doc),
+  deleteChapter: (id) => ipcRenderer.invoke(IPC.DeleteChapter, id),
+
+  getSettings: () => ipcRenderer.invoke(IPC.GetSettings),
+  updateSettings: (patch: SettingsPatch) => ipcRenderer.invoke(IPC.UpdateSettings, patch),
+  saveProvider: (input) => ipcRenderer.invoke(IPC.SaveProvider, input),
+  deleteProvider: (id) => ipcRenderer.invoke(IPC.DeleteProvider, id),
+  fetchModels: (input: FetchModelsInput) => ipcRenderer.invoke(IPC.FetchModels, input),
+
+  agentRun: (req: RunAgentRequest) => ipcRenderer.invoke(IPC.AgentRun, req),
+  agentConfirm: (changeId, approved) => ipcRenderer.invoke(IPC.AgentConfirm, changeId, approved),
+  agentAbort: (sessionId) => ipcRenderer.invoke(IPC.AgentAbort, sessionId),
+  listSessions: () => ipcRenderer.invoke(IPC.ListSessions),
+  loadSession: (id) => ipcRenderer.invoke(IPC.LoadSession, id),
+  deleteSession: (id) => ipcRenderer.invoke(IPC.DeleteSession, id),
+  onAgentEvent: (cb) => {
+    const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
+    ipcRenderer.on(IPC.AgentEvent, listener)
+    return () => ipcRenderer.removeListener(IPC.AgentEvent, listener)
+  }
+}
+
+contextBridge.exposeInMainWorld('api', api)

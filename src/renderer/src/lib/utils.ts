@@ -1,0 +1,39 @@
+import type { ChapterStatus } from '../../../shared/types'
+
+/** className 合并 */
+export function cn(...parts: Array<string | false | null | undefined>): string {
+  return parts.filter(Boolean).join(' ')
+}
+
+export function countWords(text: string): number {
+  return text.replace(/\s/g, '').length
+}
+
+export const CHAPTER_STATUS_LABEL: Record<ChapterStatus, string> = {
+  draft: '草稿',
+  revised: '修订',
+  final: '定稿'
+}
+
+export const PROTOCOL_LABEL: Record<string, string> = {
+  openai: 'OpenAI 兼容',
+  anthropic: 'Anthropic 原生',
+  gemini: 'Gemini 原生'
+}
+
+export const ENTITY_KIND_LABEL: Record<string, string> = {
+  character: '人物',
+  relationship: '关系',
+  outline: '大纲',
+  event: '事件',
+  chapter: '章节'
+}
+
+export function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  if (sameDay) return hm
+  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}

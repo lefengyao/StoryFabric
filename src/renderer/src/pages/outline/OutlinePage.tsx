@@ -1,0 +1,137 @@
+import { ListTree, Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
+import { Markdown } from '../../components/markdown/Markdown'
+import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
+import { Modal } from '../../components/ui/modal'
+import { api } from '../../lib/api'
+import type { OutlineDoc } from '../../../../shared/types'
+import { useWorkspace } from '../../stores/workspaceStore'
+
+export function OutlinePage(): React.ReactElement {
+  const summary = useWorkspace((s) => s.summary)
+  const refresh = useWorkspace((s) => s.refresh)
+  const docs = summary?.outline ?? []
+  const [selectedId, setSelectedId] = useState<string | null>(docs[0]?.id ?? null)
+  const [draft, setDraft] = useState<OutlineDoc | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const selected = docs.find((d) => d.id === selectedId) ?? null
+
+  const openDoc = (d: OutlineDoc | null): void => {
+    setSelectedId(d?.id ?? null)
+    setDraft(d ? { ...d } : null)
+    setDirty(false)
+  }
+
+  const create = async (): Promise<void> => {
+    const saved = await api.saveOutlineDoc({ title: '新大纲篇章', order: (docs.length ? Math.max(...docs.map((x) => x.order)) : 0) + 1 })
+    await refresh()
+    openDoc(saved)
+  }
+
+  const save = async (): Promise<void> => {
+    if (!draft) return
+    setSaving(true)
+    try {
+      await api.saveOutlineDoc(draft)
+      await refresh()
+      setDirty(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const remove = async (): Promise<void> => {
+    if (!selectedId) return
+    await api.deleteOutlineDoc(selectedId)
+    setConfirmDelete(false)
+    setSelectedId(null)
+    setDraft(null)
+    await refresh()
+  }
+
+  return (
+    <div className="flex h-full">
+      <div className="flex w-64 shrink-0 flex-col border-r border-line">
+        <div className="flex items-center justify-between p-3 pb-2">
+          <span className="text-xs font-medium text-muted">文档树</span>
+          <Button size="sm" variant="primary" onClick={() => void create()}>
+            <Plus size={13} /> 新建
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+          {docs.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => draft === null && openDoc(d)}
+              className={`w-full rounded-lg px-3 py-2 text-left transition cursor-pointer flex items-center gap-2 ${
+                selectedId === d.id ? 'bg-accent-soft text-accent' : 'hover:bg-elevated'
+              }`}
+            >
+              <ListTree size={14} className="shrink-0 opacity-60" />
+              <span className="truncate text-sm">{d.title}</span>
+              <Badge className="ml-auto">{d.order}</Badge>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!draft ? (
+        <div className="flex-1 overflow-y-auto">
+          {selected ? (
+            <article className="mx-auto max-w-3xl p-8">
+              <h1 className="text-xl font-bold mb-4">{selected.title}</h1>
+              <Markdown text={selected.content} />
+            </article>
+          ) : (
+            <EmptyState icon={<ListTree size={32} />} title="选择左侧大纲查看" hint="或新建一篇大纲文档" />
+          )}
+        </div>
+      ) : (
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+            <Input value={draft.title} onChange={(e) => { setDraft({ ...draft, title: e.target.value }); setDirty(true) }} className="max-w-xs" />
+            <label className="flex items-center gap-1.5 text-xs text-muted">
+              序号
+              <Input
+                type="number"
+                value={draft.order}
+                onChange={(e) => { setDraft({ ...draft, order: Number(e.target.value) || 1 }); setDirty(true) }}
+                className="w-20"
+              />
+            </label>
+            {dirty && <span className="text-xs text-accent">未保存</span>}
+            <div className="flex-1" />
+            <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>
+              完成
+            </Button>
+            <Button variant="ghost" size="sm" className="text-danger hover:text-danger" onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={13} />
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => void save()} loading={saving}>
+              保存
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 p-4">
+            <MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} />
+          </div>
+        </div>
+      )}
+
+      <Modal open={confirmDelete} onOpenChange={setConfirmDelete} title={`删除「${selected?.title ?? ''}」？`}>
+        <p className="text-sm text-muted">此操作不可撤销。</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
+            取消
+          </Button>
+          <Button variant="danger" onClick={() => void remove()}>
+            确认删除
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  )
+}
