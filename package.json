@@ -9,12 +9,28 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "test": "vitest run",
-    "dist": "electron-vite build && electron-builder --win"
+    "web:build": "vite build --config vite.web.config.ts",
+    "server:build": "vite build --config vite.server.config.ts",
+    "server:start": "node dist-server/index.mjs",
+    "server:build:all": "npm run web:build && npm run server:build",
+    "dist": "electron-vite build && electron-builder --win",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "mobile:build": "vite build --config vite.mobile.config.ts",
+    "mobile:sync": "npm run mobile:build && cap sync android",
+    "mobile:open": "cap open android"
   },
   "dependencies": {
-    "gray-matter": "^4.0.3"
+    "@aparajita/capacitor-secure-storage": "^7.1.6",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/filesystem": "^7.1.8",
+    "@capacitor/preferences": "^7.0.4",
+    "@capacitor/share": "^7.0.4",
+    "gray-matter": "^4.0.3",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9",
     "@codemirror/lang-markdown": "^6.5.2",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dropdown-menu": "^2.1.24",

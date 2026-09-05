@@ -1,24 +1,28 @@
 import { ListTree, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
-import type { OutlineDoc } from '../../../../shared/types'
+import type { OutlineDoc, OutlineKind } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 
 export function OutlinePage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
   const refresh = useWorkspace((s) => s.refresh)
   const docs = summary?.outline ?? []
+  const chapters = summary?.chapters ?? []
+  const [kind, setKind] = useState<OutlineKind>('total')
+  const [chapterId, setChapterId] = useState<string>('')
   const [selectedId, setSelectedId] = useState<string | null>(docs[0]?.id ?? null)
   const [draft, setDraft] = useState<OutlineDoc | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const selected = docs.find((d) => d.id === selectedId) ?? null
+  const filteredDocs = useMemo(() => docs.filter((doc) => (doc.kind ?? 'total') === kind && (kind === 'total' || !chapterId || doc.chapterId === chapterId)), [docs, kind, chapterId])
+  const selected = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0] ?? null
 
   const openDoc = (d: OutlineDoc | null): void => {
     setSelectedId(d?.id ?? null)
@@ -27,7 +31,7 @@ export function OutlinePage(): React.ReactElement {
   }
 
   const create = async (): Promise<void> => {
-    const saved = await api.saveOutlineDoc({ title: '新大纲篇章', order: (docs.length ? Math.max(...docs.map((x) => x.order)) : 0) + 1 })
+    const saved = await api.saveOutlineDoc({ title: kind === 'total' ? '新总纲篇章' : '新章纲', kind, chapterId: kind === 'chapter' ? (chapterId || chapters[0]?.id) : undefined, order: (filteredDocs.length ? Math.max(...filteredDocs.map((x) => x.order)) : 0) + 1 })
     await refresh()
     openDoc(saved)
   }
@@ -54,16 +58,17 @@ export function OutlinePage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full">
-      <div className="flex w-64 shrink-0 flex-col border-r border-line">
+    <div className="flex h-full flex-col sm:flex-row">
+      <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
         <div className="flex items-center justify-between p-3 pb-2">
-          <span className="text-xs font-medium text-muted">文档树</span>
+          <div className="flex items-center gap-1"><Button size="sm" variant={kind === 'total' ? 'soft' : 'ghost'} onClick={() => { setKind('total'); setSelectedId(null); setDraft(null) }}>总纲</Button><Button size="sm" variant={kind === 'chapter' ? 'soft' : 'ghost'} onClick={() => { setKind('chapter'); setSelectedId(null); setDraft(null) }}>章纲</Button></div>
           <Button size="sm" variant="primary" onClick={() => void create()}>
             <Plus size={13} /> 新建
           </Button>
         </div>
+        {kind === 'chapter' && <select value={chapterId} onChange={(e) => { setChapterId(e.target.value); setSelectedId(null); setDraft(null) }} className="mx-3 mb-2 h-8 rounded-md border border-line bg-panel px-2 text-xs"><option value="">全部章节</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-          {docs.map((d) => (
+          {filteredDocs.map((d) => (
             <button
               key={d.id}
               onClick={() => draft === null && openDoc(d)}
@@ -92,7 +97,7 @@ export function OutlinePage(): React.ReactElement {
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-3 sm:px-5">
             <Input value={draft.title} onChange={(e) => { setDraft({ ...draft, title: e.target.value }); setDirty(true) }} className="max-w-xs" />
             <label className="flex items-center gap-1.5 text-xs text-muted">
               序号
@@ -104,7 +109,7 @@ export function OutlinePage(): React.ReactElement {
               />
             </label>
             {dirty && <span className="text-xs text-accent">未保存</span>}
-            <div className="flex-1" />
+            <div className="hidden flex-1 sm:block" />
             <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>
               完成
             </Button>

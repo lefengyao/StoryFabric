@@ -4,6 +4,7 @@ import {
   AtSign,
   BookOpen,
   Bot,
+  Download,
   ListTree,
   MessageSquarePlus,
   Network,
@@ -12,6 +13,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
   UserRound,
   Waypoints,
   X
@@ -25,6 +27,8 @@ import { cn, ENTITY_KIND_LABEL, formatTime } from '../../lib/utils'
 import { toolArgsPreview, useChat } from '../../stores/chatStore'
 import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { bytesToBase64 } from '../../platform/archiveTransfer'
+import { getPlatformApi } from '../../platform/platformApi'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -50,6 +54,8 @@ export function ChatPage(): React.ReactElement {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const sessionImportRef = useRef<HTMLInputElement | null>(null)
+  const [sessionTransferBusy, setSessionTransferBusy] = useState(false)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -76,7 +82,11 @@ export function ChatPage(): React.ReactElement {
 
   const send = async (): Promise<void> => {
     const text = input.trim()
-    if (!text || chat.streaming || !defaultModel) return
+    if (!text || chat.streaming) return
+    if (!defaultModel) {
+      useChat.setState({ error: '请先在“设置”中配置供应商、API Key 和默认模型' })
+      return
+    }
     setInput('')
     await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model })
   }
@@ -90,19 +100,63 @@ export function ChatPage(): React.ReactElement {
     setRenamingId(null)
   }
 
+  const exportActiveSession = async (): Promise<void> => {
+    if (!chat.activeId) return
+    setSessionTransferBusy(true)
+    try {
+      const archive = await getPlatformApi().exportSession(chat.activeId)
+      const platform = getPlatformApi()
+      if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() && platform.shareSessionArchive) {
+        await platform.shareSessionArchive(archive)
+      } else {
+        const a = document.createElement('a')
+        a.href = `data:application/json;base64,${archive.base64}`
+        a.download = archive.fileName
+        a.click()
+      }
+    } catch (err) {
+      useChat.setState({ error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setSessionTransferBusy(false)
+    }
+  }
+
+  const importSession = async (file: File): Promise<void> => {
+    setSessionTransferBusy(true)
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      await getPlatformApi().importSession(bytesToBase64(bytes), file.name)
+      await chat.initSessions()
+    } catch (err) {
+      useChat.setState({ error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setSessionTransferBusy(false)
+      if (sessionImportRef.current) sessionImportRef.current.value = ''
+    }
+  }
+
   /* 会话长度估算：所有消息文本字符数 */
   const totalChars = useMemo(() => chat.messages.reduce((n, m) => n + (m.text?.length ?? 0), 0), [chat.messages])
 
   if (!summary) return <div />
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col sm:flex-row">
       {/* 会话列表 */}
-      <aside className="flex w-56 shrink-0 flex-col border-r border-line">
+      <aside className="flex h-48 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-56 sm:border-b-0 sm:border-r">
         <div className="p-3 pb-2">
-          <Button size="sm" variant="outline" className="w-full justify-center" onClick={chat.newSession}>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="min-w-0 flex-1 justify-center" onClick={chat.newSession} disabled={sessionTransferBusy}>
             <MessageSquarePlus size={14} /> 新会话
-          </Button>
+            </Button>
+            <Button size="sm" variant="ghost" className="shrink-0" title="导入会话" onClick={() => sessionImportRef.current?.click()} disabled={sessionTransferBusy}>
+              <Upload size={14} />
+            </Button>
+            <Button size="sm" variant="ghost" className="shrink-0" title="导出当前会话" onClick={() => void exportActiveSession()} disabled={sessionTransferBusy || !chat.activeId}>
+              <Download size={14} />
+            </Button>
+            <input ref={sessionImportRef} type="file" accept=".json,.session.json,application/json" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importSession(file) }} />
+          </div>
         </div>
         <div className="flex gap-1 px-3 pb-2">
           {(
@@ -183,7 +237,7 @@ export function ChatPage(): React.ReactElement {
       {/* 对话区 */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 头部：会话长度 + 模型选择 */}
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-4">
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 sm:h-11 sm:flex-nowrap sm:px-4 sm:py-0">
           <Sparkles size={15} className="text-accent" />
           <span className="text-sm font-medium">智能体工作台</span>
           {settings?.showSessionLength && chat.messages.length > 0 && (
@@ -192,7 +246,7 @@ export function ChatPage(): React.ReactElement {
             </span>
           )}
           <span className="hidden text-xs text-faint xl:inline">资料不进提示词 · 需要时自动查阅</span>
-          <div className="flex-1" />
+          <div className="hidden flex-1 sm:block" />
           {providerOptions.length === 0 ? (
             <Badge tone="danger">尚未配置供应商，请前往设置</Badge>
           ) : (
@@ -219,7 +273,7 @@ export function ChatPage(): React.ReactElement {
         </div>
 
         {/* 消息列表 */}
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-5">
           {chat.messages.length === 0 && !chat.streaming && (
             <div className="mx-auto max-w-xl">
               <EmptyState
@@ -269,7 +323,7 @@ export function ChatPage(): React.ReactElement {
         </div>
 
         {/* 输入区 */}
-        <div className="shrink-0 border-t border-line p-4">
+        <div className="shrink-0 border-t border-line px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] sm:p-4">
           <div className="relative mx-auto max-w-3xl">
             {chat.attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">

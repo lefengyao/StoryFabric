@@ -72,6 +72,11 @@ export function CharactersPage(): React.ReactElement {
     return out
   }, [filtered])
 
+  const tiers: [string, CharacterDoc[]][] = useMemo(() => [
+    ['主要角色', filtered.filter((c) => c.tier === 'primary')],
+    ['次要角色', filtered.filter((c) => c.tier !== 'primary')]
+  ], [filtered])
+
   const factionPresets = useMemo(
     () => [...new Set(characters.map((c) => (c.faction ?? '').trim()).filter(Boolean))],
     [characters]
@@ -115,9 +120,9 @@ export function CharactersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col sm:flex-row">
       {/* 左列：搜索 + 卡片列表 */}
-      <div className="flex w-72 shrink-0 flex-col border-r border-line">
+      <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="flex items-center gap-2 p-3 pb-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
@@ -127,11 +132,19 @@ export function CharactersPage(): React.ReactElement {
             <Plus size={14} />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 sm:px-3">
           {filtered.length === 0 && (
             <EmptyState icon={<UserRound size={28} />} title={query ? '没有匹配的人物' : '还没有人物'} hint="点击右上角 + 创建第一张人物卡" />
           )}
-          {groups.map(([faction, chars]) => {
+          {tiers.map(([tierLabel, tierChars]) => {
+            if (!tierChars.length) return null
+            const tierKey = tierLabel
+            return <div key={tierKey} className="mb-3">
+              <div className="mb-1 px-1 text-[11px] font-semibold text-muted">{tierLabel} <span className="text-faint">{tierChars.length}</span></div>
+              {(() => {
+                const grouped = new Map<string, CharacterDoc[]>()
+                for (const c of tierChars) { const key = (c.faction ?? '').trim(); if (!grouped.has(key)) grouped.set(key, []); grouped.get(key)!.push(c) }
+                return [...grouped.entries()].map(([faction, chars]) => {
             const isCollapsed = collapsed.has(faction)
             return (
               <div key={faction || '_ungrouped'} className="mb-2">
@@ -173,6 +186,9 @@ export function CharactersPage(): React.ReactElement {
                 )}
               </div>
             )
+                })
+              })()}
+            </div>
           })}
         </div>
       </div>
@@ -289,8 +305,8 @@ function CharacterForm({
         </Button>
       </div>
 
-      <div className="grid grid-cols-[280px_1fr] flex-1 min-h-0">
-        <div className="space-y-3.5 overflow-y-auto border-r border-line p-4">
+      <div className="grid grid-cols-1 flex-1 min-h-0 sm:grid-cols-[280px_1fr]">
+        <div className="space-y-3.5 overflow-y-auto border-b border-line p-4 sm:border-b-0 sm:border-r">
           <Field label="姓名 *">
             <Input value={draft.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="林晚" />
           </Field>
@@ -310,7 +326,7 @@ function CharacterForm({
               ))}
             </datalist>
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="身份 / 定位">
               <Input value={draft.role} onChange={(e) => onChange({ role: e.target.value })} placeholder="主角" />
             </Field>
@@ -318,7 +334,7 @@ function CharacterForm({
               <Input value={draft.gender} onChange={(e) => onChange({ gender: e.target.value })} />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="年龄">
               <Input value={draft.age} onChange={(e) => onChange({ age: e.target.value })} />
             </Field>
@@ -328,6 +344,12 @@ function CharacterForm({
           </div>
           <Field label="一句话简介">
             <Input value={draft.summary} onChange={(e) => onChange({ summary: e.target.value })} placeholder="流落异乡的星图修复师" />
+          </Field>
+          <Field label="角色分类">
+            <select value={draft.tier ?? 'secondary'} onChange={(e) => onChange({ tier: e.target.value as CharacterDoc['tier'] })} className="h-9 w-full rounded-lg border border-line bg-panel px-3 text-sm">
+              <option value="primary">主要角色</option>
+              <option value="secondary">次要角色</option>
+            </select>
           </Field>
         </div>
         <div className="flex min-h-0 flex-col p-4">

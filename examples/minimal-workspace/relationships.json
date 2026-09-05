@@ -1,0 +1,11 @@
+[
+  {
+    "id": "rel_dawn_warden",
+    "fromId": "char_dawn",
+    "toId": "char_warden",
+    "type": "盟友",
+    "label": "共同守护星门",
+    "description": "黎明负责解读潮汐，守门人负责维持航道。",
+    "directed": false
+  }
+]

@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/types'
 import { useWorkspace } from './workspaceStore'
 import type { ToolCallData } from '../../../shared/types'
+import { getPlatformApi } from '../platform/platformApi'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
@@ -58,7 +59,7 @@ let runningSessionId: string | null = null
 
 async function reloadSessions(set: (p: Partial<ChatState>) => void): Promise<SessionMeta[]> {
   try {
-    const sessions = await window.api.listSessions()
+    const sessions = await getPlatformApi().listSessions()
     set({ sessions })
     return sessions
   } catch {
@@ -87,18 +88,26 @@ export const useChat = create<ChatState>((set, get) => ({
 
   openSession: async (id) => {
     if (get().streaming) return
-    const s = await window.api.loadSession(id)
+    const s = await getPlatformApi().loadSession(id)
     if (!s) return
     applySession(set, s)
   },
 
   newSession: () => {
     if (get().streaming) return
-    set({ activeId: null, messages: [], streamingText: '', liveTools: [], pendingChange: null, error: null })
+    void (async () => {
+      try {
+        const session = await getPlatformApi().createSession()
+        set({ activeId: session.id, messages: session.messages, streamingText: '', liveTools: [], pendingChange: null, error: null, attachments: [] })
+        await reloadSessions(set)
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : String(err) })
+      }
+    })()
   },
 
   removeSession: async (id) => {
-    await window.api.deleteSession(id)
+    await getPlatformApi().deleteSession(id)
     await reloadSessions(set)
     if (get().activeId === id) get().newSession()
   },
@@ -106,12 +115,12 @@ export const useChat = create<ChatState>((set, get) => ({
   renameSession: async (id, title) => {
     const t = title.trim()
     if (!t) return
-    await window.api.updateSession(id, { title: t })
+    await getPlatformApi().updateSession(id, { title: t })
     await reloadSessions(set)
   },
 
   setArchived: async (id, archived) => {
-    await window.api.updateSession(id, { archived })
+    await getPlatformApi().updateSession(id, { archived })
     await reloadSessions(set)
     if (archived && get().activeId === id) get().newSession()
   },
@@ -129,9 +138,9 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     runningSessionId = req.sessionId ?? null
     try {
-      const { sessionId } = await window.api.agentRun(req)
+      const { sessionId } = await getPlatformApi().agentRun(req)
       // run 完成后以磁盘上的会话为准刷新
-      const s = await window.api.loadSession(sessionId)
+      const s = await getPlatformApi().loadSession(sessionId)
       if (s && sessionId === get().activeId) applySession(set, s)
       else if (s && !get().activeId) {
         set({ activeId: sessionId })
@@ -150,17 +159,17 @@ export const useChat = create<ChatState>((set, get) => ({
     const change = get().pendingChange
     if (!change) return
     set({ pendingChange: null })
-    await window.api.agentConfirm(change.id, approved)
+    await getPlatformApi().agentConfirm(change.id, approved)
     if (approved) await useWorkspaceRefresh()
   },
 
   abort: async () => {
     const id = get().activeId ?? runningSessionId
-    if (id) await window.api.agentAbort(id)
+    if (id) await getPlatformApi().agentAbort(id)
   },
 
   bindEvents: () => {
-    return window.api.onAgentEvent((envelope: AgentEventEnvelope) => handleEvent(envelope, set, get))
+    return getPlatformApi().onAgentEvent((envelope: AgentEventEnvelope) => handleEvent(envelope, set, get))
   }
 }))
 

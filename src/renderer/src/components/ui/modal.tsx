@@ -25,9 +25,9 @@ export function Modal({
         <RDialog.Overlay className="fixed inset-0 bg-black/40 z-40 backdrop-blur-[2px] data-[state=open]:animate-in" />
         <RDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full',
+            'fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[calc(100vw-1rem)]',
             wide ? 'max-w-3xl' : 'max-w-md',
-            'max-h-[86vh] overflow-y-auto rounded-xl border border-line bg-panel p-5 shadow-2xl focus:outline-none'
+            'max-h-[86vh] overflow-y-auto rounded-xl border border-line bg-panel p-4 shadow-2xl focus:outline-none sm:p-5'
           )}
         >
           <div className="flex items-start justify-between gap-4">

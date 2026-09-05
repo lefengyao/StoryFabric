@@ -1,6 +1,11 @@
 /** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
 
-export type EntityKind = 'character' | 'outline' | 'event' | 'chapter'
+export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note'
+
+export type CharacterTier = 'primary' | 'secondary'
+export type OutlineKind = 'total' | 'chapter'
+export type SettingCategory = 'background' | 'other'
+export type ChapterBox = 'draft' | 'main' | 'trash'
 
 /* ---------------- 领域文档 ---------------- */
 
@@ -18,6 +23,8 @@ export interface CharacterDoc {
   summary: string
   /** 自由 Markdown：外貌、性格、背景、成长弧光…… */
   content: string
+  /** 主要角色或次要角色；旧工作区缺失时按 secondary 读取。 */
+  tier?: CharacterTier
 }
 
 export interface Relationship {
@@ -38,6 +45,9 @@ export interface OutlineDoc {
   order: number
   /** Markdown 正文 */
   content: string
+  /** 总纲或章纲；旧工作区缺失时按 total 读取。 */
+  kind?: OutlineKind
+  chapterId?: string
 }
 
 export interface StoryEvent {
@@ -66,6 +76,12 @@ export interface ChapterMeta {
   order: number
   status: ChapterStatus
   wordCount: number
+  /** 草稿箱、正文箱或回收站。旧工作区缺失时按 main 读取。 */
+  box?: ChapterBox
+  /** 新版卷 id；旧工作区由 volume 名称迁移生成。 */
+  volumeId?: string
+  /** 正文中的术语标注，不改变正文内容。 */
+  terms?: TermAnnotation[]
 }
 
 export interface ChapterDoc extends ChapterMeta {
@@ -87,6 +103,55 @@ export interface WorkspaceSummary {
   outline: OutlineDoc[]
   events: StoryEvent[]
   chapters: ChapterMeta[]
+  version?: number
+  volumes?: VolumeMeta[]
+  settings?: SettingMeta[]
+  notes?: NoteMeta[]
+  trashCount?: number
+}
+
+export interface VolumeMeta {
+  id: string
+  title: string
+  order: number
+}
+
+export interface TermAnnotation {
+  term: string
+  note?: string
+  linkedEntityIds?: string[]
+}
+
+export interface SettingDoc {
+  id: string
+  title: string
+  category: SettingCategory
+  tags: string[]
+  content: string
+}
+
+export type SettingMeta = Omit<SettingDoc, 'content'>
+
+export interface NoteDoc {
+  id: string
+  title: string
+  tags: string[]
+  pinned: boolean
+  createdAt: number
+  updatedAt: number
+  content: string
+}
+
+export type NoteMeta = Omit<NoteDoc, 'content'>
+
+export interface TrashEntry {
+  id: string
+  kind: EntityKind
+  originalPath: string
+  deletedAt: number
+  title: string
+  /** 回收站文件的实际位置。缺失时按 kind/id 推导。 */
+  trashPath?: string
 }
 
 /* ---------------- 应用设置 ---------------- */

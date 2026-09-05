@@ -33,7 +33,7 @@ export function Button({
   return (
     <button
       className={cn(
-        'inline-flex items-center font-medium transition-colors select-none cursor-pointer disabled:opacity-50 disabled:pointer-events-none',
+        'inline-flex items-center whitespace-nowrap font-medium transition-colors select-none cursor-pointer disabled:opacity-50 disabled:pointer-events-none',
         variantCls[variant],
         sizeCls[size],
         className

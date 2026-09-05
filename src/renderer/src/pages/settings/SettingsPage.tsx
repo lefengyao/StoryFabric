@@ -96,13 +96,13 @@ export function SettingsPage(): React.ReactElement {
       <div className="mx-auto max-w-2xl space-y-6 p-6">
         {/* 供应商 */}
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <div>
+          <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="text-sm font-semibold">模型供应商</h2>
-              <p className="mt-0.5 text-xs text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥经系统级加密存储在本机</p>
+              <p className="mt-0.5 text-xs leading-5 text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥经系统级加密存储在本机</p>
             </div>
-            <Button size="sm" variant="primary" onClick={openCreate}>
-              <Plus size={13} /> 添加供应商
+            <Button size="sm" variant="primary" onClick={openCreate} className="shrink-0 whitespace-nowrap px-2.5 sm:px-3">
+              <Plus size={13} /> <span className="hidden sm:inline">添加供应商</span><span className="sm:hidden">添加</span>
             </Button>
           </div>
 

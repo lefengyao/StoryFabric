@@ -1,0 +1,9 @@
+{
+  "appId": "com.storyfabric.app",
+  "appName": "StoryFabric",
+  "webDir": "out/mobile",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}

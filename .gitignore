@@ -1,8 +1,68 @@
+# Dependencies and package-manager caches
 node_modules/
+.npm/
+.pnpm-store/
+
+# Build output and test reports
 out/
-release/
 dist/
+dist-server/
+release/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Runtime workspace data and derived indexes
+data/
+.storyfabric/
+*.storyfabric.zip
+*.storyfabric.session.json
+
+# Secrets and local environment configuration
+secrets/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+
+# Local tooling and editor state
+.codex/
+.zcode/
+.idea/
+.vscode/*.local.*
+*.code-workspace
+
+# Android/Gradle local and generated files
+android/.gradle/
+android/.idea/
+android/local.properties
+android/build/
+android/app/build/
+android/app/release/
+android/app/debug/
+android/app/.cxx/
+android/.cxx/
+android/capacitor-cordova-android-plugins/
+*.apk
+*.aab
+
+# Logs, temporary files, and operating-system metadata
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.bak
+*.swp
+*.swo
+*.orig
+.vite/
 .DS_Store
 Thumbs.db
-.vite/
+desktop.ini

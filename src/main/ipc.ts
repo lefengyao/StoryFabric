@@ -11,16 +11,28 @@ import {
   saveEvent,
   saveOutlineDoc,
   saveRelationships,
-  searchProject
+  searchProject,
+  deleteNote,
+  deleteSetting,
+  getNote,
+  getSetting,
+  listNotes,
+  listSettings,
+  saveNote,
+  saveSetting
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
-import { createWorkspace, loadSummary, validateWorkspace, readGraphLayout, writeGraphLayout } from './services/workspaceService'
+import { createWorkspace, deleteVolume, listTrash, listVolumes, loadSummary, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 import { fetchProviderModels } from './llm'
 import { decryptApiKey } from './services/settingsService'
 import { SessionStore } from './services/sessionStore'
+import { NodeFileStore } from '../core/storage/nodeFileStore'
+import { exportWorkspaceArchive, importWorkspaceArchive } from '../core/workspace/archive'
+import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
+import { genId } from '../core/workspace/entityStore'
 import { IPC } from '../shared/ipc'
 
 export interface AppContext {
@@ -67,6 +79,16 @@ export function registerIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.GetCurrentWorkspace, async () => (currentRoot ? loadSummary(currentRoot) : null))
   ipcMain.handle(IPC.RefreshWorkspace, async () => (currentRoot ? loadSummary(currentRoot) : null))
+  ipcMain.handle(IPC.ExportWorkspace, async () => {
+    const root = requireRoot()
+    return exportWorkspaceArchive(new NodeFileStore(root), (await loadSummary(root)).name)
+  })
+  ipcMain.handle(IPC.ImportWorkspace, async (_e, base64: string, fileName: string) => {
+    const root = requireRoot()
+    await importWorkspaceArchive(new NodeFileStore(root), base64)
+    void fileName
+    return loadSummary(root)
+  })
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))
   ipcMain.handle(IPC.SearchProject, async (_e, query: string) => searchProject(requireRoot(), query))
   ipcMain.handle(IPC.GetGraphLayout, async () => readGraphLayout(requireRoot()))
@@ -87,6 +109,21 @@ export function registerIpc(ctx: AppContext): void {
     return meta
   })
   ipcMain.handle(IPC.DeleteChapter, async (_e, id: string) => deleteChapter(requireRoot(), id))
+  ipcMain.handle(IPC.ListVolumes, async () => listVolumes(requireRoot()))
+  ipcMain.handle(IPC.SaveVolume, async (_e, input) => saveVolume(requireRoot(), input))
+  ipcMain.handle(IPC.DeleteVolume, async (_e, id: string) => deleteVolume(requireRoot(), id))
+  ipcMain.handle(IPC.MoveChapter, async (_e, id: string, target) => moveChapter(requireRoot(), id, target))
+  ipcMain.handle(IPC.ListTrash, async () => listTrash(requireRoot()))
+  ipcMain.handle(IPC.RestoreTrash, async (_e, id: string) => restoreTrash(requireRoot(), id))
+  ipcMain.handle(IPC.PurgeTrash, async (_e, id: string) => purgeTrash(requireRoot(), id))
+  ipcMain.handle(IPC.ListSettingsDocs, async () => listSettings(requireRoot()))
+  ipcMain.handle(IPC.GetSetting, async (_e, id: string) => getSetting(requireRoot(), id))
+  ipcMain.handle(IPC.SaveSetting, async (_e, input) => saveSetting(requireRoot(), input))
+  ipcMain.handle(IPC.DeleteSetting, async (_e, id: string) => deleteSetting(requireRoot(), id))
+  ipcMain.handle(IPC.ListNotes, async () => listNotes(requireRoot()))
+  ipcMain.handle(IPC.GetNote, async (_e, id: string) => getNote(requireRoot(), id))
+  ipcMain.handle(IPC.SaveNote, async (_e, input) => saveNote(requireRoot(), input))
+  ipcMain.handle(IPC.DeleteNote, async (_e, id: string) => deleteNote(requireRoot(), id))
 
   /* ---------- 设置与供应商 ---------- */
   ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.load()))
@@ -111,6 +148,22 @@ export function registerIpc(ctx: AppContext): void {
 
   const sessionStore = (): SessionStore => new SessionStore(requireRoot())
   ipcMain.handle(IPC.ListSessions, async () => sessionStore().list())
+  ipcMain.handle(IPC.CreateSession, async () => {
+    const session = await sessionStore().create()
+    await sessionStore().save(session)
+    return session
+  })
+  ipcMain.handle(IPC.ExportSession, async (_e, id: string) => {
+    const session = await sessionStore().load(id)
+    if (!session) throw new Error('会话不存在')
+    return exportSessionArchive(session)
+  })
+  ipcMain.handle(IPC.ImportSession, async (_e, base64: string, fileName: string) => {
+    const imported = decodeSessionArchive(base64)
+    const session = { ...imported, id: genId('sess'), title: imported.title || fileName.replace(/\.storyfabric\.session\.json$/i, '') || '导入会话', updatedAt: Date.now(), archived: false }
+    await sessionStore().save(session)
+    return { id: session.id, title: session.title, updatedAt: session.updatedAt, messageCount: session.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length, archived: false }
+  })
   ipcMain.handle(IPC.LoadSession, async (_e, id: string) => sessionStore().load(id))
   ipcMain.handle(IPC.DeleteSession, async (_e, id: string) => sessionStore().delete(id))
   ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: { title?: string; archived?: boolean }) => {

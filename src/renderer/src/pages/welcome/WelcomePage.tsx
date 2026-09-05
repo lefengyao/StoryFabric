@@ -16,6 +16,9 @@ export function WelcomePage(): React.ReactElement {
   const [name, setName] = useState('')
   const [parentDir, setParentDir] = useState('')
   const [busy, setBusy] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceSummary[]>([])
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
 
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
@@ -24,6 +27,10 @@ export function WelcomePage(): React.ReactElement {
 
   const openCreate = async (): Promise<void> => {
     setCreateOpen(true)
+    if (isAndroid) {
+      setParentDir('workspaces')
+      return
+    }
     if (!parentDir) {
       try {
         const docs = await api.getDefaultWorkspaceDir()
@@ -49,8 +56,26 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
+  const openWorkspacePicker = async (): Promise<void> => {
+    if (!isAndroid) {
+      await doOpen()
+      return
+    }
+    setBusy(true)
+    try {
+      const list = await api.listWorkspaces?.() ?? []
+      setWorkspaces(list)
+      setWorkspaceOpen(true)
+    } catch (err) {
+      /* 统一显示在欢迎页 */
+      useWorkspace.setState({ error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const doCreate = async (): Promise<void> => {
-    if (!name.trim() || !parentDir) return
+    if (!name.trim() || (!isAndroid && !parentDir)) return
     setBusy(true)
     try {
       await createAndOpen(parentDir, name.trim())
@@ -65,21 +90,21 @@ export function WelcomePage(): React.ReactElement {
   const recent = settings?.recentWorkspaces ?? []
 
   return (
-    <div className="flex h-full items-center justify-center bg-app p-8">
+    <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
       <div className="w-full max-w-xl">
-        <div className="mb-10 text-center">
+        <div className="mb-6 text-center sm:mb-10">
           <div className="mx-auto mb-5 flex justify-center">
             <AppLogo size={64} className="drop-shadow-lg shadow-accent/25 rounded-[14px]" />
           </div>
-          <h1 className="text-3xl font-bold tracking-wide">织章</h1>
-          <p className="mt-1 text-sm font-medium tracking-[0.2em] text-muted">STORYFABRIC</p>
-          <p className="mt-3 text-sm text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
+          <h1 className="text-2xl font-bold tracking-wide sm:text-3xl">织章</h1>
+          <p className="mt-1 text-xs font-medium tracking-[0.16em] text-muted sm:text-sm sm:tracking-[0.2em]">STORYFABRIC</p>
+          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
         </div>
 
         <Card className="p-5">
-          <div className="flex gap-3">
-            <Button variant="primary" className="flex-1 justify-center" onClick={() => void doOpen()} loading={busy}>
-              <FolderOpen size={16} /> 打开工作区文件夹
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy}>
+              <FolderOpen size={16} /> {isAndroid ? '打开工作区' : '打开工作区文件夹'}
             </Button>
             <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
               <FolderPlus size={16} /> 创建新工作区
@@ -120,24 +145,44 @@ export function WelcomePage(): React.ReactElement {
         </p>
       </div>
 
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description="将在所选文件夹内创建一个以小说名命名的新文件夹">
+      <Modal open={workspaceOpen} onOpenChange={setWorkspaceOpen} title="打开工作区" description="选择应用内部已创建的工作区">
+        {workspaces.length === 0 ? (
+          <div className="py-6 text-center text-sm text-muted">还没有可打开的工作区，请先创建一个。</div>
+        ) : (
+          <div className="space-y-2">
+            {workspaces.map((item) => (
+              <button
+                key={item.path}
+                className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-line px-3 py-3 text-left hover:bg-elevated transition"
+                onClick={() => { setWorkspaceOpen(false); void doOpen(item.path) }}
+              >
+                <BookOpen size={16} className="shrink-0 text-accent" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
+                <span className="shrink-0 text-xs text-faint">{item.chapters.length} 章</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={isAndroid ? '工作区将保存在应用内部，可通过 ZIP 导入/导出' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
         <div className="space-y-4">
           <Field label="小说名称 *">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：星海拾遗" autoFocus />
           </Field>
-          <Field label="存放位置（默认为文档目录）" hint={`创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
-            <div className="flex gap-2">
+          <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? 'Android 应用内部存储（无需申请文件夹权限）' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="选择存放文件夹…" readOnly className="min-w-0 flex-1" />
-              <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">
+              {!isAndroid && <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">
                 浏览
-              </Button>
+              </Button>}
             </div>
           </Field>
-          <div className="flex justify-end gap-2 pt-1">
+          <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
             <Button variant="ghost" onClick={() => setCreateOpen(false)}>
               取消
             </Button>
-            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || !parentDir}>
+            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || (!isAndroid && !parentDir)}>
               创建并打开
             </Button>
           </div>

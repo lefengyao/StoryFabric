@@ -1,4 +1,4 @@
-import { BookOpen, Plus, Save, Sparkles, Trash2 } from 'lucide-react'
+import { ArchiveRestore, BookOpen, FolderPlus, Plus, Save, Sparkles, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
@@ -6,7 +6,7 @@ import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
-import type { ChapterDoc, ChapterStatus } from '../../../../shared/types'
+import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
 import { useChat } from '../../stores/chatStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 
@@ -22,7 +22,9 @@ export function ChaptersPage(): React.ReactElement {
   const navigate = useNavigate()
   const setAttachments = useChat((s) => s.setAttachments)
 
-  const chapters = useMemo(() => [...(summary?.chapters ?? [])].sort((a, b) => a.order - b.order), [summary?.chapters])
+  const [box, setBox] = useState<ChapterBox>('main')
+  const [trashItems, setTrashItems] = useState<TrashEntry[]>([])
+  const chapters = useMemo(() => [...(summary?.chapters ?? [])].filter((c) => (c.box ?? 'main') === box).sort((a, b) => a.order - b.order), [summary?.chapters, box])
   const [selectedId, setSelectedId] = useState<string | null>(chapters[0]?.id ?? null)
   const [draft, setDraft] = useState<(Partial<ChapterDoc> & { id?: string }) | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -35,7 +37,9 @@ export function ChaptersPage(): React.ReactElement {
   const lastApplied = useChat((s) => s.lastAppliedChange)
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
-  const volumes = useMemo(() => [...new Set(chapters.map((c) => c.volume || '未分卷'))], [chapters])
+  const volumes = summary?.volumes ?? []
+
+  useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
 
   const openChapter = async (meta: { id: string }): Promise<void> => {
     if (draft && dirty && meta.id !== draft.id && !window.confirm('当前章节有未保存的修改，放弃并切换？')) return
@@ -69,7 +73,9 @@ export function ChaptersPage(): React.ReactElement {
   const create = async (): Promise<void> => {
     await api.saveChapter({
       title: `第${chapters.length + 1}章`,
-      volume: volumes[0] ?? '第一卷',
+      volume: volumes[0]?.title ?? '第一卷',
+      volumeId: volumes[0]?.id ?? 'vol_default',
+      box,
       order: (chapters.length ? Math.max(...chapters.map((c) => c.order)) : 0) + 1,
       status: 'draft',
       content: ''
@@ -121,6 +127,15 @@ export function ChaptersPage(): React.ReactElement {
     await refresh()
   }
 
+  const createVolume = async (): Promise<void> => {
+    const title = window.prompt('卷名', `第${volumes.length + 1}卷`)?.trim()
+    if (!title) return
+    await api.saveVolume({ title, order: volumes.length + 1 })
+    await refresh()
+  }
+
+  const restore = async (id: string): Promise<void> => { await api.restoreTrash(id); await refresh(); setTrashItems(await api.listTrash()) }
+
   /** 把当前章节挂到智能体上下文，跳转工作台 */
   const askAi = (): void => {
     if (!selected) return
@@ -129,43 +144,65 @@ export function ChaptersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col sm:flex-row">
       {/* 章节列表 */}
-      <div className="flex w-64 shrink-0 flex-col border-r border-line">
-        <div className="flex items-center justify-between p-3 pb-2">
-          <span className="text-xs font-medium text-muted">目录</span>
-          <Button size="sm" variant="primary" onClick={() => void create()}>
-            <Plus size={13} /> 新建
-          </Button>
+      <div className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+        <div className="shrink-0 border-b border-line px-3 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <div role="tablist" aria-label="章节箱" className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'draft' ? 'soft' : 'ghost'} onClick={() => { setBox('draft'); setSelectedId(null); setDraft(null) }}>草稿箱</Button>
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'main' ? 'soft' : 'ghost'} onClick={() => { setBox('main'); setSelectedId(null); setDraft(null) }}>正文箱</Button>
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'trash' ? 'soft' : 'ghost'} onClick={() => { setBox('trash'); setSelectedId(null); setDraft(null) }}>
+                <ArchiveRestore size={13} className="shrink-0" />
+                <span className="hidden min-[420px]:inline">回收站</span>
+                <span className="min-[420px]:hidden">回收</span>
+              </Button>
+            </div>
+            {box !== 'trash' && <Button size="sm" variant="primary" className="h-9 shrink-0 px-3" onClick={() => void create()}><Plus size={14} /> 新建</Button>}
+          </div>
+          {box !== 'trash' && (
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted">
+                <BookOpen size={14} className="text-accent" />
+                <span>{box === 'main' ? '正文结构' : '待整理章节'}</span>
+              </div>
+              {box === 'main' && <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => void createVolume()} title="新建卷"><FolderPlus size={13} /> 新建卷</Button>}
+            </div>
+          )}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {box === 'trash' ? trashItems.filter((item) => item.kind === 'chapter').map((item) => <div key={item.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-elevated"><Trash2 size={14} className="text-faint" /><span className="truncate text-sm">{item.title}</span><Button size="sm" variant="ghost" className="ml-auto" onClick={() => void restore(item.id)} title="恢复"><Undo2 size={13} /></Button></div>) : <>
           {chapters.length === 0 && <EmptyState icon={<BookOpen size={26} />} title="还没有章节" hint="新建第一章开始写作" />}
-          {volumes.map((vol) => (
-            <div key={vol} className="mb-3">
-              <div className="mb-1 px-1 text-[11px] font-semibold text-faint">{vol}</div>
-              <div className="space-y-1">
+          {(box === 'draft' ? [{ id: 'draft', title: '草稿箱', order: 0 }] : volumes).map((vol) => (
+            <div key={vol.id} className="mb-3">
+              <div className="mb-2 flex items-center gap-2 border-b border-line/70 px-1 pb-1.5">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                <span className="min-w-0 truncate text-xs font-semibold text-muted">{vol.title}</span>
+                <span className="ml-auto shrink-0 text-[11px] text-faint">{chapters.filter((c) => box === 'draft' || (c.volumeId ?? 'vol_default') === vol.id).length} 章</span>
+              </div>
+              <div className="space-y-2">
                 {chapters
-                  .filter((c) => (c.volume || '未分卷') === vol)
+                  .filter((c) => box === 'draft' || (c.volumeId ?? 'vol_default') === vol.id)
                   .map((c) => (
                     <button
                       key={c.id}
                       onClick={() => draft === null && void openChapter(c)}
-                      className={`w-full rounded-lg px-2.5 py-2 text-left transition cursor-pointer ${
-                        selectedId === c.id ? 'bg-accent-soft text-accent' : 'hover:bg-elevated'
+                      className={`w-full rounded-xl border px-3 py-2.5 text-left transition cursor-pointer ${
+                        selectedId === c.id ? 'border-accent/40 bg-accent-soft text-accent shadow-sm' : 'border-line/70 bg-app hover:border-line hover:bg-elevated'
                       }`}
                     >
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-sm">{c.title}</span>
+                        <span className="min-w-0 truncate text-sm font-medium">{c.title}</span>
                         <Badge tone={STATUS_TONE[c.status]} className="ml-auto shrink-0">
                           {CHAPTER_STATUS_LABEL[c.status]}
                         </Badge>
                       </div>
-                      <div className="mt-0.5 text-[11px] text-faint">{c.wordCount} 字</div>
+                      <div className="mt-1 text-[11px] text-faint">{c.wordCount} 字</div>
                     </button>
                   ))}
               </div>
             </div>
-          ))}
+          ))}</>}
         </div>
       </div>
 
@@ -188,16 +225,16 @@ export function ChaptersPage(): React.ReactElement {
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-3 sm:px-5">
             <Input value={draft.title ?? ''} onChange={(e) => { setDraft({ ...draft, title: e.target.value }); setDirty(true) }} className="max-w-56" />
             <select
-              value={draft.volume ?? '第一卷'}
-              onChange={(e) => { setDraft({ ...draft, volume: e.target.value }); setDirty(true) }}
+              value={draft.volumeId ?? volumes[0]?.id ?? 'vol_default'}
+              onChange={(e) => { const volume = volumes.find((item) => item.id === e.target.value); setDraft({ ...draft, volumeId: e.target.value, volume: volume?.title ?? draft.volume }); setDirty(true) }}
               className={cn('h-9 rounded-lg border border-line bg-panel px-2.5 text-sm outline-none focus:border-accent cursor-pointer')}
             >
-              {[...new Set([...volumes, draft.volume ?? '', '第一卷', '第二卷', '第三卷'])].filter(Boolean).map((v) => (
-                <option key={v} value={v}>
-                  {v}
+              {(volumes.length ? volumes : [{ id: 'vol_default', title: draft.volume ?? '第一卷', order: 1 }]).map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.title}
                 </option>
               ))}
             </select>
@@ -216,11 +253,13 @@ export function ChaptersPage(): React.ReactElement {
               序号
               <Input type="number" value={draft.order ?? 1} onChange={(e) => { setDraft({ ...draft, order: Number(e.target.value) || 1 }); setDirty(true) }} className="w-16" />
             </label>
+            <Input value={(draft.terms ?? []).map((term) => term.term).join('，')} onChange={(e) => { const terms = e.target.value.split(/[,，、\s]+/).map((term) => term.trim()).filter(Boolean).map((term) => ({ term })); setDraft({ ...draft, terms }); setDirty(true) }} placeholder="术语标注" className="max-w-40" title="用逗号分隔章节中的陌生名词" />
             {dirty && <span className="text-xs text-accent">未保存</span>}
-            <div className="flex-1" />
+            <div className="hidden flex-1 sm:block" />
             <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>
               完成
             </Button>
+            {draft.id && <Button variant="ghost" size="sm" onClick={() => void api.moveChapter(draft.id!, { box: draft.box === 'draft' ? 'main' : 'draft', volumeId: draft.volumeId }) .then(() => refresh())} title={draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}>{draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}</Button>}
             <Button variant="ghost" size="sm" onClick={askAi} title="让智能体基于本章设定续写">
               <Sparkles size={13} /> AI 续写
             </Button>

@@ -61,6 +61,12 @@ body,
   height: 100%;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -68,6 +74,32 @@ body {
   color: var(--fg);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Capacitor 手机端：避免桌面固定宽度、长文本和控件撑破视口。 */
+@media (max-width: 640px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  /* Android 15/Capacitor may draw the WebView edge-to-edge. Keep app chrome
+     and the composer below the system status/navigation bars. */
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    max-width: 100%;
+  }
+
+  .prose {
+    overflow-wrap: anywhere;
+  }
 }
 
 /* 统一的设置/表单下拉样式 */
@@ -112,4 +144,23 @@ body {
 .cm-scroller {
   font-family: var(--font-sans) !important;
   line-height: 1.75 !important;
+}
+
+/* 手机端底部导航需要和 Android 系统导航区明确分层，避免误触返回/主页。 */
+@media (max-width: 640px) {
+  .mobile-bottom-nav {
+    position: relative;
+    z-index: 20;
+    isolation: isolate;
+  }
+
+  .mobile-bottom-nav a {
+    touch-action: manipulation;
+  }
+
+  .mobile-bottom-nav a > svg,
+  .mobile-bottom-nav > a > svg {
+    width: 24px;
+    height: 24px;
+  }
 }

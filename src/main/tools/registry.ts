@@ -2,7 +2,7 @@
  * 智能体工具注册表：读取工具直接执行；写入工具只生成「待确认变更」，
  * 由用户在界面确认后才真正落盘（commit）。
  */
-import type { ChapterDoc, CharacterDoc, OutlineDoc, PendingChange, StoryEvent, ToolDefJson } from '../../shared/types'
+import type { ChapterDoc, CharacterDoc, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson } from '../../shared/types'
 import {
   countWords,
   findCharacter,
@@ -12,11 +12,17 @@ import {
   listChapters,
   listEvents,
   listOutline,
+  listNotes,
+  listSettings,
+  getNote,
+  getSetting,
   loadRelationships,
   saveChapter,
   saveCharacter,
   saveEvent,
   saveOutlineDoc,
+  saveNote,
+  saveSetting,
   saveRelationships,
   searchProject,
   serializeChapter,
@@ -25,6 +31,9 @@ import {
   serializeOutlineDoc,
   serializeRelationships
 } from '../services/entityStore'
+import { NodeFileStore } from '../../core/storage/nodeFileStore'
+import { getChapterContext, lookupTerm } from '../../core/retrieval'
+import { listTrash, moveChapter, restoreTrash } from '../services/workspaceService'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -123,6 +132,46 @@ export const TOOL_DEFS: ToolDefJson[] = [
         title: { type: 'string', description: '章节标题' }
       }
     }
+  },
+  {
+    name: 'get_chapter_context',
+    description: '读取目标章节与前后各两章的受限上下文，修改章节前优先使用。',
+    parameters: { type: 'object', properties: { chapterId: { type: 'string' }, radius: { type: 'number' }, maxChars: { type: 'number' } }, required: ['chapterId'] }
+  },
+  {
+    name: 'lookup_term',
+    description: '查询术语标注、设定和大纲中的相关来源。',
+    parameters: { type: 'object', properties: { term: { type: 'string' } }, required: ['term'] }
+  },
+  {
+    name: 'list_settings',
+    description: '列出背景设定和其他设定摘要。',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_setting',
+    description: '读取一条完整设定。',
+    parameters: { type: 'object', properties: { settingId: { type: 'string' } }, required: ['settingId'] }
+  },
+  {
+    name: 'list_notes',
+    description: '列出便签摘要。',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_note',
+    description: '读取一条完整便签。',
+    parameters: { type: 'object', properties: { noteId: { type: 'string' } }, required: ['noteId'] }
+  },
+  {
+    name: 'list_chapter_outlines',
+    description: '按章节列出章纲摘要，不读取全部正文。',
+    parameters: { type: 'object', properties: { chapterId: { type: 'string' } } }
+  },
+  {
+    name: 'get_chapter_outline',
+    description: '读取指定章节的一篇章纲。',
+    parameters: { type: 'object', properties: { outlineId: { type: 'string' }, chapterId: { type: 'string' } } }
   },
   {
     name: 'save_character',
@@ -239,10 +288,30 @@ export const TOOL_DEFS: ToolDefJson[] = [
       },
       required: ['chapter']
     }
+  },
+  {
+    name: 'save_setting',
+    description: '新建或更新设定；用户确认后才会写入。',
+    parameters: { type: 'object', properties: { setting: { type: 'object' } }, required: ['setting'] }
+  },
+  {
+    name: 'save_note',
+    description: '新建或更新便签；用户确认后才会写入。',
+    parameters: { type: 'object', properties: { note: { type: 'object' } }, required: ['note'] }
+  },
+  {
+    name: 'move_chapter',
+    description: '将章节移动到草稿箱或指定正文卷；需要用户确认。',
+    parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] }
+  },
+  {
+    name: 'restore_from_trash',
+    description: '从回收站恢复一条资料；需要用户确认。',
+    parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
   }
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'move_chapter', 'restore_from_trash'])
 
 /* ---------------- 读取工具执行 ---------------- */
 
@@ -262,8 +331,8 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
       return ok(J(await searchProject(root, String(a.query))))
     }
     case 'get_outline': {
-      const docs = await listOutline(root)
-      return ok(docs.length ? J(docs.map((d) => ({ id: d.id, title: d.title, order: d.order, content: d.content }))) : '大纲为空')
+      const docs = (await listOutline(root)).filter((doc) => (doc.kind ?? 'total') === 'total')
+      return ok(docs.length ? J(docs.map((d) => ({ id: d.id, title: d.title, order: d.order, summary: clip(d.content, 400) }))) : '大纲为空')
     }
     case 'list_events': {
       const events = await listEvents(root)
@@ -301,6 +370,33 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
       let content = (await getChapterBody(root, meta.id)) ?? ''
       if (content.length > 8000) content = content.slice(0, 8000) + `\n…（正文过长已截断，共 ${meta.wordCount} 字）`
       return ok(J({ ...meta, content }))
+    }
+    case 'get_chapter_context': {
+      if (!a.chapterId) return fail('chapterId 不能为空')
+      return ok(J(await getChapterContext(new NodeFileStore(root), String(a.chapterId), { radius: a.radius, maxChars: a.maxChars })))
+    }
+    case 'lookup_term': {
+      if (!a.term) return fail('term 不能为空')
+      return ok(J(await lookupTerm(new NodeFileStore(root), String(a.term))))
+    }
+    case 'list_settings': return ok(J(await listSettings(root)))
+    case 'get_setting': {
+      const value = a.settingId ? await getSetting(root, String(a.settingId)) : null
+      return value ? ok(J(value)) : fail(`未找到设定：${a.settingId}`)
+    }
+    case 'list_notes': return ok(J(await listNotes(root)))
+    case 'get_note': {
+      const value = a.noteId ? await getNote(root, String(a.noteId)) : null
+      return value ? ok(J(value)) : fail(`未找到便签：${a.noteId}`)
+    }
+    case 'list_chapter_outlines': {
+      const docs = (await listOutline(root)).filter((doc) => doc.kind === 'chapter' && (!a.chapterId || doc.chapterId === a.chapterId))
+      return ok(J(docs.map(({ content: _content, ...meta }) => meta)))
+    }
+    case 'get_chapter_outline': {
+      const docs = (await listOutline(root)).filter((doc) => doc.kind === 'chapter' && (!a.chapterId || doc.chapterId === a.chapterId))
+      const value = a.outlineId ? docs.find((doc) => doc.id === a.outlineId) : docs[0]
+      return value ? ok(J(value)) : fail('未找到章纲')
     }
     default:
       return fail(`未知工具：${name}`)
@@ -438,6 +534,19 @@ async function simulateOutline(root: string, patch: Partial<OutlineDoc> & { id?:
   }
 }
 
+async function simulateSetting(root: string, patch: Partial<SettingDoc> & { id?: string }): Promise<SimulatedChange> {
+  const old = patch.id ? await getSetting(root, patch.id) : null
+  const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('set'), title: patch.title ?? '未命名设定', category: patch.category === 'other' ? 'other' : 'background', tags: patch.tags ?? [], content: patch.content ?? '' }) as SettingDoc
+  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}设定：${after.title}`, commit: async () => `已保存设定「${(await saveSetting(root, patch)).title}」` }
+}
+
+async function simulateNote(root: string, patch: Partial<NoteDoc> & { id?: string }): Promise<SimulatedChange> {
+  const old = patch.id ? await getNote(root, patch.id) : null
+  const now = Date.now()
+  const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('note'), title: patch.title ?? '未命名便签', tags: patch.tags ?? [], pinned: Boolean(patch.pinned), createdAt: patch.createdAt ?? now, updatedAt: now, content: patch.content ?? '' }) as NoteDoc
+  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}便签：${after.title}`, commit: async () => `已保存便签「${(await saveNote(root, patch)).title}」` }
+}
+
 async function simulateRelationship(
   root: string,
   input: { fromCharacterId: string; toCharacterId: string; type: string; label?: string; description?: string; directed?: boolean }
@@ -501,6 +610,31 @@ export async function executeTool(root: string, name: string, argsJson: string):
         if (!a.chapter?.title && !a.chapter?.id) throw new Error('chapter 必须包含 title 或 id')
         sim = await simulateChapter(root, a.chapter)
         break
+      case 'save_setting':
+        if (!a.setting?.title && !a.setting?.id) throw new Error('setting 必须包含 title 或 id')
+        sim = await simulateSetting(root, a.setting)
+        break
+      case 'save_note':
+        if (!a.note?.title && !a.note?.id) throw new Error('note 必须包含 title 或 id')
+        sim = await simulateNote(root, a.note)
+        break
+      case 'move_chapter': {
+        const chapterId = String(a.chapterId ?? '')
+        const targetBox = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''
+        if (!chapterId || !targetBox) throw new Error('chapterId 或 box 无效')
+        const current = (await listChapters(root)).find((chapter) => chapter.id === chapterId)
+        if (!current) throw new Error(`未找到章节：${chapterId}`)
+        const target = { box: targetBox, ...(a.volumeId ? { volumeId: String(a.volumeId) } : {}) } as { box: 'draft' | 'main'; volumeId?: string }
+        sim = { entityId: chapterId, title: `移动章节：${current.title}`, beforeText: JSON.stringify(current, null, 2), afterText: JSON.stringify({ ...current, ...target }, null, 2), commit: async () => { await moveChapter(root, chapterId, target); return `已移动章节「${current.title}」` } }
+        break
+      }
+      case 'restore_from_trash': {
+        const id = String(a.id ?? '')
+        const entry = (await listTrash(root)).find((item) => item.id === id)
+        if (!entry) throw new Error(`回收站中未找到实体：${id}`)
+        sim = { entityId: id, title: `恢复：${entry.title}`, beforeText: JSON.stringify(entry, null, 2), afterText: `恢复到 ${entry.originalPath}`, commit: async () => { await restoreTrash(root, id); return `已恢复「${entry.title}」` } }
+        break
+      }
       default:
         throw new Error(`未知工具：${name}`)
     }
@@ -508,7 +642,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
     const change: PendingChange = {
       id: genId('chg'),
       toolName: name,
-      entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' ? 'chapter' : 'outline',
+      entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline',
       entityId: sim.entityId,
       title: sim.title,
       beforeText: sim.beforeText,

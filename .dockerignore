@@ -1,0 +1,14 @@
+node_modules
+out
+release
+dist
+dist-server
+android
+.codex
+.git
+.github
+data
+secrets
+*.log
+*.tmp
+*.bak

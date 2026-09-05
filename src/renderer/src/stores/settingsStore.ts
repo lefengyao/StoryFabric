@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { PublicAppSettings } from '../../../shared/types'
 import type { SettingsPatch } from '../../../shared/api'
+import { getPlatformApi } from '../platform/platformApi'
 
 interface SettingsState {
   settings: PublicAppSettings | null
@@ -18,13 +19,13 @@ export const useSettings = create<SettingsState>((set) => ({
   settings: null,
 
   load: async () => {
-    const s = await window.api.getSettings()
+    const s = await getPlatformApi().getSettings()
     applyTheme(s.theme)
     set({ settings: s })
   },
 
   update: async (patch) => {
-    const s = await window.api.updateSettings(patch)
+    const s = await getPlatformApi().updateSettings(patch)
     applyTheme(s.theme)
     set({ settings: s })
   }

@@ -1,6 +1,7 @@
 /** 渲染进程可调用的完整 API 面（preload 实现它，renderer 通过 window.api 使用） */
 import type {
   AgentEvent,
+  ChapterBox,
   ChapterDoc,
   ChapterMeta,
   CharacterDoc,
@@ -13,8 +14,16 @@ import type {
   SearchHit,
   SessionMeta,
   StoryEvent,
-  WorkspaceSummary
+  WorkspaceSummary,
+  VolumeMeta,
+  TrashEntry,
+  SettingDoc,
+  SettingMeta,
+  NoteDoc,
+  NoteMeta
 } from './types'
+import type { WorkspaceArchive } from '../core/workspace/archive'
+import type { SessionArchive } from '../core/workspace/sessionArchive'
 
 export interface AgentEventEnvelope {
   sessionId: string
@@ -36,6 +45,8 @@ export interface FetchModelsInput {
 export interface StoryFabricApi {
   /* 工作区 */
   pickFolder(): Promise<string | null>
+  /** Android 内部工作区列表；桌面端未实现时可省略。 */
+  listWorkspaces?: () => Promise<WorkspaceSummary[]>
   /** 默认新建位置：系统文档目录 */
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
@@ -43,6 +54,13 @@ export interface StoryFabricApi {
   closeWorkspace(): Promise<void>
   getCurrentWorkspace(): Promise<WorkspaceSummary | null>
   refreshWorkspace(): Promise<WorkspaceSummary | null>
+  exportWorkspace(): Promise<WorkspaceArchive>
+  /** 在当前平台分享/保存导出的工作区压缩包；Android 使用系统分享面板。 */
+  shareWorkspaceArchive?(archive: WorkspaceArchive): Promise<void>
+  exportSession(id: string): Promise<SessionArchive>
+  importSession(base64: string, fileName: string): Promise<SessionMeta>
+  shareSessionArchive?(archive: SessionArchive): Promise<void>
+  importWorkspace(base64: string, fileName: string): Promise<WorkspaceSummary>
   getChapterBody(id: string): Promise<string | null>
   searchProject(query: string): Promise<SearchHit[]>
   /** 关系图谱节点坐标（按人物 id） */
@@ -59,6 +77,21 @@ export interface StoryFabricApi {
   deleteEvent(id: string): Promise<void>
   saveChapter(doc: Partial<ChapterDoc>): Promise<ChapterMeta>
   deleteChapter(id: string): Promise<void>
+  listVolumes(): Promise<VolumeMeta[]>
+  saveVolume(input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta>
+  deleteVolume(id: string): Promise<void>
+  moveChapter(id: string, target: { box: Exclude<ChapterBox, 'trash'>; volumeId?: string }): Promise<void>
+  listTrash(): Promise<TrashEntry[]>
+  restoreTrash(id: string): Promise<void>
+  purgeTrash(id: string): Promise<void>
+  listSettings(): Promise<SettingMeta[]>
+  getSetting(id: string): Promise<SettingDoc | null>
+  saveSetting(doc: Partial<SettingDoc>): Promise<SettingDoc>
+  deleteSetting(id: string): Promise<void>
+  listNotes(): Promise<NoteMeta[]>
+  getNote(id: string): Promise<NoteDoc | null>
+  saveNote(doc: Partial<NoteDoc>): Promise<NoteDoc>
+  deleteNote(id: string): Promise<void>
 
   /* 设置与供应商 */
   getSettings(): Promise<PublicAppSettings>
@@ -72,6 +105,7 @@ export interface StoryFabricApi {
   agentConfirm(changeId: string, approved: boolean): Promise<void>
   agentAbort(sessionId: string): Promise<void>
   listSessions(): Promise<SessionMeta[]>
+  createSession(): Promise<ChatSession>
   loadSession(id: string): Promise<ChatSession | null>
   deleteSession(id: string): Promise<void>
   /** 更新会话元信息：重命名 / 归档 */

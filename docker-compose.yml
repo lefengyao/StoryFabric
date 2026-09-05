@@ -1,0 +1,14 @@
+services:
+  storyfabric:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data
+    secrets:
+      - storyfabric_key
+
+secrets:
+  storyfabric_key:
+    file: ./secrets/storyfabric_key

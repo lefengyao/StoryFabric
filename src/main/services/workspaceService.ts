@@ -1,98 +1,64 @@
-/**
- * 工作区管理：新建（脚手架初始化）、打开校验、加载汇总。
- * 不依赖 electron，当前工作区状态由 IPC 层持有。
- */
+/** Electron 工作区服务适配层：路径签名保留给 IPC，共享规则由 core 维护。 */
 import { promises as fs } from 'fs'
-import { join, basename } from 'path'
-import type { WorkspaceSummary } from '../../shared/types'
+import { basename, join } from 'path'
+import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import {
-  listCharacters,
-  loadRelationships,
-  listOutline,
-  listEvents,
-  listChapters
-} from './entityStore'
+  initializeWorkspace as coreInitializeWorkspace,
+  loadSummary as coreLoadSummary,
+  listVolumes as coreListVolumes,
+  saveVolume as coreSaveVolume,
+  deleteVolume as coreDeleteVolume,
+  moveChapter as coreMoveChapter,
+  readGraphLayout as coreReadGraphLayout,
+  validateWorkspace as coreValidateWorkspace,
+  writeGraphLayout as coreWriteGraphLayout
+} from '../../core/workspace/workspaceService'
+import type { ChapterBox, VolumeMeta, WorkspaceSummary } from '../../shared/types'
+import { listTrash as coreListTrash, restoreFromTrash as coreRestoreTrash, purgeTrashEntry as corePurgeTrash } from '../../core/workspace/trash'
 
 export const WORKSPACE_MARKERS = ['storyfabric.json', 'characters', 'outline', 'events', 'chapters']
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path)
-    return true
-  } catch {
-    return false
-  }
+function storeOf(root: string): NodeFileStore {
+  return new NodeFileStore(root)
 }
 
-/** 校验目录是否为有效工作区（存在 storyfabric.json 或完整目录结构） */
-export async function validateWorkspace(dir: string): Promise<{ ok: boolean; reason?: string }> {
-  const marker = join(dir, 'storyfabric.json')
-  if (await exists(marker)) return { ok: true }
-  let found = 0
-  for (const m of WORKSPACE_MARKERS.slice(1)) {
-    if (await exists(join(dir, m))) found++
-  }
-  if (found >= 3) return { ok: true }
-  return { ok: false, reason: '所选文件夹不是有效的 StoryFabric 工作区（缺少 storyfabric.json）' }
+export function validateWorkspace(root: string): Promise<{ ok: boolean; reason?: string }> {
+  return coreValidateWorkspace(storeOf(root))
 }
 
-/** 在 parentDir 下创建名为 name 的工作区并脚手架初始化 */
 export async function createWorkspace(parentDir: string, name: string): Promise<string> {
   const safeName = name.replace(/[\\/:*?"<>|]/g, '').trim()
   if (!safeName) throw new Error('工作区名称不能为空')
   const root = join(parentDir, safeName)
-  if (await exists(root)) throw new Error(`文件夹已存在：${safeName}`)
-
-  for (const d of ['characters', 'outline', 'events', 'chapters', join('.storyfabric', 'sessions')]) {
-    await fs.mkdir(join(root, d), { recursive: true })
+  try {
+    await fs.access(root)
+    throw new Error(`文件夹已存在：${safeName}`)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('文件夹已存在')) throw error
   }
-  await fs.writeFile(
-    join(root, 'storyfabric.json'),
-    JSON.stringify({ app: 'storyfabric', version: 1, name: safeName, createdAt: new Date().toISOString() }, null, 2),
-    'utf-8'
-  )
-  await fs.writeFile(join(root, 'relationships.json'), '[]', 'utf-8')
-  await fs.writeFile(
-    join(root, 'outline', '0001-故事大纲.md'),
-    ['---', 'id: out_core', `title: 故事大纲`, 'order: 1', '---', '', '# 故事大纲', '', '在这里写下你的核心创意、主题与整体走向……', ''].join('\n'),
-    'utf-8'
-  )
+  await fs.mkdir(root, { recursive: true })
+  await coreInitializeWorkspace(storeOf(root), safeName)
   return root
 }
 
-/** 加载工作区汇总数据 */
-export async function loadSummary(root: string): Promise<WorkspaceSummary> {
-  const [characters, relationships, outline, events, chapters] = await Promise.all([
-    listCharacters(root),
-    loadRelationships(root),
-    listOutline(root),
-    listEvents(root),
-    listChapters(root)
-  ])
-  let name = basename(root)
-  try {
-    const meta = JSON.parse(await fs.readFile(join(root, 'storyfabric.json'), 'utf-8'))
-    if (typeof meta?.name === 'string' && meta.name) name = meta.name
-  } catch {
-    /* 使用目录名兜底 */
-  }
-  return { name, path: root, characters, relationships, outline, events, chapters }
+export function loadSummary(root: string): Promise<WorkspaceSummary> {
+  return coreLoadSummary(storeOf(root), basename(root), root)
 }
 
-/* ---------------- 关系图谱布局 ---------------- */
+export function listVolumes(root: string): Promise<VolumeMeta[]> { return coreListVolumes(storeOf(root)) }
+export function saveVolume(root: string, input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta> { return coreSaveVolume(storeOf(root), input) }
+export function deleteVolume(root: string, id: string): Promise<void> { return coreDeleteVolume(storeOf(root), id) }
+export function moveChapter(root: string, id: string, target: { box: Exclude<ChapterBox, 'trash'>; volumeId?: string }): Promise<void> { return coreMoveChapter(storeOf(root), id, target) }
+export function listTrash(root: string) { return coreListTrash(storeOf(root)) }
+export function restoreTrash(root: string, id: string): Promise<void> { return coreRestoreTrash(storeOf(root), id) }
+export function purgeTrash(root: string, id: string): Promise<void> { return corePurgeTrash(storeOf(root), id) }
 
 export type GraphLayout = Record<string, { x: number; y: number }>
 
-export async function readGraphLayout(root: string): Promise<GraphLayout> {
-  try {
-    const raw = JSON.parse(await fs.readFile(join(root, '.storyfabric', 'layout.json'), 'utf-8'))
-    return typeof raw === 'object' && raw !== null ? (raw as GraphLayout) : {}
-  } catch {
-    return {}
-  }
+export function readGraphLayout(root: string): Promise<GraphLayout> {
+  return coreReadGraphLayout(storeOf(root))
 }
 
-export async function writeGraphLayout(root: string, layout: GraphLayout): Promise<void> {
-  await fs.mkdir(join(root, '.storyfabric'), { recursive: true })
-  await fs.writeFile(join(root, '.storyfabric', 'layout.json'), JSON.stringify(layout, null, 2), 'utf-8')
+export function writeGraphLayout(root: string, layout: GraphLayout): Promise<void> {
+  return coreWriteGraphLayout(storeOf(root), layout)
 }
