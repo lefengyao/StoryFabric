@@ -29,7 +29,6 @@ src/preload/    Electron 安全桥接
 src/renderer/   React 界面，以及 Web/Android 平台适配器
 src/server/     Linux HTTP 服务、访问密钥认证、RPC 和 SSE
 examples/       最小工作区示例和自动化测试 fixture
-docs/           设计、发行和部署文档
 ```
 
 ## 本地开发
@@ -68,7 +67,7 @@ docker compose up -d --build
 
 生产环境应在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `STORYFABRIC_COOKIE_SECURE=1`。备份 `data/` 即可备份服务端工作区和供应商设置，不要把 `secrets/`、`.env` 或运行时数据提交到 Git。
 
-完整配置见 [docs/linux-server.md](docs/linux-server.md)。
+部署配置以本 README 和 `docker-compose.yml` 为准；仓库外的辅助记录不参与发行包。
 
 ## 工作区示例
 
@@ -80,17 +79,9 @@ examples/minimal-workspace
 
 `.storyfabric/` 下的索引、会话和回收站数据属于运行时派生文件，已加入 Git 忽略规则。
 
-## 文档
-
-- [Linux 单用户 Docker 部署](docs/linux-server.md)
-- [Windows 与 Android 发行说明](docs/platform-release.md)
-- [Windows 写作工作流](docs/windows-writing-workflow.md)
-- [Android 暂停交接与兼容性要求](docs/android-handoff.md)
-- [章节结构与混合检索计划](docs/superpowers/plans/2026-09-05-writing-structure-and-hybrid-retrieval.md)
-
 ## Git 约定
 
-提交源码、配置、文档、测试和示例；不要提交依赖目录、构建目录、运行时工作区、访问密钥、供应商 API Key、截图或 APK/AAB。提交前建议执行：
+提交源码、构建配置、测试和示例；`.zcode/`、`.github/`、`docs/` 属于本地辅助资料，不纳入版本控制。不要提交依赖目录、构建目录、运行时工作区、访问密钥、供应商 API Key、截图或 APK/AAB。提交前建议执行：
 
 ```bash
 npm test -- --run

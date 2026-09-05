@@ -33,6 +33,8 @@ secrets/
 # Local tooling and editor state
 .codex/
 .zcode/
+.github/
+docs/
 .idea/
 .vscode/*.local.*
 *.code-workspace

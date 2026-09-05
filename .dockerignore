@@ -5,8 +5,10 @@ dist
 dist-server
 android
 .codex
+.zcode
 .git
 .github
+docs
 data
 secrets
 *.log
