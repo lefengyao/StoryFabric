@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -74,6 +74,39 @@ describe('linux web server', () => {
       const token = (await tokenResponse.json() as { token: string }).token
       expect(token).toBeTruthy()
       expect((await fetch(`${base}/api/workspaces`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('serves the web login shell before authentication while keeping APIs protected', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-static-'))
+    const staticDir = join(root, 'web')
+    await mkdir(staticDir)
+    await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>StoryFabric</title>')
+    const server = createStoryFabricServer({ accessKey: 'static-test-key', dataDir: join(root, 'data'), staticDir })
+
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      const base = `http://127.0.0.1:${address.port}`
+      const page = await fetch(`${base}/`)
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('StoryFabric')
+      expect((await fetch(`${base}/api/rpc`, { method: 'POST' })).status).toBe(401)
+
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: 'static-test-key' })
+      })
+      const cookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
+      expect((await fetch(`${base}/api/workspaces`, { headers: { cookie } })).status).toBe(200)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(root, { recursive: true, force: true })

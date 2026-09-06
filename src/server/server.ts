@@ -338,6 +338,10 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     }
     if (pathname === '/api/auth/session' && req.method === 'GET') { sendJson(res, 200, { authenticated: Boolean(authenticate(req)) }); return }
 
+    // The login shell and its assets must be reachable before a session exists.
+    // Keep every API route behind the access-key session below.
+    if (!pathname.startsWith('/api/') && options.staticDir && await serveStatic(req, res, options.staticDir)) return
+
     const context = requireAuth(req, res)
     if (!context) return
     try { await registryReady } catch (error) { sendError(res, 500, error); return }

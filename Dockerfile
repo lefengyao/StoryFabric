@@ -18,7 +18,10 @@ ENV NODE_ENV=production \
     STORYFABRIC_WEB_DIST_DIR=/app/web \
     STORYFABRIC_ACCESS_KEY_FILE=/run/secrets/storyfabric_key
 
-RUN groupadd --system storyfabric && useradd --system --gid storyfabric --home-dir /app storyfabric \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends util-linux \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system storyfabric && useradd --system --gid storyfabric --home-dir /app storyfabric \
   && mkdir -p /data \
   && chown -R storyfabric:storyfabric /app /data
 
