@@ -1,7 +1,8 @@
 /** Electron 工作区服务适配层：路径签名保留给 IPC，共享规则由 core 维护。 */
 import { promises as fs } from 'fs'
-import { basename, join } from 'path'
+import { basename, join, relative, resolve, sep } from 'path'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
+import { importWorkspaceArchive } from '../../core/workspace/archive'
 import {
   initializeWorkspace as coreInitializeWorkspace,
   loadSummary as coreLoadSummary,
@@ -39,6 +40,44 @@ export async function createWorkspace(parentDir: string, name: string): Promise<
   await fs.mkdir(root, { recursive: true })
   await coreInitializeWorkspace(storeOf(root), safeName)
   return root
+}
+
+function safeWorkspaceName(name: string): string {
+  const safeName = name.replace(/[\\/:*?"<>|]/g, '').trim()
+  if (!safeName || safeName === '.' || safeName === '..') throw new Error('工作区名称不能为空')
+  return safeName
+}
+
+function isChildOf(parent: string, target: string): boolean {
+  const rel = relative(parent, target)
+  return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fs.access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Import only into a fresh sibling directory, then atomically publish it. */
+export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array): Promise<string> {
+  const parent = resolve(parentDir)
+  const target = resolve(parent, safeWorkspaceName(name))
+  if (!isChildOf(parent, target)) throw new Error('目标工作区必须位于所选文件夹内')
+  if (await pathExists(target)) throw new Error(`文件夹已存在：${basename(target)}`)
+
+  const staging = await fs.mkdtemp(join(parent, '.storyfabric-import-'))
+  try {
+    await importWorkspaceArchive(new NodeFileStore(staging), bytes)
+    await fs.rename(staging, target)
+    return target
+  } catch (error) {
+    await fs.rm(staging, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export function loadSummary(root: string): Promise<WorkspaceSummary> {

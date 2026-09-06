@@ -18,7 +18,7 @@ StoryFabric 是一个依托智能体的小说创作工作台。项目使用可�
 - 事件与便签：时间线事件、置顶便签、搜索和回收。
 - 智能体：流式对话，按需读取章节、前后文、设定和大纲；写回文件需要确认。
 - 供应商：支持 OpenAI 兼容、Anthropic 和 Gemini 协议。
-- 导入导出：工作区使用 `.storyfabric.zip`，会话使用 `.storyfabric.session.json`。
+- 导入导出：工作区统一使用 `.storyfabric.zip`，导入会创建独立的新工作区；会话使用 `.storyfabric.session.json`。
 
 ## 技术结构
 
@@ -54,18 +54,29 @@ npm run server:build:all  # 同时构建 Web 前端和 Node 服务
 
 ## Linux Docker 服务
 
-Linux 服务是现有核心的外围 Web 适配，不开放任意服务器路径。默认只挂载一个工作区，工作区和设置均保存在 `/data` 卷中。
+Linux 服务是现有核心的外围 Web 适配，不开放任意服务器路径。一个服务地址可管理多个工作区：工作区位于 `/data/workspaces/<workspace-id>/`，注册表为 `/data/workspaces/registry.json`，供应商设置为 `/data/settings.json`。旧版本的 `/data/workspace` 会在首次启动时安全迁移为 `default`；目标已存在或迁移失败时服务停止且不删除旧数据。
 
 ```bash
 mkdir -p secrets data
 openssl rand -base64 32 > secrets/storyfabric_key
 chmod 600 secrets/storyfabric_key
 docker compose up -d --build
+docker compose ps
+docker compose logs --tail=200 storyfabric
+curl -fsS http://127.0.0.1:8787/healthz
 ```
 
 打开 `http://服务器地址:8787/`，输入 `secrets/storyfabric_key` 中的访问密钥。
 
-生产环境应在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `STORYFABRIC_COOKIE_SECURE=1`。备份 `data/` 即可备份服务端工作区和供应商设置，不要把 `secrets/`、`.env` 或运行时数据提交到 Git。
+生产环境应在 Caddy、Nginx 或 Traefik 后提供 HTTPS，并设置 `STORYFABRIC_COOKIE_SECURE=1`。备份 `data/` 即可备份服务端工作区、注册表和供应商设置，不要把 `secrets/`、`.env` 或运行时数据提交到 Git。导入/导出通过鉴权的二进制 ZIP 接口完成，不传输服务器绝对路径。
+
+容器启动时由 root-only Docker secret 初始化一个仅 `storyfabric` 用户可读的运行时密钥文件，然后以非 root 用户运行 Node 服务。若访问密钥曾经暴露，应在重启前重新生成：
+
+```bash
+openssl rand -base64 32 > secrets/storyfabric_key
+chmod 600 secrets/storyfabric_key
+docker compose up -d --build
+```
 
 部署配置以本 README 和 `docker-compose.yml` 为准；仓库外的辅助记录不参与发行包。
 

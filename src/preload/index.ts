@@ -15,6 +15,7 @@ import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 
 const api: StoryFabricApi = {
   pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
+  listWorkspaces: () => ipcRenderer.invoke(IPC.ListWorkspaces),
   getDefaultWorkspaceDir: () => ipcRenderer.invoke(IPC.GetDefaultDir),
   createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
   openWorkspace: (path) => ipcRenderer.invoke(IPC.OpenWorkspace, path),
@@ -22,7 +23,7 @@ const api: StoryFabricApi = {
   getCurrentWorkspace: () => ipcRenderer.invoke(IPC.GetCurrentWorkspace),
   refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),
   exportWorkspace: () => ipcRenderer.invoke(IPC.ExportWorkspace),
-  importWorkspace: (base64, fileName) => ipcRenderer.invoke(IPC.ImportWorkspace, base64, fileName),
+  importWorkspace: (bytes, fileName, target) => ipcRenderer.invoke(IPC.ImportWorkspace, bytes, fileName, target),
   getChapterBody: (id) => ipcRenderer.invoke(IPC.GetChapterBody, id),
   searchProject: (query) => ipcRenderer.invoke(IPC.SearchProject, query),
   getGraphLayout: () => ipcRenderer.invoke(IPC.GetGraphLayout),

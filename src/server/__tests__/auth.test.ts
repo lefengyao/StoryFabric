@@ -17,6 +17,9 @@ describe('server authentication', () => {
 
     expect(token).toMatch(/^[A-Za-z0-9_-]{32,}$/)
     expect(sessions.has(token)).toBe(true)
+    expect(sessions.get(token)).toEqual({ workspaceId: undefined })
+    sessions.setWorkspace(token, 'ws_123456789abc')
+    expect(sessions.get(token)).toEqual({ workspaceId: 'ws_123456789abc' })
 
     now += 101
     expect(sessions.has(token)).toBe(false)

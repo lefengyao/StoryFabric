@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { createStoryFabricServer, ensureServerWorkspace } from './server'
+import { createStoryFabricServer } from './server'
+import { WorkspaceRegistry } from './workspaceRegistry'
 
 async function readAccessKey(): Promise<string> {
   const direct = process.env.STORYFABRIC_ACCESS_KEY?.trim()
@@ -11,15 +12,17 @@ async function readAccessKey(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const workspaceRoot = process.env.STORYFABRIC_WORKSPACE_DIR?.trim() || '/data/workspace'
-  const settingsPath = process.env.STORYFABRIC_SETTINGS_FILE?.trim() || join('/data', 'settings.json')
+  const dataDir = process.env.STORYFABRIC_DATA_DIR?.trim() || '/data'
+  const legacyWorkspace = process.env.STORYFABRIC_WORKSPACE_DIR?.trim() || join(dataDir, 'workspace')
+  const settingsPath = process.env.STORYFABRIC_SETTINGS_FILE?.trim() || join(dataDir, 'settings.json')
   const staticDir = process.env.STORYFABRIC_WEB_DIST_DIR?.trim() || join(process.cwd(), 'web')
   const accessKey = await readAccessKey()
-  await ensureServerWorkspace(workspaceRoot, process.env.STORYFABRIC_WORKSPACE_NAME?.trim() || 'StoryFabric')
+  const registry = await WorkspaceRegistry.open(dataDir, legacyWorkspace)
 
   const server = createStoryFabricServer({
     accessKey,
-    workspaceRoot,
+    dataDir,
+    workspaceRegistry: registry,
     settingsPath,
     staticDir,
     cookieSecure: process.env.STORYFABRIC_COOKIE_SECURE === '1'

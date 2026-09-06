@@ -1,11 +1,15 @@
 import { BookOpen, FolderOpen, FolderPlus, History } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AppLogo } from '../../components/icons/AppLogo'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { getPlatformApi, isWebPlatform } from '../../platform/platformApi'
+import { HttpPlatformApi } from '../../platform/httpApi'
+import { installPlatformApi } from '../../platform/platformApi'
+import { loginRemote } from '../../platform/webAuth'
 
 export function WelcomePage(): React.ReactElement {
   const open = useWorkspace((s) => s.open)
@@ -18,7 +22,14 @@ export function WelcomePage(): React.ReactElement {
   const [busy, setBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceSummary[]>([])
+  const isWeb = isWebPlatform()
+  const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
+  const [serviceUrl, setServiceUrl] = useState('')
+  const [serviceKey, setServiceKey] = useState('')
+  const [serviceError, setServiceError] = useState<string | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+  const localApiRef = useRef<import('../../../../shared/api').StoryFabricApi | null>(null)
+  if (!localApiRef.current && !isWeb) localApiRef.current = window.api ?? getPlatformApi()
 
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
@@ -57,6 +68,31 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const openWorkspacePicker = async (): Promise<void> => {
+    if (isWeb) {
+      setBusy(true)
+      try {
+        setWorkspaces(await api.listWorkspaces())
+        setWorkspaceOpen(true)
+      } catch (err) {
+        useWorkspace.setState({ error: err instanceof Error ? err.message : String(err) })
+      } finally { setBusy(false) }
+      return
+    }
+    if (mode === 'remote') {
+      setBusy(true)
+      setServiceError(null)
+      try {
+        const root = serviceUrl.trim().replace(/\/+$/, '')
+        const token = await loginRemote(root, serviceKey.trim())
+        const remote = new HttpPlatformApi(fetch, root, { kind: 'bearer', token })
+        installPlatformApi(remote)
+        setWorkspaces(await remote.listWorkspaces())
+        setWorkspaceOpen(true)
+      } catch (err) {
+        setServiceError(err instanceof Error ? err.message : String(err))
+      } finally { setBusy(false) }
+      return
+    }
     if (!isAndroid) {
       await doOpen()
       return
@@ -75,10 +111,19 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const doCreate = async (): Promise<void> => {
-    if (!name.trim() || (!isAndroid && !parentDir)) return
+    if (!name.trim() || (mode === 'local' && !isAndroid && !parentDir)) return
     setBusy(true)
     try {
-      await createAndOpen(parentDir, name.trim())
+      if (mode === 'remote') {
+        if (!isWeb) {
+          const root = serviceUrl.trim().replace(/\/+$/, '')
+          const token = await loginRemote(root, serviceKey.trim())
+          installPlatformApi(new HttpPlatformApi(fetch, root, { kind: 'bearer', token }))
+        }
+        await createAndOpen('', name.trim())
+      } else {
+        await createAndOpen(parentDir, name.trim())
+      }
       setCreateOpen(false)
     } catch {
       /* 错误已写入 store */
@@ -102,9 +147,22 @@ export function WelcomePage(): React.ReactElement {
         </div>
 
         <Card className="p-5">
+          {!isWeb && (
+            <div className="mb-4 grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
+              <button type="button" onClick={() => { setMode('local'); if (localApiRef.current) installPlatformApi(localApiRef.current) }} className={`rounded-md px-3 py-2 ${mode === 'local' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>本地</button>
+              <button type="button" onClick={() => setMode('remote')} className={`rounded-md px-3 py-2 ${mode === 'remote' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>服务</button>
+            </div>
+          )}
+          {mode === 'remote' && !isWeb && (
+            <div className="mb-4 space-y-2">
+              <Input value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" />
+              <Input type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" />
+              {serviceError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
+            </div>
+          )}
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy}>
-              <FolderOpen size={16} /> {isAndroid ? '打开工作区' : '打开工作区文件夹'}
+              <FolderOpen size={16} /> {isAndroid || isWeb ? '打开工作区' : '打开工作区文件夹'}
             </Button>
             <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
               <FolderPlus size={16} /> 创建新工作区
@@ -113,7 +171,7 @@ export function WelcomePage(): React.ReactElement {
 
           {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
-          {recent.length > 0 && (
+          {mode === 'local' && recent.length > 0 && (
             <div className="mt-5">
               <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted">
                 <History size={13} /> 最近打开
@@ -165,24 +223,24 @@ export function WelcomePage(): React.ReactElement {
         )}
       </Modal>
 
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={isAndroid ? '工作区将保存在应用内部，可通过 ZIP 导入/导出' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
+      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={mode === 'remote' ? '将在当前服务的数据目录内创建一个新的托管工作区' : isAndroid ? '工作区将保存在应用内部，可通过 ZIP 导入/导出' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
         <div className="space-y-4">
           <Field label="小说名称 *">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：星海拾遗" autoFocus />
           </Field>
-          <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? 'Android 应用内部存储（无需申请文件夹权限）' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
+          {mode === 'local' && <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? 'Android 应用内部存储（无需申请文件夹权限）' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="选择存放文件夹…" readOnly className="min-w-0 flex-1" />
+            <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="输入或选择存放文件夹…" className="min-w-0 flex-1" />
               {!isAndroid && <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">
                 浏览
               </Button>}
             </div>
-          </Field>
+          </Field>}
           <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
             <Button variant="ghost" onClick={() => setCreateOpen(false)}>
               取消
             </Button>
-            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || (!isAndroid && !parentDir)}>
+            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || (mode === 'local' && !isAndroid && !parentDir) || (mode === 'remote' && !isWeb && (!serviceUrl.trim() || !serviceKey.trim()))}>
               创建并打开
             </Button>
           </div>

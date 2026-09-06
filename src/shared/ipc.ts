@@ -3,6 +3,7 @@
 export const IPC = {
   /* 工作区 */
   PickFolder: 'workspace:pick-folder',
+  ListWorkspaces: 'workspace:list',
   GetDefaultDir: 'workspace:default-dir',
   CreateWorkspace: 'workspace:create',
   OpenWorkspace: 'workspace:open',

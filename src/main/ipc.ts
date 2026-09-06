@@ -22,15 +22,15 @@ import {
   saveSetting
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
-import { createWorkspace, deleteVolume, listTrash, listVolumes, loadSummary, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
+import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
-import type { FetchModelsInput, SettingsPatch } from '../shared/api'
+import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
 import { fetchProviderModels } from './llm'
 import { decryptApiKey } from './services/settingsService'
 import { SessionStore } from './services/sessionStore'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
-import { exportWorkspaceArchive, importWorkspaceArchive } from '../core/workspace/archive'
+import { exportWorkspaceArchive } from '../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
 import { genId } from '../core/workspace/entityStore'
 import { IPC } from '../shared/ipc'
@@ -61,6 +61,17 @@ export function registerIpc(ctx: AppContext): void {
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
   })
 
+  ipcMain.handle(IPC.ListWorkspaces, async () => {
+    const { recentWorkspaces } = await ctx.settings.load()
+    const result = []
+    for (const path of recentWorkspaces) {
+      const valid = await validateWorkspace(path)
+      if (!valid.ok) continue
+      try { result.push(await loadSummary(path)) } catch { /* Skip unavailable recent folders. */ }
+    }
+    return result
+  })
+
   ipcMain.handle(IPC.GetDefaultDir, async () => app.getPath('documents'))
 
   ipcMain.handle(IPC.CreateWorkspace, async (_e, parentDir: string, name: string) => createWorkspace(parentDir, name))
@@ -83,10 +94,14 @@ export function registerIpc(ctx: AppContext): void {
     const root = requireRoot()
     return exportWorkspaceArchive(new NodeFileStore(root), (await loadSummary(root)).name)
   })
-  ipcMain.handle(IPC.ImportWorkspace, async (_e, base64: string, fileName: string) => {
-    const root = requireRoot()
-    await importWorkspaceArchive(new NodeFileStore(root), base64)
-    void fileName
+  ipcMain.handle(IPC.ImportWorkspace, async (_e, bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget) => {
+    const parentDir = target?.parentDir?.trim()
+    if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
+    const derivedName = fileName.replace(/\.storyfabric\.zip$/i, '').replace(/[\\/:*?"<>|]/g, '').trim()
+    const workspaceName = target?.name?.trim() || derivedName || '导入工作区'
+    const root = await importWorkspaceIntoNewFolder(parentDir, workspaceName, bytes)
+    currentRoot = root
+    await recentPush(ctx.settings, root)
     return loadSummary(root)
   })
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))

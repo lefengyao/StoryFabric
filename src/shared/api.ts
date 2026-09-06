@@ -42,11 +42,17 @@ export interface FetchModelsInput {
   apiKey?: string
 }
 
+export interface WorkspaceImportTarget {
+  /** Windows 本地导入的目标父目录；远程/Android 不使用。 */
+  parentDir?: string
+  /** 用户确认的新工作区名称；缺省时由归档文件名推导。 */
+  name?: string
+}
+
 export interface StoryFabricApi {
   /* 工作区 */
   pickFolder(): Promise<string | null>
-  /** Android 内部工作区列表；桌面端未实现时可省略。 */
-  listWorkspaces?: () => Promise<WorkspaceSummary[]>
+  listWorkspaces(): Promise<WorkspaceSummary[]>
   /** 默认新建位置：系统文档目录 */
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
@@ -60,7 +66,7 @@ export interface StoryFabricApi {
   exportSession(id: string): Promise<SessionArchive>
   importSession(base64: string, fileName: string): Promise<SessionMeta>
   shareSessionArchive?(archive: SessionArchive): Promise<void>
-  importWorkspace(base64: string, fileName: string): Promise<WorkspaceSummary>
+  importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary>
   getChapterBody(id: string): Promise<string | null>
   searchProject(query: string): Promise<SearchHit[]>
   /** 关系图谱节点坐标（按人物 id） */

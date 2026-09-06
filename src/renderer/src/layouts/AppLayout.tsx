@@ -6,7 +6,6 @@ import { useSettings } from '../stores/settingsStore'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
 import { api } from '../lib/api'
-import { bytesToBase64 } from '../platform/archiveTransfer'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物' },
@@ -54,9 +53,11 @@ export function AppLayout(): React.ReactElement {
         return
       }
       const a = document.createElement('a')
-      a.href = `data:application/zip;base64,${archive.base64}`
+      const url = URL.createObjectURL(new Blob([archive.bytes.slice().buffer as ArrayBuffer], { type: 'application/zip' }))
+      a.href = url
       a.download = archive.fileName
       a.click()
+      URL.revokeObjectURL(url)
     } catch (err) { setTransferError(err instanceof Error ? err.message : String(err)) }
     finally { setTransferBusy(false) }
   }
@@ -66,7 +67,8 @@ export function AppLayout(): React.ReactElement {
     try {
       const buffer = await file.arrayBuffer()
       const bytes = new Uint8Array(buffer)
-      await importArchive(bytesToBase64(bytes), file.name)
+      const parentDir = await api.pickFolder()
+      await importArchive(bytes, file.name, parentDir ? { parentDir } : undefined)
     } catch (err) { setTransferError(err instanceof Error ? err.message : String(err)) }
     finally { setTransferBusy(false); if (importInput.current) importInput.current.value = '' }
   }
@@ -156,7 +158,7 @@ export function AppLayout(): React.ReactElement {
           <button onClick={() => importInput.current?.click()} disabled={transferBusy} title="导入工作区" className="rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50">
             <Upload size={14} />
           </button>
-          <input ref={importInput} type="file" accept=".zip,.storyfabric.zip,application/zip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
+          <input ref={importInput} type="file" accept=".storyfabric.zip,application/zip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
           <button
             onClick={() => void close()}
             title="关闭当前工作区"

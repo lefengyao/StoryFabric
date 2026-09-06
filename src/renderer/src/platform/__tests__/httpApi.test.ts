@@ -19,4 +19,17 @@ describe('web platform api', () => {
 
     await expect(api.getCurrentWorkspace()).rejects.toBeInstanceOf(WebAuthRequiredError)
   })
+
+  it('uploads raw workspace ZIP bytes to the binary endpoint', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const api = new HttpPlatformApi(async (input, init) => {
+      requests.push({ url: String(input), init })
+      return new Response(JSON.stringify({ name: '导入副本', path: 'ws_test' }), { status: 201, headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+
+    await api.importWorkspace(new Uint8Array([1, 2, 3]), '项目.storyfabric.zip', { name: '导入副本' })
+    expect(requests[0].url).toBe('https://server.example/api/workspaces/import')
+    expect(requests[0].init?.headers).toMatchObject({ authorization: `Bearer ${'t'.repeat(32)}`, 'content-type': 'application/zip' })
+    expect(requests[0].init?.body).toBeInstanceOf(ArrayBuffer)
+  })
 })

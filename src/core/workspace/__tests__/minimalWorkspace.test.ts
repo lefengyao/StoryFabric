@@ -66,7 +66,7 @@ describe('minimal workspace example', () => {
     const archive = await exportWorkspaceArchive(source, '星港回声·最小示例')
     const target = new MemoryFileStore()
 
-    await importWorkspaceArchive(target, archive.base64)
+    await importWorkspaceArchive(target, archive.bytes)
     const summary = await loadSummary(target, '导入副本', 'fixture://imported-minimal-workspace')
 
     expect(summary.name).toBe('星港回声·最小示例')

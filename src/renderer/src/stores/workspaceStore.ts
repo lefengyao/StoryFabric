@@ -12,7 +12,7 @@ interface WorkspaceState {
   init: () => Promise<void>
   open: (path: string) => Promise<void>
   createAndOpen: (parentDir: string, name: string) => Promise<void>
-  importArchive: (base64: string, fileName: string) => Promise<void>
+  importArchive: (bytes: Uint8Array, fileName: string, target?: import('../../../shared/api').WorkspaceImportTarget) => Promise<void>
   close: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -54,10 +54,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  importArchive: async (base64, fileName) => {
+  importArchive: async (bytes, fileName, target) => {
     set({ error: null })
     try {
-      const s = await getPlatformApi().importWorkspace(base64, fileName)
+      const s = await getPlatformApi().importWorkspace(bytes, fileName, target)
       set({ status: 'ready', summary: s, error: null })
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })

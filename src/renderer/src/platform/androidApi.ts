@@ -2,11 +2,12 @@ import { Preferences } from '@capacitor/preferences'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { Share } from '@capacitor/share'
 import { Directory, Filesystem } from '@capacitor/filesystem'
-import type { AgentEventEnvelope, StoryFabricApi } from '../../../shared/api'
+import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, VolumeMeta, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
+import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteOutlineDoc, getChapterBody, listChapters, listCharacters, listEvents, listOutline, loadRelationships, saveChapter, saveCharacter, saveEvent, saveOutlineDoc, saveRelationships, searchProject } from '../../../core/workspace/entityStore'
 import { initializeWorkspace, loadSummary, readGraphLayout, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
 import { exportWorkspaceArchive, importWorkspaceArchive } from '../../../core/workspace/archive'
@@ -149,7 +150,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const result = await Share.canShare()
     if (!result.value) throw new Error('当前设备不支持分享文件')
     const path = `.storyfabric/exports/${archive.fileName}`
-    await Filesystem.writeFile({ path, directory: Directory.Cache, data: archive.base64, recursive: true })
+    await Filesystem.writeFile({ path, directory: Directory.Cache, data: bytesToBase64(archive.bytes), recursive: true })
     const uri = await Filesystem.getUri({ path, directory: Directory.Cache })
     await Share.share({ title: archive.fileName, text: 'StoryFabric 工作区', files: [uri.uri], dialogTitle: '导出工作区' })
   }
@@ -172,10 +173,23 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const uri = await Filesystem.getUri({ path, directory: Directory.Cache })
     await Share.share({ title: archive.fileName, text: 'StoryFabric 会话', files: [uri.uri], dialogTitle: '导出会话' })
   }
-  async importWorkspace(base64: string, fileName: string): Promise<WorkspaceSummary> {
-    const path = `${WORKSPACE_PREFIX}/${fileName.replace(/[\\/:*?"<>|]/g, '').replace(/\.storyfabric\.zip$/i, '') || `import_${Date.now().toString(36)}`}`
+  async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary> {
+    const root = new CapacitorFileStore(WORKSPACE_PREFIX)
+    const baseName = (target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')).replace(/[\\/:*?"<>|]/g, '').trim() || '导入工作区'
+    let finalId = baseName
+    let suffix = 2
+    while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
+    const temporaryId = `.import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const path = `${WORKSPACE_PREFIX}/${finalId}`
+    const temporaryStore = new CapacitorFileStore(`${WORKSPACE_PREFIX}/${temporaryId}`)
+    try {
+      await importWorkspaceArchive(temporaryStore, bytes)
+      await root.move(temporaryId, finalId)
+    } catch (error) {
+      await root.remove(temporaryId)
+      throw error
+    }
     const store = new CapacitorFileStore(path)
-    await importWorkspaceArchive(store, base64)
     await this.installWorkspace(path, store)
     await this.loadSettings()
     this.settings = { ...this.settings, recentWorkspaces: [path, ...this.settings.recentWorkspaces.filter((p) => p !== path)].slice(0, 8) }
