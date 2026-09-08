@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { vendorManualChunks } from './vite.chunking'
 
 export default defineConfig({
   root: resolve(__dirname, 'src/renderer'),
@@ -14,6 +15,9 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, 'out/web'),
     emptyOutDir: true,
-    target: 'es2022'
+    target: 'es2022',
+    rollupOptions: {
+      output: { manualChunks: vendorManualChunks }
+    }
   }
 })

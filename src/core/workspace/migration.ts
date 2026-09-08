@@ -1,5 +1,5 @@
-import matter from 'gray-matter'
 import type { FileStore } from '../storage/fileStore'
+import { parseFrontMatter } from './frontMatter'
 
 export const CURRENT_WORKSPACE_VERSION = 2
 
@@ -52,7 +52,7 @@ async function migrateFlatCharacters(store: FileStore): Promise<void> {
     let targetName = file
     if (raw) {
       try {
-        const parsed = matter(raw)
+        const parsed = parseFrontMatter(raw)
         tier = parsed.data.tier === 'primary' ? 'primary' : 'secondary'
         const name = typeof parsed.data.name === 'string' ? parsed.data.name : file.replace(/\.md$/i, '')
         targetName = `${safeName(name)}.md`
@@ -71,7 +71,7 @@ async function migrateFlatOutlines(store: FileStore): Promise<void> {
     let targetName = file
     if (raw) {
       try {
-        const parsed = matter(raw)
+        const parsed = parseFrontMatter(raw)
         const title = typeof parsed.data.title === 'string' ? parsed.data.title : file.replace(/\.md$/i, '')
         targetName = `${safeName(title)}.md`
       } catch {
@@ -90,7 +90,7 @@ async function migrateFlatChapters(store: FileStore): Promise<void> {
     let targetName = file
     if (raw) {
       try {
-        const parsed = matter(raw)
+        const parsed = parseFrontMatter(raw)
         const title = typeof parsed.data.title === 'string' ? parsed.data.title : file.replace(/\.md$/i, '')
         targetName = file.includes('-') ? file : `${safeName(title)}.md`
       } catch {

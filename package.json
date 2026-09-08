@@ -13,8 +13,8 @@
     "server:build": "vite build --config vite.server.config.ts",
     "server:start": "node dist-server/index.mjs",
     "server:build:all": "npm run web:build && npm run server:build",
-    "dist": "electron-vite build && electron-builder --win",
-    "dist:win": "electron-vite build && electron-builder --win",
+    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1",
+    "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1",
     "mobile:build": "vite build --config vite.mobile.config.ts",
     "mobile:sync": "npm run mobile:build && cap sync android",
     "mobile:open": "cap open android"
@@ -25,7 +25,7 @@
     "@capacitor/filesystem": "^7.1.8",
     "@capacitor/preferences": "^7.0.4",
     "@capacitor/share": "^7.0.4",
-    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.3.2",
     "jszip": "^3.10.1"
   },
   "devDependencies": {
@@ -43,6 +43,7 @@
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@types/d3-force": "^3.0.10",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.3.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",

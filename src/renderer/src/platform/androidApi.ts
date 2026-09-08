@@ -8,11 +8,12 @@ import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { bytesToBase64 } from './archiveTransfer'
-import { deleteChapter, deleteCharacter, deleteEvent, deleteOutlineDoc, getChapterBody, listChapters, listCharacters, listEvents, listOutline, loadRelationships, saveChapter, saveCharacter, saveEvent, saveOutlineDoc, saveRelationships, searchProject } from '../../../core/workspace/entityStore'
-import { initializeWorkspace, loadSummary, loadWorkspaceListItem, readGraphLayout, setWorkspaceName, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
+import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
+import { deleteVolume, initializeWorkspace, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, readGraphLayout, saveVolume, setWorkspaceName, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
 import { exportWorkspaceArchive, importWorkspaceArchive } from '../../../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive, type SessionArchive } from '../../../core/workspace/sessionArchive'
 import { genId } from '../../../core/workspace/entityStore'
+import { listTrash, purgeTrashEntry, restoreFromTrash } from '../../../core/workspace/trash'
 import { CoreSessionStore } from '../../../core/workspace/sessionStore'
 import { CoreAgentService } from '../../../core/agent/agentLoop'
 import { fetchProviderModels, getAdapter } from '../../../core/llm'
@@ -213,21 +214,21 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return meta
   }
   async deleteChapter(id: string): Promise<void> { return deleteChapter(this.requireStore(), id) }
-  listVolumes(): Promise<VolumeMeta[]> { return import('../../../core/workspace/workspaceService').then(({ listVolumes }) => listVolumes(this.requireStore())) }
-  saveVolume(input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta> { return import('../../../core/workspace/workspaceService').then(({ saveVolume }) => saveVolume(this.requireStore(), input)) }
-  deleteVolume(id: string): Promise<void> { return import('../../../core/workspace/workspaceService').then(({ deleteVolume }) => deleteVolume(this.requireStore(), id)) }
-  moveChapter(id: string, target: { box: Exclude<ChapterBox, 'trash'>; volumeId?: string }): Promise<void> { return import('../../../core/workspace/workspaceService').then(({ moveChapter }) => moveChapter(this.requireStore(), id, target)) }
-  listTrash(): Promise<TrashEntry[]> { return import('../../../core/workspace/trash').then(({ listTrash }) => listTrash(this.requireStore())) }
-  restoreTrash(id: string): Promise<void> { return import('../../../core/workspace/trash').then(({ restoreFromTrash }) => restoreFromTrash(this.requireStore(), id)) }
-  purgeTrash(id: string): Promise<void> { return import('../../../core/workspace/trash').then(({ purgeTrashEntry }) => purgeTrashEntry(this.requireStore(), id)) }
-  listSettings(): Promise<SettingMeta[]> { return import('../../../core/workspace/entityStore').then(({ listSettings }) => listSettings(this.requireStore())) }
-  getSetting(id: string): Promise<SettingDoc | null> { return import('../../../core/workspace/entityStore').then(({ getSetting }) => getSetting(this.requireStore(), id)) }
-  saveSetting(doc: Partial<SettingDoc>): Promise<SettingDoc> { return import('../../../core/workspace/entityStore').then(({ saveSetting }) => saveSetting(this.requireStore(), doc)) }
-  deleteSetting(id: string): Promise<void> { return import('../../../core/workspace/entityStore').then(({ deleteSetting }) => deleteSetting(this.requireStore(), id)) }
-  listNotes(): Promise<NoteMeta[]> { return import('../../../core/workspace/entityStore').then(({ listNotes }) => listNotes(this.requireStore())) }
-  getNote(id: string): Promise<NoteDoc | null> { return import('../../../core/workspace/entityStore').then(({ getNote }) => getNote(this.requireStore(), id)) }
-  saveNote(doc: Partial<NoteDoc>): Promise<NoteDoc> { return import('../../../core/workspace/entityStore').then(({ saveNote }) => saveNote(this.requireStore(), doc)) }
-  deleteNote(id: string): Promise<void> { return import('../../../core/workspace/entityStore').then(({ deleteNote }) => deleteNote(this.requireStore(), id)) }
+  listVolumes(): Promise<VolumeMeta[]> { return listVolumes(this.requireStore()) }
+  saveVolume(input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta> { return saveVolume(this.requireStore(), input) }
+  deleteVolume(id: string): Promise<void> { return deleteVolume(this.requireStore(), id) }
+  moveChapter(id: string, target: { box: Exclude<ChapterBox, 'trash'>; volumeId?: string }): Promise<void> { return moveChapter(this.requireStore(), id, target) }
+  listTrash(): Promise<TrashEntry[]> { return listTrash(this.requireStore()) }
+  restoreTrash(id: string): Promise<void> { return restoreFromTrash(this.requireStore(), id) }
+  purgeTrash(id: string): Promise<void> { return purgeTrashEntry(this.requireStore(), id) }
+  listSettings(): Promise<SettingMeta[]> { return listSettings(this.requireStore()) }
+  getSetting(id: string): Promise<SettingDoc | null> { return getSetting(this.requireStore(), id) }
+  saveSetting(doc: Partial<SettingDoc>): Promise<SettingDoc> { return saveSetting(this.requireStore(), doc) }
+  deleteSetting(id: string): Promise<void> { return deleteSetting(this.requireStore(), id) }
+  listNotes(): Promise<NoteMeta[]> { return listNotes(this.requireStore()) }
+  getNote(id: string): Promise<NoteDoc | null> { return getNote(this.requireStore(), id) }
+  saveNote(doc: Partial<NoteDoc>): Promise<NoteDoc> { return saveNote(this.requireStore(), doc) }
+  deleteNote(id: string): Promise<void> { return deleteNote(this.requireStore(), id) }
 
   async getSettings(): Promise<PublicAppSettings> { return this.loadSettings() }
 

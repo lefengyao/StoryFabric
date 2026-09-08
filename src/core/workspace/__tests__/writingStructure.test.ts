@@ -1,9 +1,9 @@
-import matter from 'gray-matter'
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { deleteChapter, getNote, getSetting, listChapters, listNotes, listSettings, saveChapter, saveNote, saveSetting } from '../entityStore'
 import { initializeWorkspace, listVolumes, moveChapter, saveVolume } from '../workspaceService'
 import { listTrash, restoreFromTrash } from '../trash'
+import { stringifyFrontMatter } from '../frontMatter'
 
 describe('writing structure', () => {
   it('supports classified settings, notes and chapter boxes', async () => {
@@ -36,7 +36,7 @@ describe('writing structure', () => {
   it('reads legacy flat chapter metadata with v2 defaults', async () => {
     const store = new MemoryFileStore()
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 1, name: '旧项目' }))
-    await store.writeText('chapters/0001-开端.md', matter.stringify('正文', { id: 'cha_1', title: '开端', order: 1, volume: '第一卷' }))
+    await store.writeText('chapters/0001-开端.md', stringifyFrontMatter('正文', { id: 'cha_1', title: '开端', order: 1, volume: '第一卷' }))
     await initializeWorkspace(store, '旧项目')
     const chapter = (await listChapters(store))[0]
     expect(chapter.box).toBe('main')

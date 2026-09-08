@@ -20,6 +20,7 @@
     "src/shared/**/*",
     "src/core/**/*",
     "src/server/**/*",
+    "vite.chunking.ts",
     "vite.server.config.ts",
     "vite.web.config.ts"
   ]

@@ -1,15 +1,6 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppLayout } from './layouts/AppLayout'
-import { ChaptersPage } from './pages/chapters/ChaptersPage'
-import { CharactersPage } from './pages/characters/CharactersPage'
-import { ChatPage } from './pages/chat/ChatPage'
-import { EventsPage } from './pages/events/EventsPage'
-import { OutlinePage } from './pages/outline/OutlinePage'
-import { RelationsPage } from './pages/relations/RelationsPage'
-import { SettingsPage } from './pages/settings/SettingsPage'
-import { SettingsDocsPage } from './pages/settingsDocs/SettingsDocsPage'
-import { NotesPage } from './pages/notes/NotesPage'
 import { WelcomePage } from './pages/welcome/WelcomePage'
 import { WebLoginPage } from './pages/webLogin/WebLoginPage'
 import { Spinner } from './components/ui/primitives'
@@ -18,6 +9,16 @@ import { isWebPlatform } from './platform/platformApi'
 import { useChat } from './stores/chatStore'
 import { useSettings } from './stores/settingsStore'
 import { useWorkspace } from './stores/workspaceStore'
+
+const ChaptersPage = lazy(() => import('./pages/chapters/ChaptersPage').then(({ ChaptersPage: page }) => ({ default: page })))
+const CharactersPage = lazy(() => import('./pages/characters/CharactersPage').then(({ CharactersPage: page }) => ({ default: page })))
+const ChatPage = lazy(() => import('./pages/chat/ChatPage').then(({ ChatPage: page }) => ({ default: page })))
+const EventsPage = lazy(() => import('./pages/events/EventsPage').then(({ EventsPage: page }) => ({ default: page })))
+const OutlinePage = lazy(() => import('./pages/outline/OutlinePage').then(({ OutlinePage: page }) => ({ default: page })))
+const RelationsPage = lazy(() => import('./pages/relations/RelationsPage').then(({ RelationsPage: page }) => ({ default: page })))
+const SettingsPage = lazy(() => import('./pages/settings/SettingsPage').then(({ SettingsPage: page }) => ({ default: page })))
+const SettingsDocsPage = lazy(() => import('./pages/settingsDocs/SettingsDocsPage').then(({ SettingsDocsPage: page }) => ({ default: page })))
+const NotesPage = lazy(() => import('./pages/notes/NotesPage').then(({ NotesPage: page }) => ({ default: page })))
 
 export default function App(): React.ReactElement {
   const web = isWebPlatform()
@@ -74,20 +75,22 @@ export default function App(): React.ReactElement {
 
   return (
     <HashRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/characters" element={<CharactersPage />} />
-          <Route path="/relations" element={<RelationsPage />} />
-          <Route path="/outline" element={<OutlinePage />} />
-          <Route path="/events" element={<EventsPage />} />
-          <Route path="/chapters" element={<ChaptersPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/settings-docs" element={<SettingsDocsPage />} />
-          <Route path="/notes" element={<NotesPage />} />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
-        </Route>
-      </Routes>
+      <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/characters" element={<CharactersPage />} />
+            <Route path="/relations" element={<RelationsPage />} />
+            <Route path="/outline" element={<OutlinePage />} />
+            <Route path="/events" element={<EventsPage />} />
+            <Route path="/chapters" element={<ChaptersPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings-docs" element={<SettingsDocsPage />} />
+            <Route path="/notes" element={<NotesPage />} />
+            <Route path="*" element={<Navigate to="/chat" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </HashRouter>
   )
 }

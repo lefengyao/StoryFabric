@@ -2,6 +2,7 @@ import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { vendorManualChunks } from './vite.chunking'
 
 /**
  * Android 10 ships Chromium 83, which predates CSS cascade layers.
@@ -77,6 +78,9 @@ export default defineConfig({
     emptyOutDir: true,
     // Vivo 真机当前为 Android 10，系统 WebView 不支持 ||= 等较新的
     // 逻辑赋值语法；显式降级目标，确保依赖包也被转译。
-    target: 'es2019'
+    target: 'es2019',
+    rollupOptions: {
+      output: { manualChunks: vendorManualChunks }
+    }
   }
 })

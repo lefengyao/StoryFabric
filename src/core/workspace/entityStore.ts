@@ -1,4 +1,3 @@
-import matter from 'gray-matter'
 import type {
   ChapterDoc,
   ChapterMeta,
@@ -22,6 +21,7 @@ import type { FileStore } from '../storage/fileStore'
 import { makeTrashEntry, moveToTrash } from './trash'
 import { invalidateProjectIndex } from '../retrieval/projectIndex'
 import { searchIndex } from '../retrieval/projectIndex'
+import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 
 export function genId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8)
@@ -58,8 +58,7 @@ async function readMd(store: FileStore, path: string): Promise<{ data: Record<st
   const raw = await store.readText(path)
   if (raw === null) return null
   try {
-    const parsed = matter(raw)
-    return { data: parsed.data as Record<string, unknown>, content: parsed.content }
+    return parseFrontMatter(raw)
   } catch {
     return null
   }
@@ -111,7 +110,7 @@ function characterFrontmatter(c: CharacterDoc): Record<string, unknown> {
 }
 
 export function serializeCharacter(c: CharacterDoc): string {
-  return matter.stringify(c.content ?? '', characterFrontmatter(c))
+  return stringifyFrontMatter(c.content ?? '', characterFrontmatter(c))
 }
 
 export async function saveCharacter(store: FileStore, input: Partial<CharacterDoc> & { id?: string }): Promise<CharacterDoc> {
@@ -184,7 +183,7 @@ async function loadOutlines(store: FileStore): Promise<Stored<OutlineDoc>[]> {
 }
 
 export async function listOutline(store: FileStore): Promise<OutlineDoc[]> { return (await loadOutlines(store)).map((x) => x.doc) }
-export function serializeOutlineDoc(d: OutlineDoc): string { return matter.stringify(d.content ?? '', { id: d.id, title: d.title, order: d.order, kind: d.kind ?? 'total', ...(d.chapterId ? { chapterId: d.chapterId } : {}) }) }
+export function serializeOutlineDoc(d: OutlineDoc): string { return stringifyFrontMatter(d.content ?? '', { id: d.id, title: d.title, order: d.order, kind: d.kind ?? 'total', ...(d.chapterId ? { chapterId: d.chapterId } : {}) }) }
 
 export async function saveOutlineDoc(store: FileStore, input: Partial<OutlineDoc> & { id?: string }): Promise<OutlineDoc> {
   await store.ensureDir('outline')
@@ -222,7 +221,7 @@ async function loadEvents(store: FileStore): Promise<Stored<StoryEvent>[]> {
 }
 
 export async function listEvents(store: FileStore): Promise<StoryEvent[]> { return (await loadEvents(store)).map((x) => x.doc) }
-export function serializeEvent(e: StoryEvent): string { return matter.stringify(e.content ?? '', { id: e.id, title: e.title, storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds }) }
+export function serializeEvent(e: StoryEvent): string { return stringifyFrontMatter(e.content ?? '', { id: e.id, title: e.title, storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds }) }
 
 export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & { id?: string }): Promise<StoryEvent> {
   await store.ensureDir('events')
@@ -270,7 +269,7 @@ export async function getSetting(store: FileStore, id: string): Promise<SettingD
 }
 
 export function serializeSetting(doc: SettingDoc): string {
-  return matter.stringify(doc.content ?? '', { id: doc.id, title: doc.title, category: doc.category, tags: doc.tags })
+  return stringifyFrontMatter(doc.content ?? '', { id: doc.id, title: doc.title, category: doc.category, tags: doc.tags })
 }
 
 export async function saveSetting(store: FileStore, input: Partial<SettingDoc> & { id?: string }): Promise<SettingDoc> {
@@ -327,7 +326,7 @@ export async function getNote(store: FileStore, id: string): Promise<NoteDoc | n
 }
 
 export function serializeNote(doc: NoteDoc): string {
-  return matter.stringify(doc.content ?? '', { id: doc.id, title: doc.title, tags: doc.tags, pinned: doc.pinned, createdAt: doc.createdAt, updatedAt: doc.updatedAt })
+  return stringifyFrontMatter(doc.content ?? '', { id: doc.id, title: doc.title, tags: doc.tags, pinned: doc.pinned, createdAt: doc.createdAt, updatedAt: doc.updatedAt })
 }
 
 export async function saveNote(store: FileStore, input: Partial<NoteDoc> & { id?: string }): Promise<NoteDoc> {
@@ -372,7 +371,7 @@ async function loadChapters(store: FileStore): Promise<Stored<ChapterDoc>[]> {
 
 export async function listChapters(store: FileStore): Promise<ChapterMeta[]> { return (await loadChapters(store)).map(({ doc: { content: _content, ...meta } }) => meta) }
 export async function getChapterBody(store: FileStore, id: string): Promise<string | null> { return (await loadChapters(store)).find((x) => x.doc.id === id)?.doc.content ?? null }
-export function serializeChapter(c: ChapterDoc): string { return matter.stringify(c.content ?? '', { id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
+export function serializeChapter(c: ChapterDoc): string { return stringifyFrontMatter(c.content ?? '', { id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
 
 export async function saveChapter(store: FileStore, input: Partial<ChapterDoc> & { id?: string }): Promise<ChapterDoc> {
   await store.ensureDir('chapters')

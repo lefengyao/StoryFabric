@@ -8,6 +8,8 @@ extraResources:
 files:
   - out/**
   - package.json
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
 win:
   icon: resources/icon.ico
   target:
