@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 import type { AppSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
 
@@ -28,8 +28,32 @@ function keyPreview(key: string): string {
 
 export class ServerSettingsStore {
   private queue: Promise<unknown> = Promise.resolve()
+  private readonly encryptionKey: Buffer
 
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly filePath: string, secret = filePath) {
+    this.encryptionKey = createHash('sha256').update(secret, 'utf8').digest()
+  }
+
+  private encryptKey(value: string): string {
+    if (!value) return ''
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', this.encryptionKey, iv)
+    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
+    return `enc:v1:${iv.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}:${encrypted.toString('base64url')}`
+  }
+
+  private decryptKey(value: string): string {
+    if (!value) return ''
+    if (!value.startsWith('enc:v1:')) return value
+    try {
+      const [, , ivText, tagText, dataText] = value.split(':')
+      const decipher = createDecipheriv('aes-256-gcm', this.encryptionKey, Buffer.from(ivText, 'base64url'))
+      decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
+      return Buffer.concat([decipher.update(Buffer.from(dataText, 'base64url')), decipher.final()]).toString('utf8')
+    } catch {
+      return ''
+    }
+  }
 
   private serialized<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.queue.then(fn, fn)
@@ -40,10 +64,11 @@ export class ServerSettingsStore {
   private async loadRaw(): Promise<ServerSettings> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as Partial<ServerSettings>
+      const providers = Array.isArray(parsed.providers) ? parsed.providers.filter((item): item is ServerProvider => Boolean(item && typeof item.id === 'string')).map((item) => ({ ...item, apiKey: this.decryptKey(typeof item.apiKey === 'string' ? item.apiKey : '') })) : []
       return {
         ...DEFAULT_SETTINGS,
         ...parsed,
-        providers: Array.isArray(parsed.providers) ? parsed.providers.filter((item): item is ServerProvider => Boolean(item && typeof item.id === 'string')) : []
+        providers
       }
     } catch {
       return { ...DEFAULT_SETTINGS, providers: [] }
@@ -54,7 +79,8 @@ export class ServerSettingsStore {
     await fs.mkdir(dirname(this.filePath), { recursive: true })
     const temp = `${this.filePath}.${randomUUID()}.tmp`
     try {
-      await fs.writeFile(temp, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
+      const persisted = { ...settings, providers: settings.providers.map((provider) => ({ ...provider, apiKey: this.encryptKey(provider.apiKey) })) }
+      await fs.writeFile(temp, JSON.stringify(persisted, null, 2), { encoding: 'utf8', mode: 0o600 })
       await fs.rename(temp, this.filePath)
       await fs.chmod(this.filePath, 0o600).catch(() => undefined)
     } finally {

@@ -67,4 +67,21 @@ describe('workspace archive', () => {
       expect(await target.listFiles('')).toEqual([])
     }
   })
+
+  it('rejects paths that collide on case-insensitive filesystems', async () => {
+    const target = new MemoryFileStore()
+    const bytes = await zipBytes({
+      'storyfabric.json': JSON.stringify({ app: 'storyfabric', version: 2, name: '测试' }),
+      'characters/A.md': '# A',
+      'characters/a.md': '# a'
+    })
+    await expect(importWorkspaceArchive(target, bytes)).rejects.toThrow('冲突路径')
+    expect(await target.listFiles('')).toEqual([])
+  })
+
+  it('rejects archives created by a newer workspace version', async () => {
+    const target = new MemoryFileStore()
+    const bytes = await zipBytes({ 'storyfabric.json': JSON.stringify({ app: 'storyfabric', version: 999, name: '未来项目' }) })
+    await expect(importWorkspaceArchive(target, bytes)).rejects.toThrow('有效')
+  })
 })

@@ -1,5 +1,5 @@
 import type { FileStore } from '../storage/fileStore'
-import type { ChapterBox, ChapterDoc, VolumeMeta, WorkspaceSummary } from '../../shared/types'
+import type { ChapterBox, ChapterDoc, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
 import { getChapterBody, listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter } from './entityStore'
 import { CURRENT_WORKSPACE_VERSION, migrateWorkspace } from './migration'
 import { cleanupWorkspace } from './housekeeping'
@@ -21,6 +21,57 @@ export async function initializeWorkspace(store: FileStore, name: string): Promi
   await store.writeText('relationships.json', '[]')
   if (!(await store.exists('outline/total/故事大纲.md'))) {
     await store.writeText('outline/total/故事大纲.md', ['---', 'id: out_core', 'title: 故事大纲', 'order: 1', 'kind: total', '---', '', '# 故事大纲', '', '在这里写下你的核心创意、主题与整体走向……', ''].join('\n'))
+  }
+}
+
+async function countMarkdown(store: FileStore, dir: string): Promise<number> {
+  const files = await store.listFiles(dir, '.md')
+  const children = await store.listDirs(dir)
+  let count = files.length
+  for (const child of children) count += await countMarkdown(store, dir ? `${dir}/${child}` : child)
+  return count
+}
+
+/** Read only picker metadata. This deliberately avoids migration, cleanup, indexing, and document bodies. */
+export async function loadWorkspaceListItem(store: FileStore, fallbackName: string, path: string): Promise<WorkspaceListItem> {
+  let name = fallbackName
+  let version: number | undefined
+  const raw = await store.readText('storyfabric.json')
+  if (raw) {
+    try {
+      const meta = JSON.parse(raw) as { name?: unknown; version?: unknown }
+      if (typeof meta.name === 'string' && meta.name.trim()) name = meta.name
+      if (typeof meta.version === 'number' && Number.isFinite(meta.version)) version = meta.version
+    } catch { /* use fallback metadata */ }
+  }
+  let volumeCount = 0
+  const volumesRaw = await store.readText('chapters/volumes.json')
+  if (volumesRaw) {
+    try {
+      const value = JSON.parse(volumesRaw)
+      if (Array.isArray(value)) volumeCount = value.filter((v) => typeof v?.id === 'string').length
+    } catch { /* ignore malformed derived metadata */ }
+  }
+  let relationshipCount = 0
+  const relationshipsRaw = await store.readText('relationships.json')
+  if (relationshipsRaw) {
+    try {
+      const value = JSON.parse(relationshipsRaw)
+      if (Array.isArray(value)) relationshipCount = value.length
+    } catch { /* ignore malformed relationship metadata */ }
+  }
+  return { name, path, version, chapterCount: await countMarkdown(store, 'chapters'), volumeCount, relationshipCount }
+}
+
+export async function setWorkspaceName(store: FileStore, name: string): Promise<void> {
+  const raw = await store.readText('storyfabric.json')
+  if (!raw) throw new Error('工作区元数据缺失')
+  try {
+    const metadata = JSON.parse(raw) as Record<string, unknown>
+    metadata.name = name
+    await store.writeText('storyfabric.json', JSON.stringify(metadata, null, 2))
+  } catch {
+    throw new Error('工作区元数据无效')
   }
 }
 

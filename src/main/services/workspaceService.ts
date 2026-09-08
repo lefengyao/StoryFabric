@@ -6,6 +6,8 @@ import { importWorkspaceArchive } from '../../core/workspace/archive'
 import {
   initializeWorkspace as coreInitializeWorkspace,
   loadSummary as coreLoadSummary,
+  loadWorkspaceListItem as coreLoadWorkspaceListItem,
+  setWorkspaceName as coreSetWorkspaceName,
   listVolumes as coreListVolumes,
   saveVolume as coreSaveVolume,
   deleteVolume as coreDeleteVolume,
@@ -14,7 +16,7 @@ import {
   validateWorkspace as coreValidateWorkspace,
   writeGraphLayout as coreWriteGraphLayout
 } from '../../core/workspace/workspaceService'
-import type { ChapterBox, VolumeMeta, WorkspaceSummary } from '../../shared/types'
+import type { ChapterBox, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
 import { listTrash as coreListTrash, restoreFromTrash as coreRestoreTrash, purgeTrashEntry as corePurgeTrash } from '../../core/workspace/trash'
 
 export const WORKSPACE_MARKERS = ['storyfabric.json', 'characters', 'outline', 'events', 'chapters']
@@ -37,9 +39,14 @@ export async function createWorkspace(parentDir: string, name: string): Promise<
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('文件夹已存在')) throw error
   }
-  await fs.mkdir(root, { recursive: true })
-  await coreInitializeWorkspace(storeOf(root), safeName)
-  return root
+  try {
+    await fs.mkdir(root, { recursive: true })
+    await coreInitializeWorkspace(storeOf(root), safeName)
+    return root
+  } catch (error) {
+    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined)
+    throw error
+  }
 }
 
 function safeWorkspaceName(name: string): string {
@@ -71,7 +78,9 @@ export async function importWorkspaceIntoNewFolder(parentDir: string, name: stri
 
   const staging = await fs.mkdtemp(join(parent, '.storyfabric-import-'))
   try {
-    await importWorkspaceArchive(new NodeFileStore(staging), bytes)
+    const stagingStore = new NodeFileStore(staging)
+    await importWorkspaceArchive(stagingStore, bytes)
+    await coreSetWorkspaceName(stagingStore, safeWorkspaceName(name))
     await fs.rename(staging, target)
     return target
   } catch (error) {
@@ -82,6 +91,10 @@ export async function importWorkspaceIntoNewFolder(parentDir: string, name: stri
 
 export function loadSummary(root: string): Promise<WorkspaceSummary> {
   return coreLoadSummary(storeOf(root), basename(root), root)
+}
+
+export function loadWorkspaceListItem(root: string): Promise<WorkspaceListItem> {
+  return coreLoadWorkspaceListItem(storeOf(root), basename(root), root)
 }
 
 export function listVolumes(root: string): Promise<VolumeMeta[]> { return coreListVolumes(storeOf(root)) }

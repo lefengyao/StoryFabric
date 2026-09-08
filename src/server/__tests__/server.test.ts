@@ -52,6 +52,22 @@ describe('linux web server', () => {
       const payload = await rpc.json() as { result: { name: string } }
       expect(payload.result.name).toBe('服务测试')
 
+      await Promise.all(['并发卷 A', '并发卷 B'].map(async (title) => {
+        const response = await fetch(`${base}/api/rpc`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', cookie: cookie ?? '' },
+          body: JSON.stringify({ method: 'saveVolume', args: [{ title }] })
+        })
+        expect(response.status).toBe(200)
+      }))
+      const volumesResponse = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookie ?? '' },
+        body: JSON.stringify({ method: 'listVolumes', args: [] })
+      })
+      const volumes = (await volumesResponse.json() as { result: Array<{ title: string }> }).result
+      expect(volumes.map((volume) => volume.title)).toEqual(expect.arrayContaining(['并发卷 A', '并发卷 B']))
+
       const downloaded = await fetch(`${base}/api/workspaces/default/archive`, { headers: { cookie: cookie ?? '' } })
       if (!downloaded.ok) throw new Error(await downloaded.text())
       expect(downloaded.status).toBe(200)
@@ -107,6 +123,27 @@ describe('linux web server', () => {
       })
       const cookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
       expect((await fetch(`${base}/api/workspaces`, { headers: { cookie } })).status).toBe(200)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns a client error for malformed cookie and workspace URL without terminating the server', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-malformed-url-'))
+    const server = createStoryFabricServer({ accessKey: 'malformed-test-key', dataDir: root })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+    try {
+      const address = server.address() as AddressInfo
+      const base = `http://127.0.0.1:${address.port}`
+      expect((await fetch(`${base}/api/auth/session`, { headers: { cookie: 'storyfabric_session=%' } })).status).toBe(200)
+      const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'malformed-test-key' }) })
+      const cookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
+      expect((await fetch(`${base}/api/workspaces/%ZZ/open`, { method: 'POST', headers: { cookie } })).status).toBe(400)
+      expect((await fetch(`${base}/healthz`)).status).toBe(200)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(root, { recursive: true, force: true })

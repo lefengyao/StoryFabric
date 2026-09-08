@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { extname, join, relative, resolve, sep } from 'node:path'
 import { URL } from 'node:url'
+import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { createAccessKeyVerifier, createSessionStore } from './auth'
 import { ServerSettingsStore } from './settingsStore'
 import { WorkspaceRegistry } from './workspaceRegistry'
@@ -29,6 +30,7 @@ export interface StoryFabricServerOptions {
   staticDir?: string
   sessionTtlMs?: number
   cookieSecure?: boolean
+  corsOrigin?: string
 }
 
 interface AuthContext {
@@ -37,8 +39,10 @@ interface AuthContext {
 }
 
 interface Runtime {
+  store: NodeFileStore
   sessions: CoreSessionStore
   agent: CoreAgentService
+  operationQueue: Promise<void>
 }
 
 interface ScopedEnvelope extends AgentEventEnvelope {
@@ -94,9 +98,15 @@ function parseCookie(req: IncomingMessage, name: string): string | null {
   const raw = req.headers.cookie ?? ''
   for (const part of raw.split(';')) {
     const [key, ...value] = part.trim().split('=')
-    if (key === name) return decodeURIComponent(value.join('='))
+    if (key === name) {
+      try { return decodeURIComponent(value.join('=')) } catch { return null }
+    }
   }
   return null
+}
+
+function decodeUri(value: string): string | null {
+  try { return decodeURIComponent(value) } catch { return null }
 }
 
 function parseBearer(req: IncomingMessage): string | null {
@@ -152,11 +162,13 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   const dataRoot = resolve(options.dataDir ?? (options.workspaceRoot ? join(options.workspaceRoot, '..') : '/data'))
   const registry = options.workspaceRegistry ?? new WorkspaceRegistry(dataRoot, options.workspaceRoot ?? join(dataRoot, 'workspace'))
   const registryReady = registry.ensureReady()
-  const settings = new ServerSettingsStore(options.settingsPath ?? join(dataRoot, 'settings.json'))
+  const settings = new ServerSettingsStore(options.settingsPath ?? join(dataRoot, 'settings.json'), options.accessKey)
   const verifier = createAccessKeyVerifier(options.accessKey)
   const authSessions = createSessionStore({ ttlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL })
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL
   const secureCookie = options.cookieSecure ?? process.env.STORYFABRIC_COOKIE_SECURE === '1'
+  const corsOrigin = options.corsOrigin ?? process.env.STORYFABRIC_CORS_ORIGIN ?? '*'
+  const authAttempts = new Map<string, { count: number; resetAt: number }>()
   const events = new EventHub()
   const runtimes = new Map<string, Runtime>()
 
@@ -176,7 +188,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
 
   const runtimeOf = async (context: AuthContext): Promise<{ id: string; runtime: Runtime }> => {
     await registryReady
-    const id = authSessions.get(context.token)?.workspaceId
+    const id = context.workspaceId
     if (!id) throw new Error('请先选择工作区')
     let runtime = runtimes.get(id)
     if (!runtime) {
@@ -189,13 +201,19 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         getAdapter,
         emit: (sessionId, event) => events.emit({ workspaceId: id, sessionId, event })
       })
-      runtime = { sessions, agent }
+      runtime = { store, sessions, agent, operationQueue: Promise.resolve() }
       runtimes.set(id, runtime)
     }
     return { id, runtime }
   }
 
-  const dispatch = async (context: AuthContext, method: string, args: unknown[]): Promise<unknown> => {
+  const serializeWorkspace = async <T>(runtime: Runtime, operation: () => Promise<T>): Promise<T> => {
+    const run = runtime.operationQueue.catch(() => undefined).then(operation)
+    runtime.operationQueue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  const dispatch = async (context: AuthContext, method: string, args: unknown[], serialized = false): Promise<unknown> => {
     await registryReady
     const arg = <T>(index = 0): T => args[index] as T
     if (method === 'pickFolder') return null
@@ -213,13 +231,15 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     }
     if (method === 'closeWorkspace') { authSessions.setWorkspace(context.token); return undefined }
     if (method === 'getCurrentWorkspace' || method === 'refreshWorkspace') {
-      const id = authSessions.get(context.token)?.workspaceId
+      const id = context.workspaceId
       return id ? registry.summary(id) : null
     }
     if (method === 'exportWorkspace' || method === 'importWorkspace') throw new Error('远程工作区请使用压缩包传输端点')
 
-    const { runtime } = await runtimeOf(context)
-    const store = await registry.getStore(authSessions.get(context.token)?.workspaceId ?? '')
+    const { id: workspaceId, runtime } = await runtimeOf(context)
+    const needsImmediateAgentControl = method === 'agentConfirm' || method === 'agentAbort'
+    if (!serialized && !needsImmediateAgentControl) return serializeWorkspace(runtime, () => dispatch(context, method, args, true))
+    const { store } = runtime
     const saveChapterMeta = async (input: Partial<ChapterDoc>): Promise<unknown> => {
       const saved = await saveChapter(store, input)
       const { content: _content, ...meta } = saved
@@ -270,11 +290,9 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const session = existing ?? await runtime.sessions.create()
         if (!existing) await runtime.sessions.save(session)
         const next = { ...request, sessionId: session.id }
-        void runtime.agent.run(next).catch((error) => {
-          const id = authSessions.get(context.token)?.workspaceId
-          if (!id) return
-          events.emit({ workspaceId: id, sessionId: session.id, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
-          events.emit({ workspaceId: id, sessionId: session.id, event: { type: 'done' } })
+        void serializeWorkspace(runtime, () => runtime.agent.run(next)).catch((error) => {
+          events.emit({ workspaceId, sessionId: session.id, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
+          events.emit({ workspaceId, sessionId: session.id, event: { type: 'done' } })
         })
         return { sessionId: session.id }
       }
@@ -306,7 +324,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   return createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff')
     res.setHeader('referrer-policy', 'no-referrer')
-    res.setHeader('access-control-allow-origin', '*')
+    res.setHeader('access-control-allow-origin', corsOrigin)
+    if (corsOrigin !== '*') res.setHeader('access-control-allow-credentials', 'true')
     res.setHeader('access-control-allow-headers', 'authorization, content-type, x-storyfabric-workspace-name')
     res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
@@ -315,8 +334,18 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     if (pathname === '/healthz' && req.method === 'GET') { sendJson(res, 200, { ok: true }); return }
     if (pathname === '/api/auth/login' && req.method === 'POST') {
       try {
+        const address = req.socket.remoteAddress ?? 'unknown'
+        const now = Date.now()
+        const attempt = authAttempts.get(address)
+        if (attempt && attempt.resetAt > now && attempt.count >= 10) { sendError(res, 429, '登录尝试过于频繁，请稍后再试'); return }
         const body = JSON.parse(await readBody(req)) as { key?: string }
-        if (!verifier.verify(String(body.key ?? ''))) { sendError(res, 401, '访问密钥错误'); return }
+        if (!verifier.verify(String(body.key ?? ''))) {
+          const next = attempt && attempt.resetAt > now ? attempt : { count: 0, resetAt: now + 60_000 }
+          next.count++
+          authAttempts.set(address, next)
+          sendError(res, 401, '访问密钥错误'); return
+        }
+        authAttempts.delete(address)
         const token = authSessions.issue()
         sendJson(res, 200, { authenticated: true }, { 'set-cookie': cookieHeader(token, secureCookie, sessionTtlMs) })
       } catch (error) { sendError(res, 400, error) }
@@ -324,8 +353,18 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     }
     if (pathname === '/api/auth/token' && req.method === 'POST') {
       try {
+        const address = req.socket.remoteAddress ?? 'unknown'
+        const now = Date.now()
+        const attempt = authAttempts.get(address)
+        if (attempt && attempt.resetAt > now && attempt.count >= 10) { sendError(res, 429, '登录尝试过于频繁，请稍后再试'); return }
         const body = JSON.parse(await readBody(req)) as { key?: string }
-        if (!verifier.verify(String(body.key ?? ''))) { sendError(res, 401, '访问密钥错误'); return }
+        if (!verifier.verify(String(body.key ?? ''))) {
+          const next = attempt && attempt.resetAt > now ? attempt : { count: 0, resetAt: now + 60_000 }
+          next.count++
+          authAttempts.set(address, next)
+          sendError(res, 401, '访问密钥错误'); return
+        }
+        authAttempts.delete(address)
         sendJson(res, 200, { token: authSessions.issue(), expiresAt: Date.now() + sessionTtlMs })
       } catch (error) { sendError(res, 400, error) }
       return
@@ -369,7 +408,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     }
     const match = /^\/api\/workspaces\/([^/]+)\/(open|archive)$/.exec(pathname)
     if (match) {
-      const id = decodeURIComponent(match[1])
+      const id = decodeUri(match[1])
+      if (id === null) { sendError(res, 400, '非法工作区地址'); return }
       if (match[2] === 'open' && req.method === 'POST') {
         try { const summary = await registry.summary(id); authSessions.setWorkspace(context.token, summary.path); sendJson(res, 200, summary) } catch (error) { sendError(res, 404, error) }
         return

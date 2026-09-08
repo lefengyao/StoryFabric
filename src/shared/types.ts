@@ -110,6 +110,16 @@ export interface WorkspaceSummary {
   trashCount?: number
 }
 
+/** Lightweight workspace entry used by workspace pickers. Does not load document bodies. */
+export interface WorkspaceListItem {
+  name: string
+  path: string
+  version?: number
+  chapterCount: number
+  volumeCount: number
+  relationshipCount: number
+}
+
 export interface VolumeMeta {
   id: string
   title: string

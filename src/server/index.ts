@@ -29,11 +29,17 @@ async function main(): Promise<void> {
   })
   const port = Number(process.env.PORT || 8787)
   const host = process.env.HOST || '0.0.0.0'
+  const sockets = new Set<import('node:net').Socket>()
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
   server.listen(port, host, () => {
     console.log(`StoryFabric Linux server listening on http://${host}:${port}`)
   })
 
   const shutdown = (): void => {
+    for (const socket of sockets) socket.destroy()
     server.close(() => process.exit(0))
   }
   process.once('SIGTERM', shutdown)

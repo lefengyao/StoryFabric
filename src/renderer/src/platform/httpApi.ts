@@ -1,5 +1,5 @@
 import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
-import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, OutlineDoc, Relationship, RunAgentRequest, SettingDoc, StoryEvent, VolumeMeta, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, OutlineDoc, Relationship, RunAgentRequest, SettingDoc, StoryEvent, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -48,7 +48,7 @@ export class HttpPlatformApi implements StoryFabricApi {
 
   pickFolder(): Promise<string | null> { return Promise.resolve(null) }
   getDefaultWorkspaceDir(): Promise<string> { return Promise.resolve('') }
-  listWorkspaces(): Promise<WorkspaceSummary[]> { return this.rest('/api/workspaces') }
+  listWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces') }
   async createWorkspace(_parentDir: string, name: string): Promise<string> { return (await this.rest<WorkspaceSummary>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }), headers: { 'content-type': 'application/json' } })).path }
   openWorkspace(path: string): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST' }) }
   closeWorkspace(): Promise<void> { return this.rpc('closeWorkspace') }
@@ -119,14 +119,16 @@ export class HttpPlatformApi implements StoryFabricApi {
       source.onmessage = (event) => { try { callback(JSON.parse(event.data) as AgentEventEnvelope) } catch { /* ignore malformed event */ } }
       return () => source.close()
     }
-    let stopped = false
-    void this.fetcher(`${this.baseUrl}/api/events`, { headers: this.headers(), signal: undefined }).then(async (response) => {
+    const controller = new AbortController()
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    void this.fetcher(`${this.baseUrl}/api/events`, { headers: this.headers(), signal: controller.signal }).then(async (response) => {
       if (!response.ok || !response.body) return
-      const reader = response.body.getReader()
+      const streamReader = response.body.getReader()
+      reader = streamReader
       const decoder = new TextDecoder()
       let buffer = ''
-      while (!stopped) {
-        const next = await reader.read()
+      while (!controller.signal.aborted) {
+        const next = await streamReader.read()
         if (next.done) break
         buffer += decoder.decode(next.value, { stream: true })
         const chunks = buffer.split('\n\n')
@@ -137,6 +139,9 @@ export class HttpPlatformApi implements StoryFabricApi {
         }
       }
     }).catch(() => undefined)
-    return () => { stopped = true }
+    return () => {
+      controller.abort()
+      void reader?.cancel().catch(() => undefined)
+    }
   }
 }

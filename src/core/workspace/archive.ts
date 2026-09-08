@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import type { FileStore } from '../storage/fileStore'
-import { migrateWorkspace } from './migration'
+import { CURRENT_WORKSPACE_VERSION, migrateWorkspace } from './migration'
 
 export interface WorkspaceArchive {
   fileName: string
@@ -67,7 +67,7 @@ function validateMetadata(files: ArchiveFile[]): void {
   if (!metadata) throw new Error('压缩包不是有效的 StoryFabric 工作区')
   try {
     const value = JSON.parse(metadata.text) as { app?: unknown; version?: unknown }
-    if (value.app !== 'storyfabric' || typeof value.version !== 'number' || !Number.isFinite(value.version)) throw new Error('invalid')
+    if (value.app !== 'storyfabric' || typeof value.version !== 'number' || !Number.isFinite(value.version) || value.version > CURRENT_WORKSPACE_VERSION) throw new Error('invalid')
   } catch {
     throw new Error('压缩包不是有效的 StoryFabric 工作区')
   }
@@ -86,6 +86,7 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
 
   const files: ArchiveFile[] = []
   const paths = new Set<string>()
+  const portablePaths = new Set<string>()
   let uncompressedBytes = 0
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue
@@ -93,7 +94,8 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
     const original = entry.unsafeOriginalName ?? entry.name
     const path = safeEntry(original)
     if (!path) throw new Error('工作区压缩包包含非法路径')
-    if (path !== entry.name || paths.has(path)) throw new Error('工作区压缩包包含冲突路径')
+    const portableKey = path.normalize('NFC').toLowerCase()
+    if (path !== entry.name || paths.has(path) || portablePaths.has(portableKey)) throw new Error('工作区压缩包包含冲突路径')
     if (!isPortablePath(path)) throw new Error(`工作区压缩包包含不支持的文件：${path}`)
     const expectedSize = declaredSize(entry)
     if (expectedSize !== null && expectedSize > WORKSPACE_ARCHIVE_MAX_ENTRY_BYTES) throw new Error('工作区压缩包包含过大的文件')
@@ -110,6 +112,7 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
       throw new Error(`工作区压缩包包含非文本文件：${path}`)
     }
     paths.add(path)
+    portablePaths.add(portableKey)
     files.push({ path, text })
   }
 

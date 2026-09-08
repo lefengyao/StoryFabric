@@ -5,11 +5,11 @@ import { Directory, Filesystem } from '@capacitor/filesystem'
 import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
-import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, VolumeMeta, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteOutlineDoc, getChapterBody, listChapters, listCharacters, listEvents, listOutline, loadRelationships, saveChapter, saveCharacter, saveEvent, saveOutlineDoc, saveRelationships, searchProject } from '../../../core/workspace/entityStore'
-import { initializeWorkspace, loadSummary, readGraphLayout, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
+import { initializeWorkspace, loadSummary, loadWorkspaceListItem, readGraphLayout, setWorkspaceName, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
 import { exportWorkspaceArchive, importWorkspaceArchive } from '../../../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive, type SessionArchive } from '../../../core/workspace/sessionArchive'
 import { genId } from '../../../core/workspace/entityStore'
@@ -75,16 +75,16 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return Promise.resolve(null)
   }
 
-  async listWorkspaces(): Promise<WorkspaceSummary[]> {
+  async listWorkspaces(): Promise<WorkspaceListItem[]> {
     const root = new CapacitorFileStore(WORKSPACE_PREFIX)
     const dirs = await root.listDirs('')
-    const result: WorkspaceSummary[] = []
+    const result: WorkspaceListItem[] = []
     for (const dir of dirs) {
       const path = `${WORKSPACE_PREFIX}/${dir}`
       const store = new CapacitorFileStore(path)
       if (!(await validateWorkspace(store)).ok) continue
       try {
-        result.push(await loadSummary(store, dir, path))
+        result.push(await loadWorkspaceListItem(store, dir, path))
       } catch {
         /* 跳过损坏或正在写入中的工作区 */
       }
@@ -184,6 +184,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const temporaryStore = new CapacitorFileStore(`${WORKSPACE_PREFIX}/${temporaryId}`)
     try {
       await importWorkspaceArchive(temporaryStore, bytes)
+      await setWorkspaceName(temporaryStore, baseName)
       await root.move(temporaryId, finalId)
     } catch (error) {
       await root.remove(temporaryId)

@@ -15,6 +15,7 @@ import type {
   SessionMeta,
   StoryEvent,
   WorkspaceSummary,
+  WorkspaceListItem,
   VolumeMeta,
   TrashEntry,
   SettingDoc,
@@ -52,7 +53,7 @@ export interface WorkspaceImportTarget {
 export interface StoryFabricApi {
   /* 工作区 */
   pickFolder(): Promise<string | null>
-  listWorkspaces(): Promise<WorkspaceSummary[]>
+  listWorkspaces(): Promise<WorkspaceListItem[]>
   /** 默认新建位置：系统文档目录 */
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>

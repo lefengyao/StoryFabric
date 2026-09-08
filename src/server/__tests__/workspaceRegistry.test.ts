@@ -50,4 +50,23 @@ describe('server workspace registry', () => {
     const registry = await WorkspaceRegistry.open(await dataRoot())
     await expect(registry.getStore('../outside')).rejects.toThrow('工作区不存在')
   })
+
+  it('persists an import display name into workspace metadata', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const original = await registry.create('原名称')
+    const source = new NodeFileStore(join(root, 'workspaces', original.path))
+    const archive = await exportWorkspaceArchive(source, '原名称')
+    const imported = await registry.importArchive(archive.bytes, '新名称')
+    expect(imported.name).toBe('新名称')
+    const metadata = JSON.parse(await readFile(join(root, 'workspaces', imported.path, 'storyfabric.json'), 'utf8')) as { name?: string }
+    expect(metadata.name).toBe('新名称')
+  })
+
+  it('keeps every workspace record when concurrent creates complete', async () => {
+    const registry = await WorkspaceRegistry.open(await dataRoot())
+    const created = await Promise.all(['并发项目 A', '并发项目 B', '并发项目 C'].map((name) => registry.create(name)))
+    const listed = await registry.list()
+    expect(listed.map((item) => item.path)).toEqual(expect.arrayContaining(created.map((item) => item.path)))
+  })
 })

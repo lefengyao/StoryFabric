@@ -32,4 +32,18 @@ describe('web platform api', () => {
     expect(requests[0].init?.headers).toMatchObject({ authorization: `Bearer ${'t'.repeat(32)}`, 'content-type': 'application/zip' })
     expect(requests[0].init?.body).toBeInstanceOf(ArrayBuffer)
   })
+
+  it('aborts a bearer SSE request when unsubscribing', async () => {
+    let request: RequestInit | undefined
+    const api = new HttpPlatformApi(async (_input, init) => {
+      request = init
+      return new Response(null, { status: 200 })
+    }, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+
+    const unsubscribe = api.onAgentEvent(() => undefined)
+    await Promise.resolve()
+    expect(request?.signal?.aborted).toBe(false)
+    unsubscribe()
+    expect(request?.signal?.aborted).toBe(true)
+  })
 })

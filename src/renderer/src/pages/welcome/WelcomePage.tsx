@@ -6,7 +6,7 @@ import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
-import { getPlatformApi, isWebPlatform } from '../../platform/platformApi'
+import { getLocalPlatformApi, getPlatformApi, isWebPlatform } from '../../platform/platformApi'
 import { HttpPlatformApi } from '../../platform/httpApi'
 import { installPlatformApi } from '../../platform/platformApi'
 import { loginRemote } from '../../platform/webAuth'
@@ -21,7 +21,7 @@ export function WelcomePage(): React.ReactElement {
   const [parentDir, setParentDir] = useState('')
   const [busy, setBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
-  const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceSummary[]>([])
+  const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceListItem[]>([])
   const isWeb = isWebPlatform()
   const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
   const [serviceUrl, setServiceUrl] = useState('')
@@ -29,7 +29,7 @@ export function WelcomePage(): React.ReactElement {
   const [serviceError, setServiceError] = useState<string | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const localApiRef = useRef<import('../../../../shared/api').StoryFabricApi | null>(null)
-  if (!localApiRef.current && !isWeb) localApiRef.current = window.api ?? getPlatformApi()
+  if (!localApiRef.current && !isWeb) localApiRef.current = getLocalPlatformApi()
 
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
@@ -216,7 +216,7 @@ export function WelcomePage(): React.ReactElement {
               >
                 <BookOpen size={16} className="shrink-0 text-accent" />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
-                <span className="shrink-0 text-xs text-faint">{item.chapters.length} 章</span>
+                <span className="shrink-0 text-xs text-faint">{item.chapterCount} 章</span>
               </button>
             ))}
           </div>

@@ -57,7 +57,7 @@ export function AppLayout(): React.ReactElement {
       a.href = url
       a.download = archive.fileName
       a.click()
-      URL.revokeObjectURL(url)
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
     } catch (err) { setTransferError(err instanceof Error ? err.message : String(err)) }
     finally { setTransferBusy(false) }
   }

@@ -22,7 +22,7 @@ import {
   saveSetting
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
-import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
+import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
 import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
@@ -67,7 +67,7 @@ export function registerIpc(ctx: AppContext): void {
     for (const path of recentWorkspaces) {
       const valid = await validateWorkspace(path)
       if (!valid.ok) continue
-      try { result.push(await loadSummary(path)) } catch { /* Skip unavailable recent folders. */ }
+      try { result.push(await loadWorkspaceListItem(path)) } catch { /* Skip unavailable recent folders. */ }
     }
     return result
   })

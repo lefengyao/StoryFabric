@@ -3,6 +3,7 @@ param()
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $targets = @(
   'out',
+  'dist-server',
   'release',
   'android/app/build',
   'android/build',
