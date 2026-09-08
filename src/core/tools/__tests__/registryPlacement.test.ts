@@ -3,7 +3,7 @@ import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
 import { listChapters, listNotes, listOutline, saveChapter, saveNote, serializeNote } from '../../workspace/entityStore'
 import { listTrash } from '../../workspace/trash'
-import { executeTool } from '../registry'
+import { executeTool, TOOL_DEFS } from '../registry'
 
 describe('agent placement guardrails', () => {
   it('does not silently put an unspecified chapter write in the main box', async () => {
@@ -64,6 +64,25 @@ describe('agent placement guardrails', () => {
     expect(unknownId.ok).toBe(false)
     expect(unknownId.text).toContain('未找到便签')
     expect(unknownId.text).toContain('note_missing')
+  })
+
+  it('rejects empty and whitespace-only delete_note noteIds', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+
+    for (const noteId of ['', '   ']) {
+      const rejected = await executeTool(store, 'delete_note', JSON.stringify({ noteId }))
+      expect(rejected.kind).toBe('result')
+      expect(rejected.ok).toBe(false)
+      expect(rejected.text).toContain('有效 noteId')
+    }
+  })
+
+  it('registers delete_note with a required string noteId schema', () => {
+    const definition = TOOL_DEFS.find((tool) => tool.name === 'delete_note')
+    expect(definition).toBeDefined()
+    expect(definition?.parameters.properties).toEqual(expect.objectContaining({ noteId: { type: 'string' } }))
+    expect(definition?.parameters.required).toEqual(expect.arrayContaining(['noteId']))
   })
 
   it('creates a note pending change and only moves the note to trash when applied', async () => {

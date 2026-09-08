@@ -15,6 +15,7 @@ describe('agent workspace policy', () => {
   })
 
   it('requires explicit consent before using delete_note and explains its pending semantics', () => {
+    expect(CORE_PROMPT).toContain('对应写入工具：save_character / save_relationship / save_event / save_outline_doc / save_chapter / save_setting / save_note / delete_note / move_chapter / restore_from_trash')
     expect(CORE_PROMPT).toContain('只有当前对话明确关联某便签且用户明确表示任务完成时才询问是否删除')
     expect(CORE_PROMPT).toContain('用户未明确同意时不调用 delete_note')
     expect(CORE_PROMPT).toContain('只有明确同意后才调用 delete_note')
