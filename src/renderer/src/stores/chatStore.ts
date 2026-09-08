@@ -11,6 +11,7 @@ import type {
 import { useWorkspace } from './workspaceStore'
 import type { ToolCallData } from '../../../shared/types'
 import { getPlatformApi } from '../platform/platformApi'
+import { sessionEventPatch } from './chatEvents'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
@@ -196,7 +197,8 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
   const ev = envelope.event
   switch (ev.type) {
     case 'session': {
-      if (!get().activeId) set({ activeId: envelope.sessionId, messages: ev.session.messages })
+      const patch = sessionEventPatch(get().activeId, envelope)
+      if (patch) set(patch)
       break
     }
     case 'text-delta':

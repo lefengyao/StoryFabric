@@ -22,6 +22,7 @@ import { makeTrashEntry, moveToTrash } from './trash'
 import { invalidateProjectIndex } from '../retrieval/projectIndex'
 import { searchIndex } from '../retrieval/projectIndex'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
+import { normalizeChapterContent } from './chapterFormatting'
 
 export function genId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8)
@@ -358,7 +359,7 @@ async function loadChapters(store: FileStore): Promise<Stored<ChapterDoc>[]> {
     const parsed = await readMd(store, filePath)
     if (!parsed || typeof parsed.data.id !== 'string') continue
     const status = ['draft', 'revised', 'final'].includes(str(parsed.data.status)) ? str(parsed.data.status) as ChapterStatus : 'draft'
-    const content = parsed.content.replace(/^\n+/, '')
+    const content = normalizeChapterContent(parsed.content.replace(/^\n+/, ''))
     const relative = filePath.replace(/^chapters\//, '')
     const parts = relative.split('/')
     const box: ChapterBox = parts[0] === 'draft' ? 'draft' : 'main'
@@ -371,7 +372,7 @@ async function loadChapters(store: FileStore): Promise<Stored<ChapterDoc>[]> {
 
 export async function listChapters(store: FileStore): Promise<ChapterMeta[]> { return (await loadChapters(store)).map(({ doc: { content: _content, ...meta } }) => meta) }
 export async function getChapterBody(store: FileStore, id: string): Promise<string | null> { return (await loadChapters(store)).find((x) => x.doc.id === id)?.doc.content ?? null }
-export function serializeChapter(c: ChapterDoc): string { return stringifyFrontMatter(c.content ?? '', { id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
+export function serializeChapter(c: ChapterDoc): string { return stringifyFrontMatter(normalizeChapterContent(c.content ?? ''), { id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
 
 export async function saveChapter(store: FileStore, input: Partial<ChapterDoc> & { id?: string }): Promise<ChapterDoc> {
   await store.ensureDir('chapters')
@@ -380,6 +381,7 @@ export async function saveChapter(store: FileStore, input: Partial<ChapterDoc> &
   const doc = existing
     ? ({ ...existing.doc, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)), id: existing.doc.id } as ChapterDoc)
     : ({ id: input.id ?? genId('cha'), title: input.title?.trim() || '未命名章节', volume: input.volume ?? '第一卷', volumeId: input.volumeId ?? 'vol_default', box: input.box === 'draft' ? 'draft' : 'main', terms: input.terms ?? [], order: input.order ?? (all.length ? Math.max(...all.map((x) => x.doc.order)) + 1 : 1), status: input.status ?? 'draft', wordCount: 0, content: input.content ?? '' } satisfies ChapterDoc)
+  doc.content = normalizeChapterContent(doc.content)
   doc.wordCount = countWords(doc.content)
   doc.box = doc.box === 'draft' ? 'draft' : 'main'
   doc.volumeId = doc.volumeId ?? 'vol_default'

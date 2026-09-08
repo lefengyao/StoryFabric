@@ -22,6 +22,15 @@ describe('writing structure', () => {
     expect((await listVolumes(store)).map((item) => item.title)).toEqual(['第一卷', '第二卷'])
   })
 
+  it('writes chapter prose with full-width paragraph indentation', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const chapter = await saveChapter(store, { title: '缩进测试', content: '第一段。\n\n第二段。' })
+
+    expect(chapter.content).toBe('　　第一段。\n\n　　第二段。')
+    expect(await store.readText('chapters/main/vol_default/0001-缩进测试.md')).toContain('\n\n　　第一段。\n\n　　第二段。')
+  })
+
   it('moves deleted chapters to trash and restores them', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '测试')
