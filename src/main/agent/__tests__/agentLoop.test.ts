@@ -4,10 +4,12 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, ChatSession } from '../../../shared/types'
 import type { AgentEventEnvelope } from '../../../shared/api'
+import { serializeNote } from '../../../core/workspace/entityStore'
 import { AgentService } from '../agentLoop'
 import { SettingsService } from '../../services/settingsService'
 import { SessionStore } from '../../services/sessionStore'
 import { saveCharacter, saveNote } from '../../services/entityStore'
+import { listTrash } from '../../services/workspaceService'
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder()
@@ -184,6 +186,80 @@ describe('AgentService', () => {
     const session = (await loadPersisted(sessionId))!
     const toolMsgs = session.messages.filter((m) => m.role === 'tool')
     expect(toolMsgs.some((m) => m.text?.includes('拒绝'))).toBe(true)
+  })
+
+  it('delete_note 批准后移入回收站且回注成功消息', async () => {
+    const note = await saveNote(root, { title: '批准删除便签', content: '待移入回收站' })
+    stubFetch()
+    fetchQueue = [
+      sseResponse(
+        openaiSse(
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, id: 'w-delete-note-approved', function: { name: 'delete_note', arguments: JSON.stringify({ noteId: ` ${note.id} ` }) } }]
+                }
+              }
+            ]
+          },
+          'tool_calls'
+        )
+      ),
+      sseResponse(openaiSse({ choices: [{ delta: { content: '已完成删除。' } }] }, 'stop'))
+    ]
+
+    const agent = makeAgent()
+    const runPromise = agent.run(root, { message: '确认删除这条便签', providerId, model: 'mock-model' })
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
+    })
+    const changeEv = events.find((e) => e.event.type === 'pending-change')!
+    expect((changeEv.event as { change: { beforeText: string } }).change.beforeText).toBe(serializeNote(note))
+    agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
+
+    const { sessionId } = await runPromise
+    const noteFiles = await fs.readdir(join(root, 'notes'))
+    expect(noteFiles.some((file) => file.includes('批准删除便签'))).toBe(false)
+    expect((await listTrash(root)).some((entry) => entry.id === note.id)).toBe(true)
+
+    const session = (await loadPersisted(sessionId))!
+    const toolMsgs = session.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.some((m) => m.text?.includes('已将便签「批准删除便签」移入回收站'))).toBe(true)
+  })
+
+  it.each([
+    ['数字', 123],
+    ['空字符串', ''],
+    ['空白字符串', '   ']
+  ])('delete_note 对%s noteId 拒绝且不产生待确认变更', async (_label, noteId) => {
+    stubFetch()
+    fetchQueue = [
+      sseResponse(
+        openaiSse(
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, id: `w-delete-note-invalid-${String(noteId)}`, function: { name: 'delete_note', arguments: JSON.stringify({ noteId }) } }]
+                }
+              }
+            ]
+          },
+          'tool_calls'
+        )
+      ),
+      sseResponse(openaiSse({ choices: [{ delta: { content: '参数无效。' } }] }, 'stop'))
+    ]
+
+    const agent = makeAgent()
+    const { sessionId } = await agent.run(root, { message: '删除便签', providerId, model: 'mock-model' })
+
+    expect(events.some((e) => e.event.type === 'pending-change')).toBe(false)
+    const session = (await loadPersisted(sessionId))!
+    const toolMsgs = session.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.some((m) => m.text?.includes('delete_note 必须提供有效 noteId'))).toBe(true)
   })
 
   it('写工具确认后写入工作区', async () => {

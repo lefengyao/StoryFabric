@@ -33,6 +33,7 @@ import {
   serializeRelationships
 } from '../services/entityStore'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
+import { serializeNote } from '../../core/workspace/entityStore'
 import { getChapterContext, lookupTerm } from '../../core/retrieval'
 import { listTrash, listVolumes, moveChapter, restoreTrash } from '../services/workspaceService'
 import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentOutlineWrite } from '../../core/tools/writeValidation'
@@ -546,17 +547,18 @@ async function simulateNote(root: string, patch: Partial<NoteDoc> & { id?: strin
   return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}便签：${after.title}`, commit: async () => `已保存便签「${(await saveNote(root, patch)).title}」` }
 }
 
-async function simulateDeleteNote(root: string, noteId: string): Promise<SimulatedChange> {
-  if (!noteId) throw new Error('delete_note 必须提供 noteId')
-  const note = await getNote(root, noteId)
-  if (!note) throw new Error(`未找到便签：${noteId}`)
+async function simulateDeleteNote(root: string, noteId: unknown): Promise<SimulatedChange> {
+  const normalizedId = typeof noteId === 'string' ? noteId.trim() : ''
+  if (!normalizedId) throw new Error('delete_note 必须提供有效 noteId')
+  const note = await getNote(root, normalizedId)
+  if (!note) throw new Error(`未找到便签：${normalizedId}`)
   return {
-    entityId: noteId,
-    beforeText: JSON.stringify(note, null, 2),
+    entityId: note.id,
+    beforeText: serializeNote(note),
     afterText: '移入回收站',
     title: `删除便签：${note.title}`,
     commit: async () => {
-      await deleteNote(root, noteId)
+      await deleteNote(root, normalizedId)
       return `已将便签「${note.title}」移入回收站`
     }
   }
@@ -636,7 +638,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
         sim = await simulateNote(root, a.note)
         break
       case 'delete_note':
-        sim = await simulateDeleteNote(root, String(a.noteId ?? ''))
+        sim = await simulateDeleteNote(root, a.noteId)
         break
       case 'move_chapter': {
         const chapterId = String(a.chapterId ?? '')
