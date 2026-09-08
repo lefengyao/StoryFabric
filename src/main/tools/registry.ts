@@ -13,6 +13,7 @@ import {
   listEvents,
   listOutline,
   listNotes,
+  deleteNote,
   listSettings,
   getNote,
   getSetting,
@@ -282,6 +283,11 @@ export const TOOL_DEFS: ToolDefJson[] = [
     parameters: { type: 'object', properties: { note: { type: 'object' } }, required: ['note'] }
   },
   {
+    name: 'delete_note',
+    description: '仅在用户明确同意删除后调用；会进入待确认变更，确认后将便签移入回收站。',
+    parameters: { type: 'object', properties: { noteId: { type: 'string', description: '要删除的便签 id' } }, required: ['noteId'] }
+  },
+  {
     name: 'move_chapter',
     description: '将章节移动到草稿箱或指定正文卷；需要用户确认。',
     parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] }
@@ -293,7 +299,7 @@ export const TOOL_DEFS: ToolDefJson[] = [
   }
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'move_chapter', 'restore_from_trash'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'move_chapter', 'restore_from_trash'])
 
 /* ---------------- 读取工具执行 ---------------- */
 
@@ -540,6 +546,22 @@ async function simulateNote(root: string, patch: Partial<NoteDoc> & { id?: strin
   return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}便签：${after.title}`, commit: async () => `已保存便签「${(await saveNote(root, patch)).title}」` }
 }
 
+async function simulateDeleteNote(root: string, noteId: string): Promise<SimulatedChange> {
+  if (!noteId) throw new Error('delete_note 必须提供 noteId')
+  const note = await getNote(root, noteId)
+  if (!note) throw new Error(`未找到便签：${noteId}`)
+  return {
+    entityId: noteId,
+    beforeText: JSON.stringify(note, null, 2),
+    afterText: '移入回收站',
+    title: `删除便签：${note.title}`,
+    commit: async () => {
+      await deleteNote(root, noteId)
+      return `已将便签「${note.title}」移入回收站`
+    }
+  }
+}
+
 async function simulateRelationship(
   root: string,
   input: { fromCharacterId: string; toCharacterId: string; type: string; label?: string; description?: string; directed?: boolean }
@@ -613,6 +635,9 @@ export async function executeTool(root: string, name: string, argsJson: string):
         if (!a.note?.title && !a.note?.id) throw new Error('note 必须包含 title 或 id')
         sim = await simulateNote(root, a.note)
         break
+      case 'delete_note':
+        sim = await simulateDeleteNote(root, String(a.noteId ?? ''))
+        break
       case 'move_chapter': {
         const chapterId = String(a.chapterId ?? '')
         const targetBox = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''
@@ -638,7 +663,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
     const change: PendingChange = {
       id: genId('chg'),
       toolName: name,
-      entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline',
+      entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline',
       entityId: sim.entityId,
       title: sim.title,
       beforeText: sim.beforeText,

@@ -7,7 +7,7 @@ import type { AgentEventEnvelope } from '../../../shared/api'
 import { AgentService } from '../agentLoop'
 import { SettingsService } from '../../services/settingsService'
 import { SessionStore } from '../../services/sessionStore'
-import { saveCharacter } from '../../services/entityStore'
+import { saveCharacter, saveNote } from '../../services/entityStore'
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder()
@@ -141,6 +141,45 @@ describe('AgentService', () => {
       /* 目录不存在 */
     }
     expect(files).toHaveLength(0)
+
+    const session = (await loadPersisted(sessionId))!
+    const toolMsgs = session.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.some((m) => m.text?.includes('拒绝'))).toBe(true)
+  })
+
+  it('delete_note 拒绝后保留便签且回注拒绝消息', async () => {
+    const note = await saveNote(root, { title: '待删除便签', content: '保留内容' })
+    stubFetch()
+    fetchQueue = [
+      sseResponse(
+        openaiSse(
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, id: 'w-delete-note', function: { name: 'delete_note', arguments: JSON.stringify({ noteId: note.id }) } }]
+                }
+              }
+            ]
+          },
+          'tool_calls'
+        )
+      ),
+      sseResponse(openaiSse({ choices: [{ delta: { content: '好的，已保留这条便签。' } }] }, 'stop'))
+    ]
+
+    const agent = makeAgent()
+    const runPromise = agent.run(root, { message: '删除这条便签', providerId, model: 'mock-model' })
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
+    })
+    const changeEv = events.find((e) => e.event.type === 'pending-change')!
+    agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, false)
+
+    const { sessionId } = await runPromise
+    const noteFiles = await fs.readdir(join(root, 'notes'))
+    expect(noteFiles.some((file) => file.includes('待删除便签'))).toBe(true)
 
     const session = (await loadPersisted(sessionId))!
     const toolMsgs = session.messages.filter((m) => m.role === 'tool')
