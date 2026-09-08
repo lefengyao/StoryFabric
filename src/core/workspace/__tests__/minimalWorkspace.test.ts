@@ -8,6 +8,9 @@ import { getChapterContext } from '../../retrieval/contextBuilder'
 import { lookupTerm } from '../../retrieval/projectIndex'
 
 const fixtureRoot = join(process.cwd(), 'examples', 'minimal-workspace')
+// The example directory is also used for local reproductions. Keep those
+// user-owned documents out of this fixed-fixture test without deleting them.
+const localReproductionIds = new Set(['cha_oldname', 'out_oldname'])
 
 async function loadFixture(): Promise<MemoryFileStore> {
   const store = new MemoryFileStore()
@@ -20,7 +23,9 @@ async function loadFixture(): Promise<MemoryFileStore> {
         continue
       }
       const path = relative(fixtureRoot, absolute).replaceAll('\\', '/')
-      await store.writeText(path, await fs.readFile(absolute, 'utf8'))
+      const text = await fs.readFile(absolute, 'utf8')
+      const id = text.match(/^id:\s*([^\s]+)\s*$/m)?.[1]
+      if (!id || !localReproductionIds.has(id)) await store.writeText(path, text)
     }
   }
 

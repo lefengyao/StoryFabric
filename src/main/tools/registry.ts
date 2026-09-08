@@ -33,7 +33,9 @@ import {
 } from '../services/entityStore'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { getChapterContext, lookupTerm } from '../../core/retrieval'
-import { listTrash, moveChapter, restoreTrash } from '../services/workspaceService'
+import { listTrash, listVolumes, moveChapter, restoreTrash } from '../services/workspaceService'
+import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentOutlineWrite } from '../../core/tools/writeValidation'
+import { AGENT_CHAPTER_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA } from '../../core/tools/writeSchemas'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -165,13 +167,13 @@ export const TOOL_DEFS: ToolDefJson[] = [
   },
   {
     name: 'list_chapter_outlines',
-    description: '按章节列出章纲摘要，不读取全部正文。',
-    parameters: { type: 'object', properties: { chapterId: { type: 'string' } } }
+    description: '按章节列出章纲摘要，不读取全部正文。传 chapterId 可只列出指定章节的章纲。',
+    parameters: { type: 'object', properties: { chapterId: { type: 'string', description: '目标章节 id；不传则列出所有章纲摘要' } } }
   },
   {
     name: 'get_chapter_outline',
-    description: '读取指定章节的一篇章纲。',
-    parameters: { type: 'object', properties: { outlineId: { type: 'string' }, chapterId: { type: 'string' } } }
+    description: '读取一篇章纲。必须提供 outlineId 或 chapterId，不能无条件返回第一篇章纲。',
+    parameters: { type: 'object', properties: { outlineId: { type: 'string', description: '章纲文档 id' }, chapterId: { type: 'string', description: '目标章节 id；与 outlineId 至少提供一个' } }, anyOf: [{ required: ['outlineId'] }, { required: ['chapterId'] }] }
   },
   {
     name: 'save_character',
@@ -249,42 +251,22 @@ export const TOOL_DEFS: ToolDefJson[] = [
   },
   {
     name: 'save_outline_doc',
-    description: '新建或更新一篇大纲文档（Markdown）。',
+    description: '新建或更新一篇大纲文档（Markdown）。必须显式指定 kind：total 为总纲，chapter 为章纲；章纲必须同时指定 chapterId。',
     parameters: {
       type: 'object',
       properties: {
-        doc: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: '更新已有文档时必填' },
-            title: { type: 'string' },
-            order: { type: 'number' },
-            content: { type: 'string' }
-          },
-          required: ['title']
-        }
+        doc: AGENT_OUTLINE_DOC_SCHEMA
       },
       required: ['doc']
     }
   },
   {
     name: 'save_chapter',
-    description: '新建或更新章节正文。续写时应先 get_chapter 读原文，再提交包含衔接处的完整正文。',
+    description: '新建或更新章节正文。必须显式指定 box：draft=草稿箱，main=正文箱；正文箱还必须指定 volumeId。续写时应先 get_chapter 读原文。',
     parameters: {
       type: 'object',
       properties: {
-        chapter: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: '更新已有章节时必填' },
-            title: { type: 'string' },
-            volume: { type: 'string' },
-            order: { type: 'number' },
-            status: { type: 'string', enum: ['draft', 'revised', 'final'] },
-            content: { type: 'string', description: '章节完整正文' }
-          },
-          required: ['title']
-        }
+        chapter: AGENT_CHAPTER_SCHEMA
       },
       required: ['chapter']
     }
@@ -394,6 +376,7 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
       return ok(J(docs.map(({ content: _content, ...meta }) => meta)))
     }
     case 'get_chapter_outline': {
+      if (!a.outlineId && !a.chapterId) return fail('get_chapter_outline 必须提供 outlineId 或 chapterId，不能猜测目标章纲')
       const docs = (await listOutline(root)).filter((doc) => doc.kind === 'chapter' && (!a.chapterId || doc.chapterId === a.chapterId))
       const value = a.outlineId ? docs.find((doc) => doc.id === a.outlineId) : docs[0]
       return value ? ok(J(value)) : fail('未找到章纲')
@@ -478,6 +461,9 @@ async function simulateEvent(root: string, patch: Partial<StoryEvent> & { id?: s
 
 async function simulateChapter(root: string, patch: Partial<ChapterDoc> & { id?: string }): Promise<SimulatedChange> {
   const all = await listChapters(root)
+  if (patch.box === 'main' && patch.volumeId && !(await listVolumes(root)).some((volume) => volume.id === patch.volumeId)) {
+    throw new Error(`未找到目标卷：${patch.volumeId}。请先用工作区卷列表确认有效的 volumeId`)
+  }
   const existingMeta = patch.id ? all.find((c) => c.id === patch.id) : null
   const existing = existingMeta
     ? { ...(existingMeta as ChapterDoc), content: (await getChapterBody(root, existingMeta.id)) ?? '' }
@@ -492,7 +478,9 @@ async function simulateChapter(root: string, patch: Partial<ChapterDoc> & { id?:
         id: effPatch.id!,
         title: effPatch.title ?? '未命名章节',
         volume: effPatch.volume ?? '第一卷',
+        volumeId: effPatch.volumeId,
         order: effPatch.order ?? (all.length ? Math.max(...all.map((c) => c.order)) + 1 : 1),
+        box: effPatch.box!,
         status: effPatch.status ?? 'draft',
         wordCount: countWords(mergedContent),
         content: mergedContent
@@ -512,6 +500,9 @@ async function simulateChapter(root: string, patch: Partial<ChapterDoc> & { id?:
 
 async function simulateOutline(root: string, patch: Partial<OutlineDoc> & { id?: string }): Promise<SimulatedChange> {
   const all = await listOutline(root)
+  if (patch.kind === 'chapter' && patch.chapterId && !(await listChapters(root)).some((chapter) => chapter.id === patch.chapterId)) {
+    throw new Error(`未找到章纲关联的章节：${patch.chapterId}。请先用 list_chapters 获取有效 id`)
+  }
   const existing = patch.id ? all.find((o) => o.id === patch.id) : null
   const effPatch: Partial<OutlineDoc> & { id?: string } = existing ? { ...patch } : { ...patch, id: patch.id ?? genId('out') }
   const afterDoc: OutlineDoc = existing
@@ -520,6 +511,8 @@ async function simulateOutline(root: string, patch: Partial<OutlineDoc> & { id?:
         id: effPatch.id!,
         title: effPatch.title ?? '未命名大纲',
         order: effPatch.order ?? (all.length ? Math.max(...all.map((o) => o.order)) + 1 : 1),
+        kind: effPatch.kind!,
+        chapterId: effPatch.chapterId,
         content: effPatch.content ?? ''
       }
   return {
@@ -604,10 +597,12 @@ export async function executeTool(root: string, name: string, argsJson: string):
         break
       case 'save_outline_doc':
         if (!a.doc?.title && !a.doc?.id) throw new Error('doc 必须包含 title 或 id')
+        validateAgentOutlineWrite(a.doc)
         sim = await simulateOutline(root, a.doc)
         break
       case 'save_chapter':
         if (!a.chapter?.title && !a.chapter?.id) throw new Error('chapter 必须包含 title 或 id')
+        validateAgentChapterWrite(a.chapter)
         sim = await simulateChapter(root, a.chapter)
         break
       case 'save_setting':
@@ -622,6 +617,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
         const chapterId = String(a.chapterId ?? '')
         const targetBox = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''
         if (!chapterId || !targetBox) throw new Error('chapterId 或 box 无效')
+        validateAgentChapterMove({ box: targetBox, volumeId: a.volumeId })
         const current = (await listChapters(root)).find((chapter) => chapter.id === chapterId)
         if (!current) throw new Error(`未找到章节：${chapterId}`)
         const target = { box: targetBox, ...(a.volumeId ? { volumeId: String(a.volumeId) } : {}) } as { box: 'draft' | 'main'; volumeId?: string }
