@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
-import { listChapters, listOutline, saveChapter } from '../../workspace/entityStore'
+import { listChapters, listNotes, listOutline, saveChapter, saveNote, serializeNote } from '../../workspace/entityStore'
+import { listTrash } from '../../workspace/trash'
 import { executeTool } from '../registry'
 
 describe('agent placement guardrails', () => {
@@ -47,5 +48,47 @@ describe('agent placement guardrails', () => {
     const outline = (await listOutline(store)).find((doc) => doc.title === '目标章章纲')
     expect(outline?.kind).toBe('chapter')
     expect(outline?.chapterId).toBe(chapter.id)
+  })
+
+  it('rejects delete_note without a valid noteId or for an unknown note', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+
+    const missingId = await executeTool(store, 'delete_note', JSON.stringify({}))
+    expect(missingId.kind).toBe('result')
+    expect(missingId.ok).toBe(false)
+    expect(missingId.text).toContain('noteId')
+
+    const unknownId = await executeTool(store, 'delete_note', JSON.stringify({ noteId: 'note_missing' }))
+    expect(unknownId.kind).toBe('result')
+    expect(unknownId.ok).toBe(false)
+    expect(unknownId.text).toContain('未找到便签')
+    expect(unknownId.text).toContain('note_missing')
+  })
+
+  it('creates a note pending change and only moves the note to trash when applied', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const note = await saveNote(store, { title: '待清理便签', tags: ['测试'], content: '便签内容' })
+
+    const pending = await executeTool(store, 'delete_note', JSON.stringify({ noteId: note.id }))
+    expect(pending.kind).toBe('pending')
+    if (pending.kind !== 'pending') return
+
+    expect(pending.change.toolName).toBe('delete_note')
+    expect(pending.change.entityKind).toBe('note')
+    expect(pending.change.entityId).toBe(note.id)
+    expect(pending.change.beforeText).toBe(serializeNote(note))
+    expect(pending.change.afterText).toContain('移入回收站')
+    expect(await listNotes(store)).toHaveLength(1)
+    expect(await listTrash(store)).toHaveLength(0)
+
+    const applied = await pending.apply()
+    expect(applied.ok).toBe(true)
+    expect(applied.text).toContain('移入回收站')
+    expect(await listNotes(store)).toHaveLength(0)
+    expect(await listTrash(store)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: note.id, kind: 'note', title: note.title })
+    ]))
   })
 })

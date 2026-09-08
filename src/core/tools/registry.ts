@@ -1,5 +1,5 @@
 import type { ChapterDoc, CharacterDoc, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson } from '../../shared/types'
-import { countWords, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject, serializeChapter, serializeCharacter, serializeEvent, serializeOutlineDoc, serializeRelationships } from '../workspace/entityStore'
+import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject, serializeChapter, serializeCharacter, serializeEvent, serializeNote, serializeOutlineDoc, serializeRelationships } from '../workspace/entityStore'
 import type { FileStore } from '../storage/fileStore'
 import { getChapterContext, lookupTerm } from '../retrieval'
 import { listTrash, restoreFromTrash } from '../workspace/trash'
@@ -41,12 +41,13 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'save_outline_doc', description: '新建或更新大纲；必须显式指定 kind：total=总纲，chapter=章纲；章纲还必须指定 chapterId；需要用户确认。', parameters: { type: 'object', properties: { doc: AGENT_OUTLINE_DOC_SCHEMA }, required: ['doc'] } },
   { name: 'save_chapter', description: '新建或更新章节正文；必须显式指定 box：draft=草稿箱，main=正文箱；正文箱还必须指定 volumeId；需要用户确认。', parameters: { type: 'object', properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
   { name: 'save_setting', description: '新建或更新设定；需要用户确认。', parameters: { type: 'object', properties: { setting: { type: 'object' } }, required: ['setting'] } },
-  { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', properties: { note: { type: 'object' } }, required: ['note'] } }
+  { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', properties: { note: { type: 'object' } }, required: ['note'] } },
+  { name: 'delete_note', description: '将指定便签移入回收站；需要用户确认。', parameters: { type: 'object', properties: { noteId: { type: 'string' } }, required: ['noteId'] } }
   ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷；需要用户确认。', parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；需要用户确认。', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'move_chapter', 'restore_from_trash'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'move_chapter', 'restore_from_trash'])
 
 async function readTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   const ok = (text: string): ToolOutcome => ({ kind: 'result', ok: true, text, preview: clip(text) })
@@ -95,6 +96,12 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
   } else if (name === 'save_note') {
     const patch = a.note as Partial<NoteDoc> & { id?: string }; const old = patch.id ? await getNote(store, patch.id) : null; const now = Date.now(); const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('note'), title: patch.title ?? '未命名便签', tags: patch.tags ?? [], pinned: Boolean(patch.pinned), createdAt: patch.createdAt ?? now, updatedAt: now, content: patch.content ?? '' }) as NoteDoc
     sim = { entityId: after.id, title: `${old ? '更新' : '新建'}便签：${after.title}`, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), commit: async () => `已保存便签「${(await saveNote(store, patch)).title}」` }
+  } else if (name === 'delete_note') {
+    const noteId = typeof a.noteId === 'string' ? a.noteId.trim() : ''
+    if (!noteId) throw new Error('delete_note 必须提供有效 noteId')
+    const note = await getNote(store, noteId)
+    if (!note) throw new Error(`未找到便签：${noteId}`)
+    sim = { entityId: note.id, title: `移入回收站：${note.title}`, beforeText: serializeNote(note), afterText: '移入回收站', commit: async () => { await deleteNote(store, note.id); return `已将便签「${note.title}」移入回收站` } }
   } else if (name === 'move_chapter') {
     const chapterId = String(a.chapterId ?? ''); const box = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''; if (!chapterId || !box) throw new Error('chapterId 或 box 无效')
     validateAgentChapterMove({ box, volumeId: a.volumeId })
@@ -108,7 +115,7 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
   } else {
     const r = a.relationship as { fromCharacterId: string; toCharacterId: string; type: string; label?: string; description?: string; directed?: boolean }; const chars = await listCharacters(store); const from = chars.find((c) => c.id === r.fromCharacterId); const to = chars.find((c) => c.id === r.toCharacterId); if (!from || !to) throw new Error('关系中的人物不存在'); const old = await loadRelationships(store); const next = [...old, { id: genId('rel'), fromId: r.fromCharacterId, toId: r.toCharacterId, type: r.type ?? '', label: r.label ?? '', description: r.description ?? '', directed: Boolean(r.directed) }]; const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id; sim = { entityId: 'relationships', title: `新增关系：${from.name} → ${to.name}`, beforeText: serializeRelationships(old, nameOf), afterText: serializeRelationships(next, nameOf), commit: async () => { await saveRelationships(store, next); return `已保存关系：${from.name} ⇄ ${to.name}` } }
   }
-  const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline', entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
+  const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline', entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
   return { kind: 'pending', change, apply: async () => ({ ok: true, text: await sim.commit() }) }
 }
 
