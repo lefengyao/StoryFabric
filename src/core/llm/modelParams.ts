@@ -1,6 +1,7 @@
 /** 把「模型档案 + 用户覆盖」翻译成各协议的请求体片段。 */
 import type { Protocol, ReasoningLevel } from '../../shared/types'
 import { profileForModel, type ResolvedModelSettings } from './modelCatalog'
+import { parseReasoningValue, setByPath } from './reasoningMap'
 
 const BUDGETS: Record<Exclude<ReasoningLevel, 'off'>, number> = { low: 2048, medium: 8192, high: 16384 }
 
@@ -17,26 +18,35 @@ export function reasoningBudget(level: ReasoningLevel, maxOutputTokens: number):
 
 export function buildModelParams(protocol: Protocol, model: string, params: ResolvedModelSettings): Record<string, unknown> {
   const profile = profileForModel(model)
-  const budget = profile.reasoning ? reasoningBudget(params.reasoning, params.maxOutputTokens) : 0
+  // 用户明确表态优先；未表态时回落到档案
+  const support = params.reasoningSupport ?? profile.reasoning
+
+  // 映射优先：用户填了当前等级的值就用它，并跳过协议内置推理参数
+  const mappedPath = support ? params.reasoningMap?.path?.trim() : undefined
+  const mappedValue = mappedPath ? parseReasoningValue(params.reasoningMap?.values[params.reasoning]) : undefined
+  const useMap = Boolean(mappedPath) && mappedValue !== undefined
+
+  const budget = support && !useMap ? reasoningBudget(params.reasoning, params.maxOutputTokens) : 0
   const reasoningOn = budget > 0
 
-  if (protocol === 'anthropic') {
-    return {
-      max_tokens: params.maxOutputTokens,
-      ...(reasoningOn ? { thinking: { type: 'enabled', budget_tokens: budget } } : {})
+  const body: Record<string, unknown> =
+    protocol === 'anthropic'
+      ? { max_tokens: params.maxOutputTokens }
+      : protocol === 'gemini'
+        ? { generationConfig: { maxOutputTokens: params.maxOutputTokens } }
+        : { [profile.openaiOutputParam]: params.maxOutputTokens }
+
+  if (useMap) {
+    setByPath(body, mappedPath as string, mappedValue)
+  } else if (reasoningOn) {
+    if (protocol === 'anthropic') {
+      body.thinking = { type: 'enabled', budget_tokens: budget }
+    } else if (protocol === 'gemini') {
+      ;(body.generationConfig as Record<string, unknown>).thinkingConfig = { thinkingBudget: budget }
+    } else {
+      body.reasoning_effort = params.reasoning
     }
   }
-  if (protocol === 'gemini') {
-    return {
-      generationConfig: {
-        maxOutputTokens: params.maxOutputTokens,
-        // 关闭推理时整体省略：Gemini 2.5 Pro 拒绝 thinkingBudget 0，1.5/2.0 系列不支持该字段
-        ...(reasoningOn ? { thinkingConfig: { thinkingBudget: budget } } : {})
-      }
-    }
-  }
-  return {
-    [profile.openaiOutputParam]: params.maxOutputTokens,
-    ...(reasoningOn ? { reasoning_effort: params.reasoning } : {})
-  }
+
+  return body
 }

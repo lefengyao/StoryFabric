@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { buildModelParams, reasoningBudget } from '../modelParams'
+import type { ReasoningLevel, ReasoningMap } from '../../../shared/types'
 
-const params = (patch: Partial<{ reasoning: 'off' | 'low' | 'medium' | 'high'; contextTokens: number; maxOutputTokens: number }> = {}) => ({
+const params = (
+  patch: Partial<{
+    reasoning: ReasoningLevel
+    reasoningSupport: boolean
+    reasoningMap: ReasoningMap
+    contextTokens: number
+    maxOutputTokens: number
+  }> = {}
+) => ({
   reasoning: 'off' as const,
   contextTokens: 131072,
   maxOutputTokens: 8192,
@@ -69,5 +78,62 @@ describe('buildModelParams', () => {
     expect(buildModelParams('gemini', 'some-local-model', params({ reasoning: 'high' }))).toEqual({
       generationConfig: { maxOutputTokens: 8192 }
     })
+  })
+
+  it('用户声明不支持拓展思考时，即使档案支持也不发推理参数', () => {
+    expect(buildModelParams('openai', 'o3-mini', params({ reasoning: 'high', reasoningSupport: false }))).toEqual({
+      max_completion_tokens: 8192
+    })
+    expect(buildModelParams('anthropic', 'claude-sonnet-4-5', params({ reasoning: 'high', reasoningSupport: false }))).toEqual({
+      max_tokens: 8192
+    })
+  })
+
+  it('用户声明支持拓展思考时，档案说不支持也照样发', () => {
+    expect(buildModelParams('openai', 'deepseek-chat', params({ reasoning: 'high', reasoningSupport: true }))).toEqual({
+      max_tokens: 8192,
+      reasoning_effort: 'high'
+    })
+  })
+
+  it('填了映射就用映射，且不再附加协议内置推理参数', () => {
+    const map: ReasoningMap = { path: 'enable_thinking', values: { low: 'true', medium: 'true', high: 'true' } }
+    expect(
+      buildModelParams('openai', 'deepseek-chat', params({ reasoning: 'high', reasoningSupport: true, reasoningMap: map }))
+    ).toEqual({ max_tokens: 8192, enable_thinking: true })
+  })
+
+  it('映射支持嵌套路径与数字值', () => {
+    const map: ReasoningMap = { path: 'generationConfig.thinkingConfig.thinkingBudget', values: { high: '4096' } }
+    expect(buildModelParams('gemini', 'gemini-2.5-pro', params({ reasoning: 'high', reasoningMap: map }))).toEqual({
+      generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } }
+    })
+  })
+
+  it('映射缺当前等级时回落到内置形式', () => {
+    const map: ReasoningMap = { path: 'enable_thinking', values: { high: 'true' } }
+    expect(buildModelParams('openai', 'o3-mini', params({ reasoning: 'low', reasoningMap: map }))).toEqual({
+      max_completion_tokens: 8192,
+      reasoning_effort: 'low'
+    })
+  })
+
+  it('关闭推理时：映射填了「关」就发该值，没填就完全不发', () => {
+    const withOff: ReasoningMap = { path: 'enable_thinking', values: { off: 'false' } }
+    expect(buildModelParams('openai', 'deepseek-chat', params({ reasoningSupport: true, reasoningMap: withOff }))).toEqual({
+      max_tokens: 8192,
+      enable_thinking: false
+    })
+    const withoutOff: ReasoningMap = { path: 'enable_thinking', values: { high: 'true' } }
+    expect(buildModelParams('openai', 'deepseek-chat', params({ reasoningSupport: true, reasoningMap: withoutOff }))).toEqual({
+      max_tokens: 8192
+    })
+  })
+
+  it('用户明确关闭时不使用映射', () => {
+    const map: ReasoningMap = { path: 'enable_thinking', values: { off: 'false', high: 'true' } }
+    expect(
+      buildModelParams('openai', 'deepseek-chat', params({ reasoning: 'high', reasoningSupport: false, reasoningMap: map }))
+    ).toEqual({ max_tokens: 8192 })
   })
 })
