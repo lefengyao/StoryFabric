@@ -18,6 +18,10 @@ describe('parseReasoningValue', () => {
     expect(parseReasoningValue('   ')).toBeUndefined()
     expect(parseReasoningValue(undefined)).toBeUndefined()
   })
+
+  it('JSON null 视为没填', () => {
+    expect(parseReasoningValue('null')).toBeUndefined()
+  })
 })
 
 describe('setByPath', () => {
@@ -51,5 +55,19 @@ describe('setByPath', () => {
     setByPath(body, 'a.prototype.b', 1)
     expect(body).toEqual({})
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
+
+  it('拒绝请求体保留字段，避免映射覆盖模型名与消息体', () => {
+    const body: Record<string, unknown> = { model: 'deepseek-chat', messages: [], max_tokens: 8192 }
+    setByPath(body, 'model', 'hijacked')
+    setByPath(body, 'messages.0.role', 'system')
+    setByPath(body, 'max_tokens', 1)
+    expect(body).toEqual({ model: 'deepseek-chat', messages: [], max_tokens: 8192 })
+  })
+
+  it('非保留键仍按现状覆盖中间层（文档化当前行为）', () => {
+    const body: Record<string, unknown> = { a: 1 }
+    setByPath(body, 'a.b', 2)
+    expect(body).toEqual({ a: { b: 2 } })
   })
 })

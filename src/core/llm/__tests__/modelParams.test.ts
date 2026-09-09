@@ -135,5 +135,52 @@ describe('buildModelParams', () => {
     expect(
       buildModelParams('openai', 'deepseek-chat', params({ reasoning: 'high', reasoningSupport: false, reasoningMap: map }))
     ).toEqual({ max_tokens: 8192 })
+    // 档案说支持、用户明确关闭：映射同样不发
+    expect(
+      buildModelParams('openai', 'o3-mini', params({ reasoning: 'high', reasoningSupport: false, reasoningMap: map }))
+    ).toEqual({ max_completion_tokens: 8192 })
+  })
+
+  it('用户没表态时映射本身即用户意图，不被档案默认值压制', () => {
+    const map: ReasoningMap = { path: 'enable_thinking', values: { high: 'true' } }
+    expect(buildModelParams('openai', 'deepseek-chat', params({ reasoning: 'high', reasoningMap: map }))).toEqual({
+      max_tokens: 8192,
+      enable_thinking: true
+    })
+  })
+
+  it('映射缺少 values 字段时不抛错，回落到内置形式', () => {
+    const broken = { path: 'enable_thinking' } as unknown as ReasoningMap
+    expect(buildModelParams('openai', 'o3-mini', params({ reasoning: 'low', reasoningMap: broken }))).toEqual({
+      max_completion_tokens: 8192,
+      reasoning_effort: 'low'
+    })
+  })
+
+  it('映射路径命中保留字段时忽略映射，回落到内置形式', () => {
+    const map: ReasoningMap = { path: 'max_tokens', values: { low: '1' } }
+    expect(buildModelParams('openai', 'o3-mini', params({ reasoning: 'low', reasoningMap: map }))).toEqual({
+      max_completion_tokens: 8192,
+      reasoning_effort: 'low'
+    })
+  })
+
+  it('关闭推理时 Anthropic / Gemini 也能发映射里的「关」值', () => {
+    const off: ReasoningMap = { path: 'thinking.type', values: { off: 'disabled' } }
+    expect(buildModelParams('anthropic', 'claude-sonnet-4-5', params({ reasoningMap: off }))).toEqual({
+      max_tokens: 8192,
+      thinking: { type: 'disabled' }
+    })
+    const geminiOff: ReasoningMap = { path: 'generationConfig.thinkingConfig.thinkingBudget', values: { off: '0' } }
+    expect(buildModelParams('gemini', 'gemini-2.5-flash', params({ reasoningMap: geminiOff }))).toEqual({
+      generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } }
+    })
+  })
+
+  it('映射把输出上限改坏时，以用户设定的输出上限为准', () => {
+    const map: ReasoningMap = { path: 'generationConfig.maxOutputTokens', values: { high: '1' } }
+    expect(buildModelParams('gemini', 'gemini-2.5-pro', params({ reasoning: 'high', reasoningMap: map }))).toEqual({
+      generationConfig: { maxOutputTokens: 8192 }
+    })
   })
 })

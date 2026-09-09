@@ -470,15 +470,12 @@ export function SettingsPage(): React.ReactElement {
             <Field label="模型" hint="模型列表与逐模型能力改到「管理模型」里设置（拉取、勾选、手动添加、思考强度映射）">
               <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
                 <span className="text-muted">已配置 {editing.models.length} 个模型</span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => (editingId ? setManagingId(editingId) : setFormError('请先保存供应商，再管理模型'))}
-                >
+                <Button size="sm" variant="outline" onClick={() => setManagingId(editingId)} disabled={!editingId}>
                   <Settings2 size={13} /> 管理模型
                 </Button>
               </div>
             </Field>
+            {!editingId && <p className="text-[11px] leading-4 text-faint">先保存供应商，才能进入模型管理</p>}
 
             {formError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{formError}</div>}
 

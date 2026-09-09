@@ -61,4 +61,14 @@ describe('映射编辑', () => {
     expect(mappingWarning({ path: 'enable_thinking', values: { high: 'true' } })).toBeNull()
     expect(mappingWarning(undefined)).toBeNull()
   })
+
+  it('提示保留字段与协议不匹配的路径', () => {
+    expect(mappingWarning({ path: 'model', values: {} })).toBe('「model」是请求体保留字段，不能映射')
+    expect(mappingWarning({ path: 'thinking.type', values: {} }, 'gemini')).toBe('Gemini 的参数需以 generationConfig. 开头')
+    expect(mappingWarning({ path: 'reasoning_effort', values: {} }, 'anthropic')).toBe(
+      'Anthropic 只认 thinking，请直接映射 thinking 并填完整 JSON 对象'
+    )
+    expect(mappingWarning({ path: 'thinking', values: {} }, 'anthropic')).toBeNull()
+    expect(mappingWarning({ path: 'generationConfig.thinkingConfig.thinkingBudget', values: {} }, 'gemini')).toBeNull()
+  })
 })

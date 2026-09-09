@@ -1,7 +1,7 @@
 /** 把「模型档案 + 用户覆盖」翻译成各协议的请求体片段。 */
 import type { Protocol, ReasoningLevel } from '../../shared/types'
 import { profileForModel, type ResolvedModelSettings } from './modelCatalog'
-import { parseReasoningValue, setByPath } from './reasoningMap'
+import { isWritableReasoningPath, parseReasoningValue, setByPath } from './reasoningMap'
 
 const BUDGETS: Record<Exclude<ReasoningLevel, 'off'>, number> = { low: 2048, medium: 8192, high: 16384 }
 
@@ -21,9 +21,11 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
   // 用户明确表态优先；未表态时回落到档案
   const support = params.reasoningSupport ?? profile.reasoning
 
-  // 映射优先：用户填了当前等级的值就用它，并跳过协议内置推理参数
-  const mappedPath = support ? params.reasoningMap?.path?.trim() : undefined
-  const mappedValue = mappedPath ? parseReasoningValue(params.reasoningMap?.values[params.reasoning]) : undefined
+  // 映射优先：用户填了当前等级的值就用它，并跳过协议内置推理参数。
+  // 只有用户明确关闭（false）时才连同映射一起禁用；未表态时映射本身即用户意图。
+  const rawPath = params.reasoningSupport === false ? undefined : params.reasoningMap?.path?.trim()
+  const mappedPath = rawPath && isWritableReasoningPath(rawPath) ? rawPath : undefined
+  const mappedValue = mappedPath ? parseReasoningValue(params.reasoningMap?.values?.[params.reasoning]) : undefined
   const useMap = Boolean(mappedPath) && mappedValue !== undefined
 
   const budget = support && !useMap ? reasoningBudget(params.reasoning, params.maxOutputTokens) : 0
@@ -38,6 +40,14 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
 
   if (useMap) {
     setByPath(body, mappedPath as string, mappedValue)
+    // 输出上限始终以用户设置为准，避免映射路径把它改坏
+    if (protocol === 'anthropic') {
+      body.max_tokens = params.maxOutputTokens
+    } else if (protocol === 'gemini') {
+      ;(body.generationConfig as Record<string, unknown>).maxOutputTokens = params.maxOutputTokens
+    } else {
+      body[profile.openaiOutputParam] = params.maxOutputTokens
+    }
   } else if (reasoningOn) {
     if (protocol === 'anthropic') {
       body.thinking = { type: 'enabled', budget_tokens: budget }

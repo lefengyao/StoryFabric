@@ -1,6 +1,7 @@
 /** 模型能力与模型清单的纯逻辑（UI 用，无副作用）。 */
-import type { ModelSettings, ReasoningLevel, ReasoningMap } from '../../../shared/types'
+import type { ModelSettings, Protocol, ReasoningLevel, ReasoningMap } from '../../../shared/types'
 import { profileForModel } from '../../../core/llm/modelCatalog'
+import { RESERVED_REASONING_KEYS } from '../../../core/llm/reasoningMap'
 
 /** 用户声明优先，缺省回落到内置档案。 */
 export function resolveCapability(model: string, settings?: ModelSettings): { reasoning: boolean; vision: boolean } {
@@ -61,12 +62,16 @@ export function setMappingValue(map: ReasoningMap | undefined, level: ReasoningL
   return { path: map?.path ?? '', values }
 }
 
-/** 返回提示文案；null 表示没有问题。 */
-export function mappingWarning(map?: ReasoningMap): string | null {
+/** 返回提示文案；null 表示没有问题。protocol 用于提示该协议的可用参数形式。 */
+export function mappingWarning(map?: ReasoningMap, protocol?: Protocol): string | null {
   if (!map) return null
   const path = map.path.trim()
   const hasValue = Object.values(map.values).some((v) => Boolean(v && v.trim()))
   if (!path) return hasValue ? '请先填写官方参数名' : null
   if (/\s/.test(path)) return '参数名里不能有空格'
+  const reserved = path.split('.').map((s) => s.trim()).find((s) => RESERVED_REASONING_KEYS.has(s))
+  if (reserved) return `「${reserved}」是请求体保留字段，不能映射`
+  if (protocol === 'gemini' && !path.startsWith('generationConfig.')) return 'Gemini 的参数需以 generationConfig. 开头'
+  if (protocol === 'anthropic' && !path.startsWith('thinking')) return 'Anthropic 只认 thinking，请直接映射 thinking 并填完整 JSON 对象'
   return null
 }

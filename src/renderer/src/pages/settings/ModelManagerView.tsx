@@ -110,6 +110,19 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
   const pending = fetched ? pendingModels(models, fetched) : []
   const visible = filterModels(models, query)
 
+  const mappingPlaceholder =
+    provider.protocol === 'gemini'
+      ? 'generationConfig.thinkingConfig.thinkingBudget'
+      : provider.protocol === 'anthropic'
+        ? 'thinking'
+        : 'reasoning_effort / enable_thinking / thinking.type'
+  const mappingHint =
+    provider.protocol === 'anthropic'
+      ? 'Anthropic 只认 thinking：值请写成完整 JSON 对象，如 {"type":"enabled","budget_tokens":4096}。'
+      : provider.protocol === 'gemini'
+        ? 'Gemini 的参数必须写在 generationConfig 下，如 generationConfig.thinkingConfig.thinkingBudget。'
+        : '填了就以这里的参数为准（不再附加内置推理参数）；参数名用点号表示层级，值支持数字 / true / false / 字符串。'
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <div className="flex items-center gap-2">
@@ -211,7 +224,7 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
           const current = modelSettings[model] ?? {}
           const capability = resolveCapability(model, current)
           const open = expanded === model
-          const warning = mappingWarning(current.reasoningMap)
+          const warning = mappingWarning(current.reasoningMap, provider.protocol)
           return (
             <div key={model} className="rounded-md bg-app">
               <div className="flex items-center gap-2 px-2 py-1.5">
@@ -272,15 +285,12 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
                         </select>
                       </Field>
 
-                      <Field
-                        label="官方思考强度映射"
-                        hint="填了就以这里的参数为准（不再附加内置推理参数）；参数名用点号表示层级，值支持数字 / true / false / 字符串。Gemini 请以 generationConfig. 开头，Anthropic 可直接填 thinking 并写完整 JSON 对象。"
-                      >
+                      <Field label="官方思考强度映射" hint={mappingHint}>
                         <div className="space-y-2">
                           <Input
                             value={current.reasoningMap?.path ?? ''}
                             onChange={(e) => patch(model, { reasoningMap: setMappingPath(current.reasoningMap, e.target.value) })}
-                            placeholder="reasoning_effort / thinking.type / generationConfig.thinkingConfig.thinkingBudget"
+                            placeholder={mappingPlaceholder}
                           />
                           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                             {LEVELS.map((level) => (

@@ -267,7 +267,7 @@ export function ChatPage(): React.ReactElement {
               {providerOptions.map((p) => (
                 <optgroup key={p.id} label={p.name}>
                   {p.models.map((m) => {
-                    const capability = resolveCapability(m, p.modelSettings[m])
+                    const capability = resolveCapability(m, p.modelSettings?.[m])
                     const suffix = [capability.reasoning ? '思考' : '', capability.vision ? '图片' : ''].filter(Boolean).join(' · ')
                     return (
                       <option key={m} value={`${p.id}::${m}`}>
