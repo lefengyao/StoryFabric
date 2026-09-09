@@ -6,9 +6,10 @@ import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
+import { EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS } from '../../lib/editorStyle'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
-import type { Protocol, ProviderInput, ProviderPublic } from '../../../../shared/types'
+import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
@@ -242,6 +243,18 @@ export function SettingsPage(): React.ReactElement {
                     placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
                   />
                 </Field>
+                <Field label="自动保存" hint="编辑章节时，停止输入后按此间隔自动保存；若检测到外部修改仍会先征求确认">
+                  <select
+                    value={settings.autosaveSeconds}
+                    onChange={(e) => void update({ autosaveSeconds: Number(e.target.value) })}
+                    className="set-select max-w-48"
+                  >
+                    <option value={0}>关闭</option>
+                    <option value={5}>空闲 5 秒</option>
+                    <option value={15}>空闲 15 秒</option>
+                    <option value={30}>空闲 30 秒</option>
+                  </select>
+                </Field>
                 <label className="flex items-center gap-2.5 text-sm">
                   <input
                     type="checkbox"
@@ -329,6 +342,76 @@ export function SettingsPage(): React.ReactElement {
                       ))}
                     </div>
                   </div>
+                </Card>
+              </section>
+
+              <section>
+                <h2 className="mb-3 text-sm font-semibold">编辑器</h2>
+                <Card className="space-y-4 p-4">
+                  <Field label="正文字号">
+                    <select
+                      value={settings.editorFontSize}
+                      onChange={(e) => void update({ editorFontSize: Number(e.target.value) })}
+                      className="set-select max-w-32"
+                    >
+                      {EDITOR_FONT_SIZES.map((size) => (
+                        <option key={size} value={size}>
+                          {size}px
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="行距">
+                    <select
+                      value={settings.editorLineHeight}
+                      onChange={(e) => void update({ editorLineHeight: Number(e.target.value) })}
+                      className="set-select max-w-32"
+                    >
+                      {EDITOR_LINE_HEIGHTS.map((lineHeight) => (
+                        <option key={lineHeight} value={lineHeight}>
+                          {lineHeight}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="字体">
+                    <select
+                      value={settings.editorFontFamily}
+                      onChange={(e) => void update({ editorFontFamily: e.target.value as EditorFontFamily })}
+                      className="set-select max-w-48"
+                    >
+                      <option value="sans">系统默认</option>
+                      <option value="serif">衬线（宋体）</option>
+                      <option value="mono">等宽</option>
+                    </select>
+                  </Field>
+                </Card>
+              </section>
+
+              <section>
+                <h2 className="mb-3 text-sm font-semibold">聊天</h2>
+                <Card className="space-y-4 p-4">
+                  <Field label="消息气泡密度">
+                    <select
+                      value={settings.chatDensity}
+                      onChange={(e) => void update({ chatDensity: e.target.value as ChatDensity })}
+                      className="set-select max-w-48"
+                    >
+                      <option value="compact">紧凑</option>
+                      <option value="comfortable">舒适</option>
+                      <option value="spacious">宽松</option>
+                    </select>
+                  </Field>
+                  <Field label="发送快捷键">
+                    <select
+                      value={settings.sendShortcut}
+                      onChange={(e) => void update({ sendShortcut: e.target.value as SendShortcut })}
+                      className="set-select max-w-64"
+                    >
+                      <option value="enter">Enter 发送（Shift+Enter 换行）</option>
+                      <option value="mod+enter">Ctrl/⌘+Enter 发送（Enter 换行）</option>
+                    </select>
+                  </Field>
                 </Card>
               </section>
             </>
