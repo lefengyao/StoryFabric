@@ -1,6 +1,7 @@
 /** Anthropic Messages 原生协议适配器 */
 import type { ChatMessage, ToolDefJson } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
+import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -58,11 +59,13 @@ export class AnthropicAdapter implements LlmAdapter {
   }
 
   async stream(model: string, req: StreamRequest, apiKey: string, handlers: StreamHandlers): Promise<StreamResult> {
+    const modelParams = req.params ? buildModelParams('anthropic', model, req.params) : {}
     const body: any = {
       model,
-      max_tokens: DEFAULT_MAX_TOKENS,
+      max_tokens: (modelParams.max_tokens as number | undefined) ?? DEFAULT_MAX_TOKENS,
       stream: true,
-      messages: toAnthropicMessages(req.messages)
+      messages: toAnthropicMessages(req.messages),
+      ...(modelParams.thinking ? { thinking: modelParams.thinking } : {})
     }
     if (req.system) body.system = req.system
     if (req.tools.length) {

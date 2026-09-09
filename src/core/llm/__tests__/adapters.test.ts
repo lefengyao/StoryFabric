@@ -114,6 +114,29 @@ describe('OpenAICompatibleAdapter', () => {
     expect(bodies[1].stream_options).toBeUndefined()
     expect(result.text).toBe('ok')
   })
+
+  it('按模型参数发送输出上限与推理等级', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n'])
+      })
+    )
+
+    const adapter = new OpenAICompatibleAdapter('https://api.openai.com/v1')
+    await adapter.stream(
+      'o3-mini',
+      { system: '', messages: [], tools: [], signal: undefined, params: { reasoning: 'high', contextTokens: 400000, maxOutputTokens: 16384 } },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.max_completion_tokens).toBe(16384)
+    expect(capturedBody.reasoning_effort).toBe('high')
+    expect(capturedBody.max_tokens).toBeUndefined()
+  })
 })
 
 describe('AnthropicAdapter', () => {
@@ -155,6 +178,28 @@ describe('AnthropicAdapter', () => {
     const result = await adapter.stream('claude-x', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
 
     expect(result.usage).toEqual({ promptTokens: 200, completionTokens: 45, cachedTokens: 150, cacheWriteTokens: 20 })
+  })
+
+  it('按模型参数发送 thinking 预算', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: {"type":"message_stop"}\n\n'])
+      })
+    )
+
+    const adapter = new AnthropicAdapter('https://api.anthropic.com')
+    await adapter.stream(
+      'claude-sonnet-4-5',
+      { system: '', messages: [], tools: [], signal: undefined, params: { reasoning: 'medium', contextTokens: 200000, maxOutputTokens: 8192 } },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.max_tokens).toBe(8192)
+    expect(capturedBody.thinking).toEqual({ type: 'enabled', budget_tokens: 7168 })
   })
 
   it('历史转换：连续 tool 结果合并进同一 user 轮', () => {
@@ -240,6 +285,27 @@ describe('GeminiAdapter', () => {
     const result = await adapter.stream('gemini-2.0-flash', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
 
     expect(result.usage).toEqual({ promptTokens: 300, completionTokens: 50, cachedTokens: 0, cacheWriteTokens: 0 })
+  })
+
+  it('按模型参数发送 generationConfig', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: {"candidates":[{"content":{"parts":[{"text":"好"}]}}]}\n\n'])
+      })
+    )
+
+    const adapter = new GeminiAdapter('https://generativelanguage.googleapis.com')
+    await adapter.stream(
+      'gemini-2.5-pro',
+      { system: '', messages: [], tools: [], signal: undefined, params: { reasoning: 'low', contextTokens: 1048576, maxOutputTokens: 16384 } },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.generationConfig).toEqual({ maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: 2048 } })
   })
 
   it('工具结果转为 functionResponse', () => {

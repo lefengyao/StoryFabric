@@ -1,5 +1,5 @@
 /** LLM 协议适配层公共类型 */
-import type { ChatMessage, Protocol, ToolCallData, ToolDefJson } from '../../shared/types'
+import type { ChatMessage, Protocol, ReasoningLevel, ToolCallData, ToolDefJson } from '../../shared/types'
 
 export interface StreamRequest {
   /** 系统提示词（各协议自行放到正确位置） */
@@ -8,6 +8,14 @@ export interface StreamRequest {
   messages: ChatMessage[]
   tools: ToolDefJson[]
   signal?: AbortSignal
+  /** 该模型的参数（平台层按供应商设置解析后注入；缺省时用协议默认值） */
+  params?: ModelParams
+}
+
+export interface ModelParams {
+  reasoning: ReasoningLevel
+  contextTokens: number
+  maxOutputTokens: number
 }
 
 export interface StreamResult {

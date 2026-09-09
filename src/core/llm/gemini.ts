@@ -1,6 +1,7 @@
 /** Google Gemini 原生协议适配器 */
 import type { ChatMessage } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
+import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -58,6 +59,10 @@ export class GeminiAdapter implements LlmAdapter {
     const url = `${this.apiBase()}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
     const body: any = {
       contents: toGeminiContents(req.messages)
+    }
+    if (req.params) {
+      const modelParams = buildModelParams('gemini', model, req.params)
+      if (modelParams.generationConfig) body.generationConfig = modelParams.generationConfig
     }
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] }
     if (req.tools.length) {

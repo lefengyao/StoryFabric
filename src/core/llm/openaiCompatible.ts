@@ -1,6 +1,7 @@
 /** OpenAI 兼容协议适配器（覆盖 OpenAI / DeepSeek / Kimi / 智谱 / 各类中转站 / Ollama 等） */
 import type { ChatMessage, ToolDefJson } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
+import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -47,7 +48,8 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
     const body: any = {
       model,
       stream: true,
-      messages: toOpenAiMessages(req.system, req.messages)
+      messages: toOpenAiMessages(req.system, req.messages),
+      ...(req.params ? buildModelParams('openai', model, req.params) : {})
     }
     if (req.tools.length) body.tools = toOpenAiTools(req.tools)
 
