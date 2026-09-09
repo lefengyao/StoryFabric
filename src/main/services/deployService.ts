@@ -87,7 +87,8 @@ export class DeployService {
       return {
         fingerprint,
         probe,
-        fingerprintChanged: Boolean(saved?.hostKeyFingerprint && saved.hostKeyFingerprint !== fingerprint)
+        fingerprintChanged: Boolean(saved?.hostKeyFingerprint && saved.hostKeyFingerprint !== fingerprint),
+        bundleVersion: this.options.version
       }
     } finally {
       await transport.dispose()

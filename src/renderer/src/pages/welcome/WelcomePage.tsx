@@ -1,8 +1,9 @@
-import { BookOpen, FolderOpen, FolderPlus, History } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { BookOpen, FolderOpen, FolderPlus, History, Server } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { AppLogo } from '../../components/icons/AppLogo'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
+import { DeployWizard } from './DeployWizard'
 import { api } from '../../lib/api'
 import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
@@ -10,6 +11,7 @@ import { getLocalPlatformApi, getPlatformApi, isWebPlatform } from '../../platfo
 import { HttpPlatformApi } from '../../platform/httpApi'
 import { installPlatformApi } from '../../platform/platformApi'
 import { loginRemote } from '../../platform/webAuth'
+import type { DeployTargetPublic } from '../../../../shared/types'
 
 export function WelcomePage(): React.ReactElement {
   const open = useWorkspace((s) => s.open)
@@ -27,9 +29,94 @@ export function WelcomePage(): React.ReactElement {
   const [serviceUrl, setServiceUrl] = useState('')
   const [serviceKey, setServiceKey] = useState('')
   const [serviceError, setServiceError] = useState<string | null>(null)
+  const [deployOpen, setDeployOpen] = useState(false)
+  const [targets, setTargets] = useState<DeployTargetPublic[]>([])
+  const [targetNotice, setTargetNotice] = useState<Record<string, string>>({})
+  const [targetBusy, setTargetBusy] = useState<string | null>(null)
+  const [logs, setLogs] = useState<{ title: string; text: string } | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const localApiRef = useRef<import('../../../../shared/api').StoryFabricApi | null>(null)
   if (!localApiRef.current && !isWeb) localApiRef.current = getLocalPlatformApi()
+
+  const reloadTargets = async (): Promise<void> => {
+    try {
+      setTargets(await api.deployListTargets())
+    } catch {
+      // 非桌面端不支持远程部署，静默忽略
+      setTargets([])
+    }
+  }
+
+  useEffect(() => {
+    void reloadTargets()
+  }, [])
+
+  const checkUpdate = async (target: DeployTargetPublic): Promise<void> => {
+    setTargetBusy(target.id)
+    setTargetNotice((prev) => ({ ...prev, [target.id]: '检查中…' }))
+    try {
+      const result = await api.deployTestConnection({
+        targetId: target.id,
+        host: target.host,
+        port: target.port,
+        username: target.username
+      })
+      const installed = result.probe.installedImage?.split(':')[1]
+      setTargetNotice((prev) => ({
+        ...prev,
+        [target.id]:
+          installed === result.bundleVersion
+            ? `已是最新（${result.bundleVersion}）`
+            : `有新版本可更新：${installed ?? '未知'} → ${result.bundleVersion}`
+      }))
+    } catch (err) {
+      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setTargetBusy(null)
+    }
+  }
+
+  const runUpdate = async (target: DeployTargetPublic): Promise<void> => {
+    setTargetBusy(target.id)
+    setTargetNotice((prev) => ({ ...prev, [target.id]: '更新中…' }))
+    try {
+      const result = await api.deployUpdate(target.id)
+      setTargetNotice((prev) => ({
+        ...prev,
+        [target.id]: result.ok ? `已更新到 ${result.version}` : result.error ?? '更新失败'
+      }))
+      await reloadTargets()
+    } catch (err) {
+      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setTargetBusy(null)
+    }
+  }
+
+  const showLogs = async (target: DeployTargetPublic): Promise<void> => {
+    setTargetBusy(target.id)
+    try {
+      setLogs({ title: `${target.label} · 容器日志`, text: await api.deployLogs(target.id) })
+    } catch (err) {
+      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setTargetBusy(null)
+    }
+  }
+
+  const removeTarget = async (target: DeployTargetPublic): Promise<void> => {
+    if (!window.confirm(`卸载 ${target.label} 上的 StoryFabric？\n容器与镜像会被删除，数据目录 ${target.installDir}/data 会保留。`)) return
+    setTargetBusy(target.id)
+    try {
+      await api.deployUninstall(target.id)
+      await api.deployDeleteTarget(target.id)
+      await reloadTargets()
+    } catch (err) {
+      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setTargetBusy(null)
+    }
+  }
 
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
@@ -134,6 +221,21 @@ export function WelcomePage(): React.ReactElement {
 
   const recent = settings?.recentWorkspaces ?? []
 
+  if (deployOpen) {
+    return (
+      <DeployWizard
+        onClose={() => setDeployOpen(false)}
+        onDone={({ url, accessKey }) => {
+          setMode('remote')
+          setServiceUrl(url)
+          setServiceKey(accessKey)
+          setDeployOpen(false)
+          void reloadTargets()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
       <div className="w-full max-w-xl">
@@ -157,6 +259,11 @@ export function WelcomePage(): React.ReactElement {
             <div className="mb-4 space-y-2">
               <Input value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" />
               <Input type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" />
+              {!isAndroid && (
+                <Button size="sm" variant="outline" onClick={() => setDeployOpen(true)}>
+                  <Server size={13} /> 安装到服务器
+                </Button>
+              )}
               {serviceError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
             </div>
           )}
@@ -170,6 +277,45 @@ export function WelcomePage(): React.ReactElement {
           </div>
 
           {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
+
+          {mode === 'remote' && !isWeb && targets.length > 0 && (
+            <div className="mt-5 space-y-2">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted">
+                <Server size={13} /> 已部署的服务器
+              </div>
+              {targets.map((target) => (
+                <div key={target.id} className="rounded-lg border border-line p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{target.label}</span>
+                    <span className="shrink-0 text-xs text-faint">
+                      {target.host}:{target.servicePort} · {target.installedVersion ?? '未知版本'}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <Button size="sm" variant="ghost" loading={targetBusy === target.id} onClick={() => void checkUpdate(target)}>
+                      检查更新
+                    </Button>
+                    <Button size="sm" variant="soft" loading={targetBusy === target.id} onClick={() => void runUpdate(target)}>
+                      更新
+                    </Button>
+                    <Button size="sm" variant="ghost" loading={targetBusy === target.id} onClick={() => void showLogs(target)}>
+                      查看日志
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger hover:text-danger"
+                      loading={targetBusy === target.id}
+                      onClick={() => void removeTarget(target)}
+                    >
+                      卸载
+                    </Button>
+                  </div>
+                  {targetNotice[target.id] && <p className="mt-2 text-[11px] text-muted">{targetNotice[target.id]}</p>}
+                </div>
+              ))}
+            </div>
+          )}
 
           {mode === 'local' && recent.length > 0 && (
             <div className="mt-5">
@@ -221,6 +367,10 @@ export function WelcomePage(): React.ReactElement {
             ))}
           </div>
         )}
+      </Modal>
+
+      <Modal open={Boolean(logs)} onOpenChange={() => setLogs(null)} title={logs?.title ?? '容器日志'}>
+        <pre className="max-h-80 overflow-auto rounded-lg bg-app p-2 text-[11px] leading-4">{logs?.text || '（空）'}</pre>
       </Modal>
 
       <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={mode === 'remote' ? '将在当前服务的数据目录内创建一个新的托管工作区' : isAndroid ? '工作区将保存在应用内部，可通过 ZIP 导入/导出' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>

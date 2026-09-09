@@ -424,6 +424,8 @@ export interface DeployTestResult {
   probe: DeployProbeResult
   /** 已保存目标且指纹不一致 */
   fingerprintChanged: boolean
+  /** 本地部署包版本，用于和服务器上实际镜像比对 */
+  bundleVersion: string
 }
 
 export interface DeployOptions {
