@@ -190,7 +190,23 @@ export interface AppSettings {
   accentColorLight: string
   /** 深色主题的强调色基色（#rrggbb） */
   accentColorDark: string
+  /** 编辑器字号（px） */
+  editorFontSize: number
+  /** 编辑器行距 */
+  editorLineHeight: number
+  /** 编辑器字体 */
+  editorFontFamily: EditorFontFamily
+  /** 章节编辑器空闲自动保存间隔（秒）；0 = 关闭 */
+  autosaveSeconds: number
+  /** 聊天发送快捷键 */
+  sendShortcut: SendShortcut
+  /** 消息气泡密度 */
+  chatDensity: ChatDensity
 }
+
+export type EditorFontFamily = 'sans' | 'serif' | 'mono'
+export type SendShortcut = 'enter' | 'mod+enter'
+export type ChatDensity = 'compact' | 'comfortable' | 'spacious'
 
 /** 存储态：API Key 以 safeStorage 密文保存 */
 export interface ProviderStored {

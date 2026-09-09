@@ -40,7 +40,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showSessionLength: false,
   completionSound: false,
   accentColorLight: '#6366f1',
-  accentColorDark: '#818cf8'
+  accentColorDark: '#818cf8',
+  editorFontSize: 14,
+  editorLineHeight: 1.75,
+  editorFontFamily: 'sans',
+  autosaveSeconds: 0,
+  sendShortcut: 'enter',
+  chatDensity: 'comfortable'
 }
 
 const PLAIN_PREFIX = 'plain:'

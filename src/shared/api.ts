@@ -43,6 +43,12 @@ export type SettingsPatch = Partial<
     | 'completionSound'
     | 'accentColorLight'
     | 'accentColorDark'
+    | 'editorFontSize'
+    | 'editorLineHeight'
+    | 'editorFontFamily'
+    | 'autosaveSeconds'
+    | 'sendShortcut'
+    | 'chatDensity'
   >
 >
 

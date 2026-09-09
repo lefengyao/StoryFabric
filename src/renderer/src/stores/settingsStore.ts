@@ -3,6 +3,7 @@ import type { PublicAppSettings } from '../../../shared/types'
 import type { SettingsPatch } from '../../../shared/api'
 import { getPlatformApi } from '../platform/platformApi'
 import { accentStyle } from '../lib/accent'
+import { editorStyle } from '../lib/editorStyle'
 
 interface SettingsState {
   settings: PublicAppSettings | null
@@ -34,6 +35,15 @@ function applyAccent(settings: Pick<PublicAppSettings, 'accentColorLight' | 'acc
 function applyAppearance(settings: PublicAppSettings | null): void {
   applyTheme(settings?.theme)
   applyAccent(settings)
+  applyEditor(settings)
+}
+
+const EDITOR_VARS = ['--editor-font-size', '--editor-line-height', '--editor-font']
+
+/** 编辑器字号/行距/字体：写成 CSS 变量，由 index.css 的 .cm-scroller 消费。 */
+function applyEditor(settings: PublicAppSettings | null): void {
+  const style = editorStyle(settings ?? {})
+  for (const key of EDITOR_VARS) document.documentElement.style.setProperty(key, style[key])
 }
 
 export const useSettings = create<SettingsState>((set) => ({

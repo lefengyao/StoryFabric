@@ -29,7 +29,13 @@ const DEFAULT_PUBLIC: PublicAppSettings = {
   showSessionLength: false,
   completionSound: false,
   accentColorLight: '#6366f1',
-  accentColorDark: '#818cf8'
+  accentColorDark: '#818cf8',
+  editorFontSize: 14,
+  editorLineHeight: 1.75,
+  editorFontFamily: 'sans',
+  autosaveSeconds: 0,
+  sendShortcut: 'enter',
+  chatDensity: 'comfortable'
 }
 
 /** Android 平台 API：应用私有目录工作区，密钥使用 Android Keystore-backed secure storage。 */

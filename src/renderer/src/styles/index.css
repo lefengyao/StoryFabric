@@ -225,8 +225,9 @@ body {
   outline: none !important;
 }
 .cm-scroller {
-  font-family: var(--font-sans) !important;
-  line-height: 1.75 !important;
+  font-family: var(--editor-font, var(--font-sans)) !important;
+  font-size: var(--editor-font-size, 14px);
+  line-height: var(--editor-line-height, 1.75) !important;
 }
 
 /* 手机端底部导航需要和 Android 系统导航区明确分层，避免误触返回/主页。 */
