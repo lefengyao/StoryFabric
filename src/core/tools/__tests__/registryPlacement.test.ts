@@ -3,20 +3,28 @@ import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
 import { listChapters, listNotes, listOutline, saveChapter, saveNote, serializeNote } from '../../workspace/entityStore'
 import { listTrash } from '../../workspace/trash'
-import { executeTool, TOOL_DEFS } from '../registry'
+import { executeTool, TOOL_DEFS, type ToolOutcome } from '../registry'
+
+type ToolResult = Extract<ToolOutcome, { kind: 'result' }>
+
+/** `expect(...).toBe(...)` 不是类型守卫，这里显式收窄联合类型后再断言字段。 */
+function expectResult(outcome: ToolOutcome): ToolResult {
+  if (outcome.kind !== 'result') throw new Error(`expected a result outcome, received ${outcome.kind}`)
+  return outcome
+}
 
 describe('agent placement guardrails', () => {
   it('does not silently put an unspecified chapter write in the main box', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '测试')
 
-    const rejected = await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '草稿章', status: 'draft' } }))
+    const rejected = expectResult(await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '草稿章', status: 'draft' } })))
     expect(rejected.kind).toBe('result')
     expect(rejected.ok).toBe(false)
     expect(rejected.text).toContain('box')
     expect(await listChapters(store)).toHaveLength(0)
 
-    const invalidVolume = await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '错误卷章', box: 'main', volumeId: 'vol_missing' } }))
+    const invalidVolume = expectResult(await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '错误卷章', box: 'main', volumeId: 'vol_missing' } })))
     expect(invalidVolume.kind).toBe('result')
     expect(invalidVolume.ok).toBe(false)
     expect(invalidVolume.text).toContain('目标卷')
@@ -32,12 +40,12 @@ describe('agent placement guardrails', () => {
     await initializeWorkspace(store, '测试')
     const chapter = await saveChapter(store, { title: '目标章', box: 'draft', content: '正文' })
 
-    const rejected = await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '目标章章纲' } }))
+    const rejected = expectResult(await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '目标章章纲' } })))
     expect(rejected.kind).toBe('result')
     expect(rejected.ok).toBe(false)
     expect(rejected.text).toContain('kind')
 
-    const invalidChapter = await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '不存在的章纲', kind: 'chapter', chapterId: 'cha_missing' } }))
+    const invalidChapter = expectResult(await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '不存在的章纲', kind: 'chapter', chapterId: 'cha_missing' } })))
     expect(invalidChapter.kind).toBe('result')
     expect(invalidChapter.ok).toBe(false)
     expect(invalidChapter.text).toContain('未找到章纲关联的章节')
@@ -54,12 +62,12 @@ describe('agent placement guardrails', () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '测试')
 
-    const missingId = await executeTool(store, 'delete_note', JSON.stringify({}))
+    const missingId = expectResult(await executeTool(store, 'delete_note', JSON.stringify({})))
     expect(missingId.kind).toBe('result')
     expect(missingId.ok).toBe(false)
     expect(missingId.text).toContain('noteId')
 
-    const unknownId = await executeTool(store, 'delete_note', JSON.stringify({ noteId: 'note_missing' }))
+    const unknownId = expectResult(await executeTool(store, 'delete_note', JSON.stringify({ noteId: 'note_missing' })))
     expect(unknownId.kind).toBe('result')
     expect(unknownId.ok).toBe(false)
     expect(unknownId.text).toContain('未找到便签')
@@ -71,7 +79,7 @@ describe('agent placement guardrails', () => {
     await initializeWorkspace(store, '测试')
 
     for (const noteId of ['', '   ']) {
-      const rejected = await executeTool(store, 'delete_note', JSON.stringify({ noteId }))
+      const rejected = expectResult(await executeTool(store, 'delete_note', JSON.stringify({ noteId })))
       expect(rejected.kind).toBe('result')
       expect(rejected.ok).toBe(false)
       expect(rejected.text).toContain('有效 noteId')
