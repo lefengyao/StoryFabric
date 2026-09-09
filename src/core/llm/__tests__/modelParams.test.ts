@@ -16,6 +16,11 @@ describe('reasoningBudget', () => {
     expect(reasoningBudget('high', 4096)).toBe(3072)
     expect(reasoningBudget('off', 8192)).toBe(0)
   })
+
+  it('输出上限过小时返回 0，避免 max_tokens 不大于 budget_tokens', () => {
+    expect(reasoningBudget('high', 1024)).toBe(0)
+    expect(reasoningBudget('high', 2048)).toBe(1024)
+  })
 })
 
 describe('buildModelParams', () => {
@@ -42,6 +47,12 @@ describe('buildModelParams', () => {
   it('Anthropic 的输出上限优先于推理预算', () => {
     const built = buildModelParams('anthropic', 'claude-sonnet-4-5', params({ reasoning: 'high', maxOutputTokens: 4096 }))
     expect(built).toEqual({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 3072 } })
+  })
+
+  it('输出上限不足以容纳推理预算时不发送 thinking', () => {
+    expect(buildModelParams('anthropic', 'claude-sonnet-4-5', params({ reasoning: 'high', maxOutputTokens: 1024 }))).toEqual({
+      max_tokens: 1024
+    })
   })
 
   it('Gemini 走 generationConfig，关闭推理时 thinkingBudget 为 0', () => {
