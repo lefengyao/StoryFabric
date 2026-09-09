@@ -93,4 +93,50 @@ describe('desktop tool registry parity', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('reports the same relationship title and error text as core', async () => {
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '测试')
+    const root = await mkdtemp(join(tmpdir(), 'sf-parity-'))
+    try {
+      await initializeWorkspace(new NodeFileStore(root), '测试')
+
+      const coreFrom = await saveCharacter(memory, { name: '甲' })
+      const coreTo = await saveCharacter(memory, { name: '乙' })
+      const mainFrom = await saveCharacter(new NodeFileStore(root), { name: '甲' })
+      const mainTo = await saveCharacter(new NodeFileStore(root), { name: '乙' })
+
+      const withType = { relationship: { fromCharacterId: coreFrom.id, toCharacterId: coreTo.id, type: '朋友' } }
+      const coreRel = await executeCoreTool(memory, 'save_relationship', JSON.stringify(withType))
+      const mainRel = await executeMainTool(
+        root,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: mainFrom.id, toCharacterId: mainTo.id, type: '朋友' } })
+      )
+      if (coreRel.kind !== 'pending' || mainRel.kind !== 'pending') throw new Error('未生成待确认关系变更')
+      expect(mainRel.change.title).toBe(coreRel.change.title)
+
+      const emptyType = await executeCoreTool(
+        memory,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: coreFrom.id, toCharacterId: coreTo.id, type: '' } })
+      )
+      if (emptyType.kind !== 'pending') throw new Error('空类型未生成待确认关系变更')
+      expect(emptyType.change.title).toBe('新增关系：甲 → 乙')
+
+      const coreErr = await executeCoreTool(
+        memory,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: 'char_missing', toCharacterId: coreTo.id, type: '朋友' } })
+      )
+      const mainErr = await executeMainTool(
+        root,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: 'char_missing', toCharacterId: mainTo.id, type: '朋友' } })
+      )
+      expect(mainErr).toEqual(coreErr)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })

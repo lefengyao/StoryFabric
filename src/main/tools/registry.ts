@@ -591,7 +591,7 @@ async function simulateRelationship(
     entityId: 'relationships',
     beforeText: serializeRelationships(oldList, nameOf),
     afterText: serializeRelationships(newList, nameOf),
-    title: `新增关系：${from.name} → ${to.name}【${input.type}】`,
+    title: `新增关系：${from.name} → ${to.name}${input.type ? `【${input.type}】` : ''}`,
     commit: async () => {
       await saveRelationships(root, newList)
       return `已保存关系：${from.name} ⇄ ${to.name}`
