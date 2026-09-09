@@ -32,7 +32,7 @@
 - Modify: `src/renderer/src/lib/utils.ts`
 - Modify: `src/renderer/src/components/chat/PendingChangeDialog.tsx`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 创建 `src/renderer/src/lib/__tests__/pendingChangeView.test.ts`：
 
@@ -86,12 +86,12 @@ describe('pendingChangeView', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/pendingChangeView.test.ts`
 Expected: FAIL —— `Failed to resolve import "../pendingChangeView"`。
 
-- [ ] **Step 3: 实现纯函数**
+- [x] **Step 3: 实现纯函数**
 
 创建 `src/renderer/src/lib/pendingChangeView.ts`：
 
@@ -122,7 +122,7 @@ export function pendingChangeView(change: PendingChange): PendingChangeView {
 }
 ```
 
-- [ ] **Step 4: 补齐实体标签**
+- [x] **Step 4: 补齐实体标签**
 
 修改 `src/renderer/src/lib/utils.ts` 的 `ENTITY_KIND_LABEL`：
 
@@ -138,12 +138,12 @@ export const ENTITY_KIND_LABEL: Record<string, string> = {
 }
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/pendingChangeView.test.ts`
 Expected: PASS（5 个用例）。
 
-- [ ] **Step 6: 让弹窗按 variant 渲染**
+- [x] **Step 6: 让弹窗按 variant 渲染**
 
 把 `src/renderer/src/components/chat/PendingChangeDialog.tsx` 整体替换为：
 
@@ -223,7 +223,7 @@ export function PendingChangeDialog({
 }
 ```
 
-- [ ] **Step 7: 类型检查与提交**
+- [x] **Step 7: 类型检查与提交**
 
 Run: `npx tsc -b --pretty false`
 Expected: exit 0。
@@ -240,7 +240,7 @@ git commit -m "fix(renderer): present note removal as an outcome instead of a di
 **Files:**
 - Create: `src/core/agent/__tests__/agentLoop.test.ts`
 
-- [ ] **Step 1: 写覆盖用例**
+- [x] **Step 1: 写覆盖用例**
 
 创建 `src/core/agent/__tests__/agentLoop.test.ts`：
 
@@ -370,12 +370,12 @@ describe('CoreAgentService', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试确认通过**
+- [x] **Step 2: 运行测试确认通过**
 
 Run: `npm test -- --run src/core/agent/__tests__/agentLoop.test.ts`
 Expected: PASS（6 个用例：1 读工具 + 2 删除路径 + 3 非法 noteId）。
 
-- [ ] **Step 3: 红绿验证（确认测试真的能捕获回归）**
+- [x] **Step 3: 红绿验证（确认测试真的能捕获回归）**
 
 临时把 `src/core/tools/registry.ts` 中 `delete_note` 的 `title` 改回 `移入回收站：${note.title}`：
 
@@ -384,7 +384,7 @@ Expected: FAIL —— 断言 `'移入回收站：待删除便签'` 与 `'删除�
 
 随后**必须**把该行改回 `删除便签：${note.title}` 并重跑，确认 PASS。
 
-- [ ] **Step 4: 类型检查与提交**
+- [x] **Step 4: 类型检查与提交**
 
 Run: `npx tsc -b --pretty false`
 Expected: exit 0。
@@ -402,7 +402,7 @@ git commit -m "test(core): cover shared agent loop note deletion paths"
 - Modify: `src/main/tools/registry.ts:684`
 - Modify: `src/main/tools/__tests__/registryParity.test.ts`
 
-- [ ] **Step 1: 写失败的 parity 测试**
+- [x] **Step 1: 写失败的 parity 测试**
 
 在 `src/main/tools/__tests__/registryParity.test.ts` 中，把 import 段替换为：
 
@@ -437,12 +437,12 @@ import { executeTool as executeMainTool, TOOL_DEFS as MAIN_TOOL_DEFS } from '../
   })
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `npm test -- --run src/main/tools/__tests__/registryParity.test.ts`
 Expected: FAIL —— `preview` 不一致：core 为 `工具执行失败：未找到便签：note_missing`，main 为 `未找到便签：note_missing`。
 
-- [ ] **Step 3: 对齐 main 的失败 preview**
+- [x] **Step 3: 对齐 main 的失败 preview**
 
 修改 `src/main/tools/registry.ts` 的 `writeTool` 兜底分支（第 684 行）：
 
@@ -450,12 +450,12 @@ Expected: FAIL —— `preview` 不一致：core 为 `工具执行失败：未�
     return { kind: 'result', ok: false, text: `工具执行失败：${msg}`, preview: clip(`工具执行失败：${msg}`) }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `npm test -- --run src/main/tools/__tests__/registryParity.test.ts`
 Expected: PASS（2 个用例）。
 
-- [ ] **Step 5: 全量验证与提交**
+- [x] **Step 5: 全量验证与提交**
 
 Run: `npm test -- --run`
 Expected: 27 个测试文件全部通过（在现有 25 个基础上新增 `pendingChangeView.test.ts` 与 `agentLoop.test.ts`）。
@@ -472,7 +472,7 @@ git commit -m "fix(main): align failure preview with core registry"
 
 ## Task 4: 收尾验证
 
-- [ ] **Step 1: 全量测试与类型检查**
+- [x] **Step 1: 全量测试与类型检查**
 
 Run: `npm test -- --run`
 Expected: 全部通过。
@@ -480,7 +480,7 @@ Expected: 全部通过。
 Run: `npx tsc -b --pretty false`
 Expected: exit 0。
 
-- [ ] **Step 2: 构建与工作树检查**
+- [x] **Step 2: 构建与工作树检查**
 
 Run: `npm run build`
 Expected: exit 0。
@@ -488,6 +488,6 @@ Expected: exit 0。
 Run: `git diff --check && git status --short`
 Expected: `git diff --check` 无输出；`git status` 仅剩用户复现文件 `examples/minimal-workspace` 下两个未跟踪路径。
 
-- [ ] **Step 3: 更新计划与断点文档**
+- [x] **Step 3: 更新计划与断点文档**
 
 在 `docs/superpowers/plans/2026-09-09-pending-change-presentation.md` 勾选已完成步骤，并新建 `docs/superpowers/checkpoints/2026-09-09-pending-change-presentation.md` 记录结果（`docs/` 按 `.gitignore` 不入库，仅本地留档）。
