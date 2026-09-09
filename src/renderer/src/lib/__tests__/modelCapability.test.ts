@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ReasoningMap } from '../../../../shared/types'
 import {
   addModels,
   filterModels,
@@ -70,5 +71,11 @@ describe('映射编辑', () => {
     )
     expect(mappingWarning({ path: 'thinking', values: {} }, 'anthropic')).toBeNull()
     expect(mappingWarning({ path: 'generationConfig.thinkingConfig.thinkingBudget', values: {} }, 'gemini')).toBeNull()
+  })
+
+  it('字段缺失的脏数据不抛错', () => {
+    expect(mappingWarning({} as ReasoningMap)).toBeNull()
+    expect(mappingWarning({ path: 'x' } as ReasoningMap)).toBeNull()
+    expect(mappingWarning({ values: { high: '1' } } as ReasoningMap)).toBe('请先填写官方参数名')
   })
 })

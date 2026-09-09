@@ -183,4 +183,11 @@ describe('buildModelParams', () => {
       generationConfig: { maxOutputTokens: 8192 }
     })
   })
+
+  it('映射把 generationConfig 整个换成标量时不抛错，重建输出上限', () => {
+    const map: ReasoningMap = { path: 'generationConfig', values: { high: '4096' } }
+    expect(buildModelParams('gemini', 'gemini-2.5-pro', params({ reasoning: 'high', reasoningMap: map }))).toEqual({
+      generationConfig: { maxOutputTokens: 8192 }
+    })
+  })
 })

@@ -71,7 +71,10 @@ export class AnthropicAdapter implements LlmAdapter {
       model,
       max_tokens: (modelParams.max_tokens as number | undefined) ?? DEFAULT_MAX_TOKENS,
       stream: true,
-      messages: toAnthropicMessages(req.messages, { replayThinking: Boolean(modelParams.thinking) }),
+      messages: toAnthropicMessages(req.messages, {
+        // 映射把 thinking 关掉（type: disabled）时不能回放思考块，Anthropic 会拒绝
+        replayThinking: Boolean(modelParams.thinking) && (modelParams.thinking as { type?: string }).type !== 'disabled'
+      }),
       ...(modelParams.thinking ? { thinking: modelParams.thinking } : {})
     }
     if (req.system) body.system = req.system

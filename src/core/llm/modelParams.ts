@@ -41,10 +41,16 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
   if (useMap) {
     setByPath(body, mappedPath as string, mappedValue)
     // 输出上限始终以用户设置为准，避免映射路径把它改坏
-    if (protocol === 'anthropic') {
+    if (protocol === 'gemini') {
+      const config = body.generationConfig
+      if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
+        ;(config as Record<string, unknown>).maxOutputTokens = params.maxOutputTokens
+      } else {
+        // 映射把 generationConfig 整个替换成了标量：重建它，保住输出上限
+        body.generationConfig = { maxOutputTokens: params.maxOutputTokens }
+      }
+    } else if (protocol === 'anthropic') {
       body.max_tokens = params.maxOutputTokens
-    } else if (protocol === 'gemini') {
-      ;(body.generationConfig as Record<string, unknown>).maxOutputTokens = params.maxOutputTokens
     } else {
       body[profile.openaiOutputParam] = params.maxOutputTokens
     }
