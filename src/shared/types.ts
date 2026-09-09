@@ -223,9 +223,23 @@ export interface ProviderStored {
 /** 推理等级：off 表示不发送推理参数 */
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high'
 
+/** 官方思考强度 → 本地等级的映射（用户自填，因无法可靠拉取） */
+export interface ReasoningMap {
+  /** 请求体里的参数路径，点号分隔：reasoning_effort / thinking.type / generationConfig.thinkingConfig.thinkingBudget */
+  path: string
+  /** 各等级对应的值（保留用户输入原文，发送时解析） */
+  values: Partial<Record<ReasoningLevel, string>>
+}
+
 /** 单个模型的参数覆盖 */
 export interface ModelSettings {
+  /** 是否支持拓展思考（缺省回落到内置档案） */
+  reasoningSupport?: boolean
+  /** 是否支持图片输入（缺省回落到内置档案） */
+  vision?: boolean
   reasoning?: ReasoningLevel
+  /** 官方思考强度映射；填了则优先于协议内置形式 */
+  reasoningMap?: ReasoningMap
   /** 该模型的上下文窗口（仅记录/展示，协议无此参数） */
   contextTokens?: number
   /** 单次回复输出上限 */
