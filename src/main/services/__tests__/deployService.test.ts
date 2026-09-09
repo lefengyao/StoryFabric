@@ -20,9 +20,11 @@ const linuxRules: FakeRule[] = [
   { match: 'docker image inspect', result: { code: 1, stdout: '', stderr: '' } },
   { match: 'docker build', result: { code: 0, stdout: 'Successfully tagged storyfabric:0.1.0\n', stderr: '' } },
   { match: 'openssl rand', result: { code: 0, stdout: '', stderr: '' } },
-  { match: "cat '/opt/storyfabric/secrets", result: { code: 0, stdout: 'test-access-key\n', stderr: '' } },
+  { match: 'secrets/storyfabric_key', result: { code: 0, stdout: 'test-access-key\n', stderr: '' } },
   { match: 'docker rm -f', result: { code: 0, stdout: 'storyfabric\n', stderr: '' } },
   { match: 'docker run -d', result: { code: 0, stdout: 'container-id\n', stderr: '' } },
+  { match: 'docker rmi', result: { code: 0, stdout: 'Deleted: sha256:abc\n', stderr: '' } },
+  { match: 'rm -rf', result: { code: 0, stdout: '', stderr: '' } },
   { match: 'mkdir -p', result: { code: 0, stdout: '', stderr: '' } },
   { match: 'tar -xzf', result: { code: 0, stdout: '', stderr: '' } }
 ]
@@ -125,14 +127,87 @@ describe('DeployService', () => {
       ...linuxRules.map((r) =>
         r.match === 'sudo -n true' ? { ...r, result: { code: 1, stdout: '', stderr: 'sudo: a password is required' } } : r
       ),
-      { match: 'sudo -S true', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } }
+      { match: 'sudo -S true', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } },
+      // 真实环境里 docker 探测本身也带 sudo，会一起失败
+      { match: 'sudo -S docker version', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } }
     ]
     await withService(async (service) => {
       const result = await service.install(target, () => {})
       expect(result.ok).toBe(false)
       expect(result.failedStep).toBe('probe')
       expect(result.error).toContain('sudo')
+      expect(result.error).not.toContain('未安装 Docker')
     }, rules)
+  })
+
+  it('重装同一台服务器时新端口与安装目录会落盘', async () => {
+    await withService(async (service, store) => {
+      const first = await service.install(target, () => {})
+      expect(first.ok).toBe(true)
+      const [saved] = await store.list()
+      const second = await service.install({ ...target, id: saved.id, servicePort: 9000, installDir: '/srv/sf' }, () => {})
+      expect(second.ok).toBe(true)
+      const [updated] = await store.list()
+      expect(updated.servicePort).toBe(9000)
+      expect(updated.installDir).toBe('/srv/sf')
+    })
+  })
+
+  it('卸载会清理 staging 目录', async () => {
+    await withService(async (service, store, transport) => {
+      await service.install(target, () => {})
+      const [saved] = await store.list()
+      await service.uninstall(saved.id)
+      expect(transport.calls.some((c) => c === "rm -rf '/home/me/.storyfabric-staging/0.1.0'")).toBe(true)
+    })
+  })
+
+  it('首次安装失败也会记录 lastStatus 与 lastError', async () => {
+    const rules = linuxRules.map((r) =>
+      r.match === '.State.Health.Status' ? { ...r, result: { code: 0, stdout: 'starting\n', stderr: '' } } : r
+    )
+    await withService(async (service, store) => {
+      const result = await service.install(target, () => {})
+      expect(result.ok).toBe(false)
+      const [saved] = await store.list()
+      expect(saved.lastStatus).toBe('failed')
+      expect(saved.lastError).toContain('健康检查超时')
+    }, rules)
+  })
+
+  it('健康检查阶段取消会报「已取消」而不是超时', async () => {
+    const rules = linuxRules.map((r) =>
+      r.match === '.State.Health.Status' ? { ...r, result: { code: 0, stdout: 'starting\n', stderr: '' } } : r
+    )
+    await withService(async (service) => {
+      const installPromise = service.install(target, () => {})
+      await service.cancel()
+      const result = await installPromise
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('已取消')
+    }, rules)
+  })
+
+  it('testConnection 不会把渲染层传来的脏端口拼进命令', async () => {
+    await withService(async (service, _store, transport) => {
+      await service.testConnection({
+        host: '10.0.0.5',
+        port: 22,
+        username: 'me',
+        password: 'pw',
+        servicePort: "1'; touch /tmp/pwned; #"
+      } as never)
+      expect(transport.calls.some((c) => c.includes('touch'))).toBe(false)
+    })
+  })
+
+  it('未保存密码时 passwordStorage 为 none', async () => {
+    await withService(async (service, store) => {
+      await store.save({ ...target, password: undefined })
+      const [saved] = await service.listTargets()
+      expect(saved.hasPassword).toBe(false)
+      expect(saved.passwordStorage).toBe('none')
+    })
   })
 
   it('健康检查超时附带容器日志', async () => {

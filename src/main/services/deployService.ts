@@ -112,7 +112,16 @@ export class DeployService {
         password,
         hostKeyFingerprint: saved?.hostKeyFingerprint || undefined
       })
-      const probe = await this.probe(transport, this.contextOf(input, saved), password)
+      // 只使用已保存/默认的安装参数，绝不把渲染层传来的原始值带进命令
+      const probe = await this.probe(
+        transport,
+        this.contextOf({
+          installDir: saved?.installDir,
+          servicePort: saved?.servicePort,
+          baseImage: saved?.baseImage
+        }),
+        password
+      )
       return {
         fingerprint,
         probe,
@@ -150,6 +159,12 @@ export class DeployService {
     const sudoCode = (await transport.exec(byId(initial, 'probe.sudo').command)).code
 
     const commands = probeCommands({ ...base, isRoot })
+    // sudo 能力先于 docker 探测：否则「sudo 密码不对」会被 docker 探测的失败掩盖成「未安装 Docker」
+    let sudoError: string | undefined
+    if (!isRoot && !parsePasswordlessSudo(sudoCode)) {
+      const check = await transport.exec('sudo -S true', { stdin: `${password}\n`, timeoutMs: PROBE_TIMEOUT_MS })
+      if (check.code !== 0) sudoError = check.stderr.trim().slice(0, 300) || `exit ${check.code}`
+    }
     const dockerResult = await transport.exec(byId(commands, 'probe.docker').command, { stdin: `${password}\n` })
     const portResult = await transport.exec(byId(commands, 'probe.port').command)
     const imageResult = await transport.exec(byId(commands, 'probe.image').command, { stdin: `${password}\n` })
@@ -162,6 +177,7 @@ export class DeployService {
       passwordlessSudo: parsePasswordlessSudo(sudoCode),
       dockerVersion: parseDockerVersion(dockerResult.stdout),
       dockerError: dockerResult.code === 0 ? undefined : dockerResult.stderr.trim().slice(0, 300),
+      sudoError,
       portFree: !parsePortInUse(portResult.stdout),
       installedImage: parseContainerImage(imageResult.stdout)
     }
@@ -194,10 +210,12 @@ export class DeployService {
     const transport = this.options.createTransport()
     const password = input.password ?? ''
     let step: DeployStep = 'connect'
+    /** 记录创建/更新后的 id：失败时也要能落 lastError */
+    let targetId: string | null = input.id ?? null
 
     const fail = async (error: string): Promise<DeployRunResult> => {
       emit(step, 'failed', { message: error })
-      if (input.id) await this.options.store.patch(input.id, { lastStatus: 'failed', lastError: error })
+      if (targetId) await this.options.store.patch(targetId, { lastStatus: 'failed', lastError: error })
       return { ok: false, failedStep: step, error }
     }
 
@@ -219,6 +237,9 @@ export class DeployService {
       emit(step, 'running')
       const probe = await this.probe(transport, this.contextOf(input), password)
       if (parseOs(probe.os) !== 'linux') return await fail('只支持 Linux 服务器')
+      if (probe.sudoError) {
+        return await fail('sudo 不可用：SSH 密码与 sudo 密码不一致，或该用户不在 sudoers 中')
+      }
       if (!probe.dockerVersion) {
         const detail = probe.dockerError ?? ''
         if (/permission denied/i.test(detail)) {
@@ -227,23 +248,30 @@ export class DeployService {
         if (/cannot connect to the docker daemon|is the docker daemon running/i.test(detail)) {
           return await fail('Docker 守护进程未运行，请在服务器上启动 Docker 后重试')
         }
+        if (/sudo:/i.test(detail)) {
+          return await fail('sudo 不可用：SSH 密码与 sudo 密码不一致，或该用户不在 sudoers 中')
+        }
         return await fail('服务器未安装 Docker，请先安装后重试（Debian/Ubuntu: curl -fsSL https://get.docker.com | sh）')
       }
       // 更新时端口被自己上一版容器占用是正常的
       const ownsPort = Boolean(probe.installedImage?.startsWith('storyfabric:'))
       if (!probe.portFree && !ownsPort) return await fail(`端口 ${input.servicePort} 已被占用，请换一个端口`)
-      if (!probe.isRoot && !probe.passwordlessSudo) {
-        const check = await transport.exec('sudo -S true', { stdin: `${password}\n`, timeoutMs: PROBE_TIMEOUT_MS })
-        if (check.code !== 0) return await fail('sudo 不可用：SSH 密码与 sudo 密码不一致，或该用户不在 sudoers 中')
-      }
       emit(step, 'ok', { message: `Docker ${probe.dockerVersion}${probe.distro ? ` · ${probe.distro}` : ''}` })
       step = nextStep(step, true) as DeployStep
 
       emit(step, 'running')
-      const saved = input.id ? (await this.options.store.list()).find((t) => t.id === input.id) : undefined
-      const targetId = saved?.id ?? (await this.options.store.save({ ...input, hostKeyFingerprint: fingerprint })).id
+      // 按 id 覆盖式保存：重装同一台服务器时，安装目录/端口等改动要落盘（save 内部会保留 isRoot/版本等历史字段）
+      const deployed = await this.options.store.save({ ...input, hostKeyFingerprint: fingerprint })
+      targetId = deployed.id
+      const deployedId = deployed.id
+      await this.options.store.patch(deployedId, {
+        isRoot: probe.isRoot,
+        arch: probe.arch,
+        distro: probe.distro,
+        dockerVersion: probe.dockerVersion
+      })
       const ctx: DeployContext = {
-        ...this.contextOf(input, saved),
+        ...this.contextOf(input),
         stagingDir: `/home/${input.username}/.storyfabric-staging/${this.options.version}`,
         isRoot: probe.isRoot
       }
@@ -298,14 +326,15 @@ export class DeployService {
       step = nextStep(step, true) as DeployStep
 
       emit(step, 'running')
-      const healthy = await this.waitHealthy(transport, ctx, password, (text) => emit(step, 'running', { output: text }))
-      if (!healthy) {
+      const health = await this.waitHealthy(transport, ctx, password, (text) => emit(step, 'running', { output: text }))
+      if (health !== 'healthy') {
+        if (health === 'cancelled') return await fail('已取消')
         const logs = await transport.exec(logsCommand(ctx).command, { stdin: `${password}\n`, timeoutMs: PROBE_TIMEOUT_MS })
         emit(step, 'running', { output: logs.stdout.slice(-4000) })
         return await fail('健康检查超时，请查看容器日志')
       }
       emit(step, 'ok')
-      await this.options.store.patch(targetId, {
+      await this.options.store.patch(deployedId, {
         hostKeyFingerprint: fingerprint,
         installedVersion: this.options.version,
         arch: probe.arch,
@@ -335,28 +364,28 @@ export class DeployService {
     ctx: DeployContext,
     password: string,
     onData: (text: string) => void
-  ): Promise<boolean> {
+  ): Promise<'healthy' | 'timeout' | 'cancelled'> {
     const attempts = this.options.healthAttempts ?? 30
     const pollMs = this.options.healthPollMs ?? 2000
     for (let i = 0; i < attempts; i += 1) {
       if (this.aborted) {
         onData('已取消\n')
-        return false
+        return 'cancelled'
       }
       const result = await transport.exec(healthCommand(ctx).command, { stdin: `${password}\n`, timeoutMs: HEALTH_TIMEOUT_MS })
       const status = result.stdout.trim()
-      if (status === 'healthy') return true
+      if (status === 'healthy') return 'healthy'
       if (status === 'none') {
         const fallback = await transport.exec(
           `${sudoPrefix(ctx.isRoot)}docker exec storyfabric node -e "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"`,
           { stdin: `${password}\n`, timeoutMs: HEALTH_TIMEOUT_MS }
         )
-        if (fallback.code === 0) return true
+        if (fallback.code === 0) return 'healthy'
       }
       if (pollMs > 0) await new Promise((resolve) => setTimeout(resolve, pollMs))
     }
     onData('健康检查超时\n')
-    return false
+    return 'timeout'
   }
 
   cancel(): Promise<void> {
@@ -365,6 +394,7 @@ export class DeployService {
   }
 
   private contextOfStored(saved: {
+    username: string
     installDir: string
     servicePort: number
     baseImage: string
@@ -377,7 +407,7 @@ export class DeployService {
       servicePort: saved.servicePort,
       baseImage: saved.baseImage,
       version,
-      stagingDir: '',
+      stagingDir: `/home/${saved.username}/.storyfabric-staging/${version}`,
       isRoot: Boolean(saved.isRoot)
     }
   }

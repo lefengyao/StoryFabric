@@ -406,6 +406,8 @@ export interface DeployProbeResult {
   dockerVersion?: string
   /** docker 探测失败时的 stderr，用于区分「未安装 / 无权限 / 守护进程未运行」 */
   dockerError?: string
+  /** 非 root 且 sudo 不可用时的 stderr（例如密码错误 / 不在 sudoers） */
+  sudoError?: string
   portFree: boolean
   portOwner?: string
   /** 服务器上现有 storyfabric 容器的镜像 tag */
@@ -471,8 +473,8 @@ export interface DeployTargetStored {
 
 export type DeployTargetPublic = Omit<DeployTargetStored, 'passwordEncrypted'> & {
   hasPassword: boolean
-  /** 密码是系统级加密还是降级明文（safeStorage 不可用时） */
-  passwordStorage: 'encrypted' | 'plain'
+  /** 密码存储方式：系统级加密 / 降级明文 / 未保存 */
+  passwordStorage: 'encrypted' | 'plain' | 'none'
 }
 
 export interface DeployTargetInput {

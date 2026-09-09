@@ -38,7 +38,7 @@ export class DeployTargetsStore {
     return {
       ...rest,
       hasPassword: Boolean(passwordEncrypted),
-      passwordStorage: passwordEncrypted.startsWith('plain:') ? 'plain' : 'encrypted'
+      passwordStorage: !passwordEncrypted ? 'none' : passwordEncrypted.startsWith('plain:') ? 'plain' : 'encrypted'
     }
   }
 

@@ -117,11 +117,13 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
     ? null
     : probe.os.trim().toLowerCase() !== 'linux'
       ? '只支持 Linux 服务器'
-      : !probe.dockerVersion
-        ? '服务器未安装 Docker，请先安装后重试'
-        : !probe.portFree
-          ? `端口 ${servicePort} 已被占用，请换端口`
-          : null
+      : probe.sudoError
+        ? 'sudo 不可用：SSH 密码与 sudo 密码不一致，或该用户不在 sudoers 中'
+        : !probe.dockerVersion
+          ? '服务器未安装 Docker，请先安装后重试'
+          : !probe.portFree
+            ? `端口 ${servicePort} 已被占用，请换端口`
+            : null
 
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
@@ -187,7 +189,16 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
               <div>
                 端口 {servicePort}：{probe.portFree ? '可用' : '已被占用'}
               </div>
-              <div>sudo：{probe.isRoot ? 'root' : probe.passwordlessSudo ? '免密可用' : '需密码（将用 SSH 密码）'}</div>
+              <div>
+                sudo：
+                {probe.isRoot
+                  ? 'root'
+                  : probe.passwordlessSudo
+                    ? '免密可用'
+                    : probe.sudoError
+                      ? '不可用（密码不匹配或不在 sudoers）'
+                      : '需密码（将用 SSH 密码）'}
+              </div>
             </div>
             {probeBlockedReason && <p className="text-[11px] text-danger">{probeBlockedReason}</p>}
             <div className="flex gap-2">

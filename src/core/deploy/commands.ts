@@ -20,6 +20,11 @@ export interface DeployContext {
 export const CONTAINER_NAME = 'storyfabric'
 export const IMAGE_NAME = 'storyfabric'
 
+/** 端口兜底：调用方已校验，这里再挡一次，避免脏值进入命令字符串 */
+function safePort(value: number): number {
+  return Number.isInteger(value) && value > 0 && value < 65536 ? value : 8787
+}
+
 export function probeCommands(ctx: DeployContext): DeployCommand[] {
   const sudo = sudoPrefix(ctx.isRoot)
   return [
@@ -35,7 +40,12 @@ export function probeCommands(ctx: DeployContext): DeployCommand[] {
       command: `${sudo}docker version --format '{{.Server.Version}}'`,
       needsSudo: true
     },
-    { id: 'probe.port', title: '检查端口占用', command: `ss -ltn 'sport = :${ctx.servicePort}'`, needsSudo: false },
+    {
+      id: 'probe.port',
+      title: '检查端口占用',
+      command: `ss -ltn ${shQuote(`sport = :${safePort(ctx.servicePort)}`)}`,
+      needsSudo: false
+    },
     {
       id: 'probe.image',
       title: '检查已安装版本',
@@ -103,7 +113,7 @@ export function runCommands(ctx: DeployContext): DeployCommand[] {
       title: '启动容器',
       command: [
         `${sudo}docker run -d --name ${CONTAINER_NAME} --restart unless-stopped`,
-        `-p ${ctx.servicePort}:8787`,
+        `-p ${safePort(ctx.servicePort)}:8787`,
         `-v ${shQuote(`${ctx.installDir}/data`)}:/data`,
         `-v ${shQuote(keyPath)}:/run/secrets/storyfabric_key:ro`,
         '-e STORYFABRIC_ACCESS_KEY_FILE=/run/secrets/storyfabric_key',
