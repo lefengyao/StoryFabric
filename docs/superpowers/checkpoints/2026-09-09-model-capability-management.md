@@ -23,11 +23,11 @@ files_modified:
 - **数据**：`ModelSettings` 新增 `reasoningSupport` / `vision` / `reasoningMap`（`ReasoningMap = { path, values: {off,low,medium,high} }`）；`ModelProfile` 新增 `vision`（18 个家族档 + 通用档）。三端持久化自动透传，无需迁移；`pruneModelSettings` 天然覆盖新字段。
 - **core**：新增 `reasoningMap.ts`（`parseReasoningValue` / `setByPath` / `isWritableReasoningPath` / `RESERVED_REASONING_KEYS`）；`buildModelParams` 优先级为 **用户明确关闭 > 用户映射 > 协议内置 > 不发**，`off` 有值才发，映射命中时不再附加内置推理参数，写入后重申输出上限。
 - **UI**：新增整页 `ModelManagerView.tsx`（拉取 → 候选勾选/全部添加 → 手动添加 → 搜索 → 逐模型展开：支持拓展思考 / 思考强度 / 官方映射（参数路径 + 四等级值）/ 支持图片输入 / 上下文 / 输出）；供应商小窗瘦身为 名称/协议/Base URL/API Key + 「管理模型」入口；聊天窗口模型下拉显示「思考 / 图片」后缀。
-- **提交**：`aa042e4`（类型）、`eaacdca`（映射纯函数）、`33eb805`（vision + 透传）、`67e3bbb`（buildModelParams）、`019a155`（适配器级）、`66c14fc`（持久化往返）、`6048b9d`（渲染层纯逻辑）、`8f60a6d`（整页 + 小窗瘦身）、`bcf1aa7`（聊天标记）、`1145edd`（弹窗旧列表覆盖修复）、`8a04510`（原型链防护）、`16102e0`（审查修复）。
+- **提交**：`aa042e4`（类型）、`eaacdca`（映射纯函数）、`33eb805`（vision + 透传）、`67e3bbb`（buildModelParams）、`019a155`（适配器级）、`66c14fc`（持久化往返）、`6048b9d`（渲染层纯逻辑）、`8f60a6d`（整页 + 小窗瘦身）、`bcf1aa7`（聊天标记）、`1145edd`（弹窗旧列表覆盖修复）、`8a04510`（原型链防护）、`16102e0`（首轮审查修复）、`5a62eed`（复审修复）。
 
 ### Verification Evidence
 
-- `npm test -- --run`：**46 文件 / 256 用例通过**（新增 `reasoningMap` 10 例、`modelCapability` 10 例，及 `modelCatalog` / `modelParams` / `adapters` / `settingsService` / `server` 的补充断言）
+- `npm test -- --run`：**46 文件 / 259 用例通过**（新增 `reasoningMap` 10 例、`modelCapability` 11 例，及 `modelCatalog` / `modelParams` / `adapters` / `settingsService` / `server` 的补充断言）
 - `npx tsc -b --pretty false`：exit 0
 - `npm run build` / `npm run dist:win` / `npm run server:build:all`：exit 0（`release\win-unpacked\StoryFabric.exe` 22:02 重新打包，安装包 `StoryFabric Setup 0.1.0.exe` 同步生成）
 - asar 核验：`reasoningMap` / `reasoningSupport` / `管理模型` / `官方思考强度映射` / `支持图片输入` / `支持拓展思考` / `从服务拉取` / `generationConfig.thinkingConfig` 全部 true
@@ -46,6 +46,12 @@ files_modified:
 7. 「管理模型」对未保存供应商改为禁用 + 提示（原为点击后报错）。
 
 未改（已与审查者确认口径）：脏值判断用 `JSON.stringify`（开关来回切会留下显式 `reasoningSupport:false`，视为真实意图）；侧边栏切换页面会丢弃未保存编辑（规格只要求「返回」按钮确认）。
+
+**复审（范围 `1145edd..16102e0`）结论 PASS**，独立复跑测试 46 文件 / 256 例通过；指出 2 条新 minor，已修（`5a62eed`）：
+
+- 映射把 Gemini 的 `generationConfig` 整个换成标量后，重申输出上限会抛 `TypeError` → 改为容器守卫，非对象时重建 `generationConfig`（含单测）。
+- `mappingWarning` 对缺 `path`/`values` 的脏数据会抛错（会让模型管理整页白屏）→ 全部兜底（含单测）；Anthropic 校验收紧为「只接受 `thinking`」。
+- 附带：Anthropic 映射 `thinking: {type:'disabled'}` 时不再回放历史思考块（适配器按 `type !== 'disabled'` 判定，含单测）。
 
 ### Notes and Risks
 
