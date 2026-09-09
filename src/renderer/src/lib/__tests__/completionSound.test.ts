@@ -85,6 +85,30 @@ describe('createCompletionSound', () => {
     expect(() => sound.play()).not.toThrow()
   })
 
+  it('工厂抛异常时静默', () => {
+    const sound = createCompletionSound(() => {
+      throw new Error('AudioContext 不可用')
+    })
+    expect(() => sound.play()).not.toThrow()
+  })
+
+  it('上下文被浏览器挂起时先恢复', () => {
+    let resumed = false
+    const { ctx } = fakeContext()
+    const suspended: AudioContextLike = {
+      ...ctx,
+      state: 'suspended',
+      resume: async () => {
+        resumed = true
+      }
+    }
+    const sound = createCompletionSound(() => suspended)
+
+    sound.play()
+
+    expect(resumed).toBe(true)
+  })
+
   it('dispose 关闭上下文', async () => {
     const { ctx, isClosed } = fakeContext()
     const sound = createCompletionSound(() => ctx)

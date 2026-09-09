@@ -2,7 +2,10 @@
 
 export interface AudioContextLike {
   currentTime: number
+  /** 浏览器可能在无用户手势时把上下文挂起；恢复后才能出声。 */
+  state?: string
   destination: unknown
+  resume?(): Promise<void>
   createOscillator(): {
     type: string
     frequency: { setValueAtTime(value: number, time: number): void }
@@ -55,6 +58,7 @@ export function createCompletionSound(
       try {
         const audio = ensure()
         if (!audio) return
+        if (audio.state === 'suspended' && audio.resume) void audio.resume().catch(() => {})
         const start = audio.currentTime
         for (const note of NOTES) {
           const at = start + note.offset

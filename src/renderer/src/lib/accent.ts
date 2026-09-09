@@ -1,4 +1,4 @@
-/** 主题色推导：由用户选的基色算出强调色家族，非法输入回退默认色。 */
+/** 主题色推导：由用户选的基色算出强调色家族。默认基色交给 index.css 的手工配色，只有自定义时才运行时覆盖。 */
 export interface AccentTokens {
   accent: string
   strong: string
@@ -13,6 +13,8 @@ export interface AccentSettings {
 
 const DEFAULT_LIGHT = '#6366f1'
 const DEFAULT_DARK = '#818cf8'
+const FG_LIGHT = '#ffffff'
+const FG_DARK = '#18181b'
 
 export function isValidHexColor(value: string): boolean {
   return /^#[0-9a-fA-F]{6}$/.test((value ?? '').trim())
@@ -74,20 +76,38 @@ function relativeLuminance([r, g, b]: Rgb): number {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
+/** WCAG 对比度（1–21）。 */
+function contrastRatio(a: Rgb, b: Rgb): number {
+  const la = relativeLuminance(a)
+  const lb = relativeLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/** 取对比度更高的前景色，而不是拍一个亮度阈值。 */
+function pickForeground(rgb: Rgb): string {
+  return contrastRatio(rgb, toRgb(FG_DARK)) >= contrastRatio(rgb, toRgb(FG_LIGHT)) ? FG_DARK : FG_LIGHT
+}
+
 export function accentTokens(hex: string, dark: boolean): AccentTokens {
   const base = isValidHexColor(hex) ? hex.trim().toLowerCase() : dark ? DEFAULT_DARK : DEFAULT_LIGHT
   const rgb = toRgb(base)
   const [h, s, l] = rgbToHsl(rgb)
+  // 极暗基色无法再压暗，改为提亮，保证 strong 与 accent 可区分。
+  const strongL = l >= 0.12 ? l - 0.08 : Math.min(1, l + 0.12)
   return {
     accent: base,
-    strong: toHex(hslToRgb([h, s, Math.max(0, l - 0.08)])),
-    soft: toHex(hslToRgb([h, Math.min(1, s), dark ? 0.14 : 0.94])),
-    fg: relativeLuminance(rgb) > 0.55 ? '#18181b' : '#ffffff'
+    strong: toHex(hslToRgb([h, s, strongL])),
+    // soft 是底衬色，需要低饱和，否则深色主题会出现刺眼的高饱和深蓝。
+    soft: toHex(hslToRgb([h, s * 0.35, dark ? 0.16 : 0.95])),
+    fg: pickForeground(rgb)
   }
 }
 
 export function accentStyle(settings: AccentSettings, dark: boolean): Record<string, string> {
-  const base = (dark ? settings.accentColorDark : settings.accentColorLight) ?? (dark ? DEFAULT_DARK : DEFAULT_LIGHT)
+  const fallback = dark ? DEFAULT_DARK : DEFAULT_LIGHT
+  const base = (dark ? settings.accentColorDark : settings.accentColorLight) ?? fallback
+  // 默认基色或非法值：不写内联变量，交由 index.css 的手工配色，避免默认外观被推导值改变。
+  if (!isValidHexColor(base) || base.trim().toLowerCase() === fallback) return {}
   const tokens = accentTokens(base, dark)
   return { '--accent': tokens.accent, '--accent-strong': tokens.strong, '--accent-soft': tokens.soft, '--accent-fg': tokens.fg }
 }

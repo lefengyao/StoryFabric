@@ -1,5 +1,5 @@
 import { KeyRound, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
@@ -33,6 +33,8 @@ export function SettingsPage(): React.ReactElement {
   const settings = useSettings((s) => s.settings)
   const reload = useSettings((s) => s.load)
   const update = useSettings((s) => s.update)
+  const previewAccent = useSettings((s) => s.previewAccent)
+  const accentTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [params, setParams] = useSearchParams()
   const active: TabKey = TABS.find((tab) => tab.key === params.get('tab'))?.key ?? 'models'
@@ -110,6 +112,13 @@ export function SettingsPage(): React.ReactElement {
 
   /** 取色器只接受合法 hex，文本输入非法时不污染预览 */
   const accentValue = (value: string, fallback: string): string => (isValidHexColor(value) ? value : fallback)
+
+  /** 拖动取色时即时预览（只改 CSS 变量），停手 400ms 后才落盘，避免每个 input 事件都走一次 IPC。 */
+  const commitAccent = (key: 'accentColorLight' | 'accentColorDark', value: string): void => {
+    previewAccent(value)
+    if (accentTimer.current) clearTimeout(accentTimer.current)
+    accentTimer.current = setTimeout(() => void update({ [key]: value }), 400)
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -264,7 +273,7 @@ export function SettingsPage(): React.ReactElement {
                         type="color"
                         aria-label="浅色主题强调色"
                         value={accentValue(settings.accentColorLight, '#6366f1')}
-                        onChange={(e) => void update({ accentColorLight: e.target.value })}
+                        onChange={(e) => commitAccent('accentColorLight', e.target.value)}
                         className="h-8 w-12 shrink-0 cursor-pointer rounded border border-line bg-panel"
                       />
                       <Input
@@ -284,7 +293,7 @@ export function SettingsPage(): React.ReactElement {
                         type="color"
                         aria-label="深色主题强调色"
                         value={accentValue(settings.accentColorDark, '#818cf8')}
-                        onChange={(e) => void update({ accentColorDark: e.target.value })}
+                        onChange={(e) => commitAccent('accentColorDark', e.target.value)}
                         className="h-8 w-12 shrink-0 cursor-pointer rounded border border-line bg-panel"
                       />
                       <Input
