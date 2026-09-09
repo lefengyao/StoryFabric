@@ -32,7 +32,17 @@ export interface AgentEventEnvelope {
 }
 
 export type SettingsPatch = Partial<
-  Pick<PublicAppSettings, 'theme' | 'defaultChatModel' | 'quickActionModel' | 'customPrompt' | 'showSessionLength'>
+  Pick<
+    PublicAppSettings,
+    | 'theme'
+    | 'defaultChatModel'
+    | 'quickActionModel'
+    | 'customPrompt'
+    | 'showSessionLength'
+    | 'completionSound'
+    | 'accentColorLight'
+    | 'accentColorDark'
+  >
 >
 
 export interface FetchModelsInput {

@@ -21,7 +21,16 @@ import { fetchProviderModels, getAdapter } from '../../../core/llm'
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
 
-const DEFAULT_PUBLIC: PublicAppSettings = { providers: [], theme: 'system', recentWorkspaces: [], customPrompt: '', showSessionLength: false }
+const DEFAULT_PUBLIC: PublicAppSettings = {
+  providers: [],
+  theme: 'system',
+  recentWorkspaces: [],
+  customPrompt: '',
+  showSessionLength: false,
+  completionSound: false,
+  accentColorLight: '#6366f1',
+  accentColorDark: '#818cf8'
+}
 
 /** Android 平台 API：应用私有目录工作区，密钥使用 Android Keystore-backed secure storage。 */
 export class AndroidPlatformApi implements StoryFabricApi {

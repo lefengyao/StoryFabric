@@ -17,7 +17,10 @@ const DEFAULT_SETTINGS: ServerSettings = {
   theme: 'system',
   recentWorkspaces: [],
   customPrompt: '',
-  showSessionLength: false
+  showSessionLength: false,
+  completionSound: false,
+  accentColorLight: '#6366f1',
+  accentColorDark: '#818cf8'
 }
 
 function keyPreview(key: string): string {

@@ -184,6 +184,12 @@ export interface AppSettings {
   customPrompt: string
   /** 是否在会话界面显示会话长度（消息数与约计字数） */
   showSessionLength: boolean
+  /** 智能体回答完成时播放提示音 */
+  completionSound: boolean
+  /** 浅色主题的强调色基色（#rrggbb） */
+  accentColorLight: string
+  /** 深色主题的强调色基色（#rrggbb） */
+  accentColorDark: string
 }
 
 /** 存储态：API Key 以 safeStorage 密文保存 */
