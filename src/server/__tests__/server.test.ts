@@ -81,7 +81,17 @@ describe('linux web server', () => {
               baseUrl: 'https://api.test/v1',
               apiKey: 'sk-web',
               models: ['gpt-4o', 'claude-x'],
-              modelSettings: { 'gpt-4o': { reasoning: 'high', maxOutputTokens: 4096 }, '已移除的模型': { reasoning: 'low' } }
+              modelSettings: {
+                'gpt-4o': {
+                  reasoningSupport: true,
+                  vision: true,
+                  reasoning: 'medium',
+                  reasoningMap: { path: 'thinking.type', values: { medium: 'enabled' } },
+                  contextTokens: 131072,
+                  maxOutputTokens: 8192
+                },
+                '已移除的模型': { reasoning: 'low' }
+              }
             }
           ]
         })
@@ -89,7 +99,14 @@ describe('linux web server', () => {
       expect(savedProvider.status).toBe(200)
       const settingsPayload = (await savedProvider.json() as { result: { providers: Array<{ name: string; modelSettings: Record<string, unknown> }> } }).result
       expect(settingsPayload.providers.find((provider) => provider.name === '网页供应商')?.modelSettings).toEqual({
-        'gpt-4o': { reasoning: 'high', maxOutputTokens: 4096 }
+        'gpt-4o': {
+          reasoningSupport: true,
+          vision: true,
+          reasoning: 'medium',
+          reasoningMap: { path: 'thinking.type', values: { medium: 'enabled' } },
+          contextTokens: 131072,
+          maxOutputTokens: 8192
+        }
       })
 
       const downloaded = await fetch(`${base}/api/workspaces/default/archive`, { headers: { cookie: cookie ?? '' } })

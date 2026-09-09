@@ -40,6 +40,34 @@ describe('SettingsService 每模型参数', () => {
     })
   })
 
+  it('能力开关与思考强度映射能原样存回', async () => {
+    await withService(async (service) => {
+      await service.saveProvider({
+        ...provider,
+        modelSettings: {
+          'gpt-4o': {
+            reasoningSupport: true,
+            vision: true,
+            reasoning: 'high',
+            reasoningMap: { path: 'enable_thinking', values: { high: 'true', off: 'false' } },
+            contextTokens: 131072,
+            maxOutputTokens: 8192
+          }
+        }
+      })
+
+      const publicSettings = service.toPublic(await service.load())
+      expect(publicSettings.providers[0].modelSettings['gpt-4o']).toEqual({
+        reasoningSupport: true,
+        vision: true,
+        reasoning: 'high',
+        reasoningMap: { path: 'enable_thinking', values: { high: 'true', off: 'false' } },
+        contextTokens: 131072,
+        maxOutputTokens: 8192
+      })
+    })
+  })
+
   it('旧设置文件缺少该字段时读回空对象', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'sf-settings-'))
     try {
