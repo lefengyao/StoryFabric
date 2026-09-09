@@ -12,6 +12,7 @@ import {
   type NodeProps
 } from '@xyflow/react'
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force'
+import { seedPosition } from '../../lib/graphSeed'
 import { Network, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
@@ -68,9 +69,16 @@ function buildGraph(
   rels: Relationship[],
   remembered: RememberedPos[]
 ): { nodes: Node<CharNodeData>[]; edges: Edge[] } {
-  const simNodes = chars.map((c) => ({ id: c.id, x: (Math.random() - 0.5) * 400, y: (Math.random() - 0.5) * 400 }))
+  const rememberedById = new Map(remembered.map((p) => [p.id, p]))
+  const charById = new Map(chars.map((c) => [c.id, c]))
+  // 有记忆坐标的节点用 fx/fy 钉住，让新节点围绕真实位置排布；其余按 id 播种，避免每次重建都乱跳
+  const simNodes = chars.map((c) => {
+    const fixed = rememberedById.get(c.id)
+    const seed = seedPosition(c.id)
+    return { id: c.id, x: fixed?.x ?? seed.x, y: fixed?.y ?? seed.y, fx: fixed?.x, fy: fixed?.y }
+  })
   const simLinks = rels
-    .filter((r) => chars.some((c) => c.id === r.fromId) && chars.some((c) => c.id === r.toId))
+    .filter((r) => charById.has(r.fromId) && charById.has(r.toId))
     .map((r) => ({ source: r.fromId, target: r.toId }))
   const sim = forceSimulation(simNodes)
     .force('charge', forceManyBody().strength(-420))
@@ -86,8 +94,8 @@ function buildGraph(
   sim.tick(220)
 
   const nodes: Node<CharNodeData>[] = simNodes.map((n) => {
-    const c = chars.find((x) => x.id === n.id)
-    const rememberedPos = remembered.find((p) => p.id === n.id)
+    const c = charById.get(n.id)
+    const rememberedPos = rememberedById.get(n.id)
     return {
       id: n.id,
       type: 'charNode',
