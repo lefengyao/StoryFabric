@@ -41,4 +41,23 @@ describe('createAutosave', () => {
 
     expect(runs).toEqual([])
   })
+
+  it('flush 立即执行待处理的保存且只执行一次', () => {
+    vi.useFakeTimers()
+    const runs: string[] = []
+    const autosave = createAutosave(15000)
+
+    autosave.schedule(() => runs.push('a'))
+    autosave.flush()
+    vi.advanceTimersByTime(30000)
+
+    expect(runs).toEqual(['a'])
+  })
+
+  it('没有待处理时 flush 什么都不做', () => {
+    const runs: string[] = []
+    const autosave = createAutosave(15000)
+    autosave.flush()
+    expect(runs).toEqual([])
+  })
 })

@@ -19,7 +19,10 @@ const NAV_ITEMS = [
   { to: '/chat', icon: Sparkles, label: '智能体', load: () => import('../pages/chat/ChatPage') }
 ]
 
-/** 提前拉取路由 chunk，避免首次进入某页时闪一下 Spinner。 */
+/** 提前拉取路由 chunk，避免首次进入某页时闪一下 Spinner；失败静默（真跳转时还会再拉一次）。 */
+const prefetch = (load: () => Promise<unknown>): void => {
+  void load().catch(() => {})
+}
 const loadSettingsPage = (): Promise<unknown> => import('../pages/settings/SettingsPage')
 
 const TITLE_MAP: Record<string, string> = {
@@ -99,9 +102,9 @@ export function AppLayout(): React.ReactElement {
             key={to}
             to={to}
             title={label}
-            onMouseEnter={() => void load()}
-            onFocus={() => void load()}
-            onTouchStart={() => void load()}
+            onMouseEnter={() => prefetch(load)}
+            onFocus={() => prefetch(load)}
+            onTouchStart={() => prefetch(load)}
             className={({ isActive }) =>
               cn(
                 'group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:w-10 sm:rounded-lg',
@@ -119,9 +122,9 @@ export function AppLayout(): React.ReactElement {
         <NavLink
           to="/settings"
           title="设置"
-          onMouseEnter={() => void loadSettingsPage()}
-          onFocus={() => void loadSettingsPage()}
-          onTouchStart={() => void loadSettingsPage()}
+          onMouseEnter={() => prefetch(loadSettingsPage)}
+          onFocus={() => prefetch(loadSettingsPage)}
+          onTouchStart={() => prefetch(loadSettingsPage)}
           className={({ isActive }) =>
             cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors', isActive ? 'text-accent bg-accent-soft' : 'text-muted hover:bg-elevated hover:text-fg')
           }

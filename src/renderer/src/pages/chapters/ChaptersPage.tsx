@@ -124,16 +124,21 @@ export function ChaptersPage(): React.ReactElement {
   const autosaveSeconds = useSettings((s) => s.settings?.autosaveSeconds ?? 0)
   const autosave = useMemo(() => createAutosave(autosaveSeconds * 1000), [autosaveSeconds])
   const saveRef = useRef(save)
-  saveRef.current = save
+  useEffect(() => {
+    saveRef.current = save
+  })
 
   useEffect(() => {
     if (!dirty || !draft || autosaveSeconds <= 0) {
       autosave.cancel()
       return
     }
-    autosave.schedule(() => void saveRef.current())
+    autosave.schedule(() => void saveRef.current().catch(() => {}))
     return () => autosave.cancel()
   }, [draft?.title, draft?.content, dirty, autosave, autosaveSeconds])
+
+  // 离开页面时把未到点的自动保存立即执行一次，避免改动丢失
+  useEffect(() => () => autosave.flush(), [autosave])
 
   const remove = async (): Promise<void> => {
     if (!selectedId) return

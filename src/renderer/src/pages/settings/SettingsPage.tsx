@@ -245,18 +245,6 @@ export function SettingsPage(): React.ReactElement {
                     placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
                   />
                 </Field>
-                <Field label="自动保存" hint="编辑章节时，停止输入后按此间隔自动保存；若检测到外部修改仍会先征求确认">
-                  <select
-                    value={settings.autosaveSeconds}
-                    onChange={(e) => void update({ autosaveSeconds: Number(e.target.value) })}
-                    className="set-select max-w-48"
-                  >
-                    <option value={0}>关闭</option>
-                    <option value={5}>空闲 5 秒</option>
-                    <option value={15}>空闲 15 秒</option>
-                    <option value={30}>空闲 30 秒</option>
-                  </select>
-                </Field>
                 <label className="flex items-center gap-2.5 text-sm">
                   <input
                     type="checkbox"
@@ -385,6 +373,18 @@ export function SettingsPage(): React.ReactElement {
                       <option value="sans">系统默认</option>
                       <option value="serif">衬线（宋体）</option>
                       <option value="mono">等宽</option>
+                    </select>
+                  </Field>
+                  <Field label="自动保存" hint="编辑章节时，停止输入后按此间隔自动保存；若检测到外部修改仍会先征求确认">
+                    <select
+                      value={settings.autosaveSeconds}
+                      onChange={(e) => void update({ autosaveSeconds: Number(e.target.value) })}
+                      className="set-select max-w-48"
+                    >
+                      <option value={0}>关闭</option>
+                      <option value={5}>空闲 5 秒</option>
+                      <option value={15}>空闲 15 秒</option>
+                      <option value={30}>空闲 30 秒</option>
                     </select>
                   </Field>
                 </Card>

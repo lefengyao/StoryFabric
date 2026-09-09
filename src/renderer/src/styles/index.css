@@ -64,7 +64,8 @@
 
 /* 弹窗与遮罩过渡：原代码用的 animate-in 来自未安装的 tailwindcss-animate，实际不生效。
    这里用 Tailwind v4 的 --animate-* 主题键自行定义，不新增依赖。
-   内容动画只用独立的 scale/translate 属性，避免覆盖居中用的 transform。 */
+   注意：Tailwind v4 的居中类 -translate-x-1/2 也编译成 `translate` 属性，动画若动 translate
+   会在动画期间覆盖居中（弹窗偏移半个身位再跳回），因此这里只动 opacity 与 scale。 */
 @theme {
   --animate-overlay-in: overlay-in 160ms ease-out;
   --animate-overlay-out: overlay-out 120ms ease-in;
@@ -92,24 +93,20 @@
   from {
     opacity: 0;
     scale: 0.97;
-    translate: 0 6px;
   }
   to {
     opacity: 1;
     scale: 1;
-    translate: 0 0;
   }
 }
 @keyframes modal-out {
   from {
     opacity: 1;
     scale: 1;
-    translate: 0 0;
   }
   to {
     opacity: 0;
     scale: 0.98;
-    translate: 0 4px;
   }
 }
 
@@ -199,7 +196,7 @@ body {
 /* 长列表行：离屏内容跳过布局与绘制，滚动时不必为所有行付出代价 */
 .list-row {
   content-visibility: auto;
-  contain-intrinsic-size: auto 44px;
+  contain-intrinsic-size: auto 56px;
 }
 
 ::-webkit-scrollbar {
