@@ -33,7 +33,7 @@
 
 **Files:** Create `src/renderer/src/lib/accent.ts`、`src/renderer/src/lib/__tests__/accent.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -94,12 +94,12 @@ describe('accentStyle', () => {
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/accent.test.ts`
 Expected: FAIL —— `Failed to resolve import "../accent"`。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```ts
 /** 主题色推导：由用户选的基色算出强调色家族，非法输入回退默认色。 */
@@ -197,12 +197,12 @@ export function accentStyle(settings: AccentSettings, dark: boolean): Record<str
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/accent.test.ts`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/renderer/src/lib/accent.ts src/renderer/src/lib/__tests__/accent.test.ts
@@ -215,7 +215,7 @@ git commit -m "feat(renderer): derive accent color tokens from a base color"
 
 **Files:** Modify `src/shared/types.ts`、`src/shared/api.ts`、`src/main/services/settingsService.ts`、`src/server/settingsStore.ts`、`src/renderer/src/platform/androidApi.ts`、`src/renderer/src/stores/settingsStore.ts`
 
-- [ ] **Step 1: 扩展 `AppSettings`**
+- [x] **Step 1: 扩展 `AppSettings`**
 
 `src/shared/types.ts` 的 `AppSettings` 末尾追加：
 
@@ -228,7 +228,7 @@ git commit -m "feat(renderer): derive accent color tokens from a base color"
   accentColorDark: string
 ```
 
-- [ ] **Step 2: 补齐 `SettingsPatch`**
+- [x] **Step 2: 补齐 `SettingsPatch`**
 
 `src/shared/api.ts`：
 
@@ -241,11 +241,11 @@ export type SettingsPatch = Partial<
 >
 ```
 
-- [ ] **Step 3: 三处默认值**
+- [x] **Step 3: 三处默认值**
 
 `src/main/services/settingsService.ts` 的 `DEFAULT_SETTINGS` 追加 `completionSound: false, accentColorLight: '#6366f1', accentColorDark: '#818cf8`；`src/server/settingsStore.ts` 与 `src/renderer/src/platform/androidApi.ts` 的 `DEFAULT_PUBLIC` 同步补齐同样的三个字段。
 
-- [ ] **Step 4: store 应用主题色**
+- [x] **Step 4: store 应用主题色**
 
 `src/renderer/src/stores/settingsStore.ts` 整体替换为：
 
@@ -297,7 +297,7 @@ export const useSettings = create<SettingsState>((set) => ({
 }))
 ```
 
-- [ ] **Step 5: 类型检查与提交**
+- [x] **Step 5: 类型检查与提交**
 
 Run: `npx tsc -b --pretty false` → exit 0。
 
@@ -312,7 +312,7 @@ git commit -m "feat: add completion sound and accent color settings"
 
 **Files:** Create `src/renderer/src/lib/completionSound.ts`、`src/renderer/src/lib/__tests__/completionSound.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -389,12 +389,12 @@ describe('createCompletionSound', () => {
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/completionSound.test.ts`
 Expected: FAIL —— 模块不存在。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```ts
 /** 智能体回答完成提示音：WebAudio 合成，不打包音频资源。 */
@@ -486,12 +486,12 @@ export function playCompletionSound(): void {
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `npm test -- --run src/renderer/src/lib/__tests__/completionSound.test.ts`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/renderer/src/lib/completionSound.ts src/renderer/src/lib/__tests__/completionSound.test.ts
@@ -504,7 +504,7 @@ git commit -m "feat(renderer): synthesize a completion chime"
 
 **Files:** Modify `src/renderer/src/stores/chatStore.ts`、`src/renderer/src/pages/settings/SettingsPage.tsx`
 
-- [ ] **Step 1: `done` 事件播放提示音**
+- [x] **Step 1: `done` 事件播放提示音**
 
 `src/renderer/src/stores/chatStore.ts` 顶部 import：
 
@@ -523,7 +523,7 @@ import { useSettings } from './settingsStore'
     }
 ```
 
-- [ ] **Step 2: 设置页 tab 化**
+- [x] **Step 2: 设置页 tab 化**
 
 `SettingsPage.tsx` 的返回结构改为：
 
@@ -568,7 +568,7 @@ export function SettingsPage(): React.ReactElement {
 }
 ```
 
-- [ ] **Step 3: 外观 tab 的主题色控件**
+- [x] **Step 3: 外观 tab 的主题色控件**
 
 ```tsx
 const ACCENT_PRESETS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
@@ -596,7 +596,7 @@ const ACCENT_PRESETS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '
 </Card>
 ```
 
-- [ ] **Step 4: 通知 tab**
+- [x] **Step 4: 通知 tab**
 
 ```tsx
 <Card className="flex items-center justify-between gap-4 p-4">
@@ -616,7 +616,7 @@ const ACCENT_PRESETS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '
 
 复选框沿用仓库既有写法（`SettingsPage.tsx:159-167` 的 `accent-[var(--accent)]`），不引入新的 Switch 组件。
 
-- [ ] **Step 5: 类型检查、构建、提交**
+- [x] **Step 5: 类型检查、构建、提交**
 
 Run: `npx tsc -b --pretty false` → exit 0
 Run: `npm run build` → exit 0
@@ -630,16 +630,16 @@ git commit -m "feat(renderer): tabbed settings with accent and chime controls"
 
 ## Task 5: 验证与人工确认
 
-- [ ] **Step 1: 全量测试与类型检查**
+- [x] **Step 1: 全量测试与类型检查**
 
 Run: `npm test -- --run` → 29 文件全部通过
 Run: `npx tsc -b --pretty false` → exit 0
 
-- [ ] **Step 2: 打包并启动**
+- [x] **Step 2: 打包并启动**
 
 Run: `npm run dist:win` → exit 0
 Run: 启动 `release/win-unpacked/StoryFabric.exe`，确认：设置页出现四个 tab 且可切换；改主题色后强调色即时变化；深浅主题各用各自的基色；「试听」能听到提示音；开关关闭后完成对话不响。
 
-- [ ] **Step 3: 更新 backlog 与文档**
+- [x] **Step 3: 更新 backlog 与文档**
 
 在 `docs/superpowers/backlog.md` 勾掉设置分类 / 提示音 / 主题色三项，写 checkpoint。
