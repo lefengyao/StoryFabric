@@ -54,7 +54,16 @@ export function SettingsPage(): React.ReactElement {
 
   const managing = managingId ? settings.providers.find((p) => p.id === managingId) ?? null : null
   if (managing) {
-    return <ModelManagerView provider={managing} onClose={() => setManagingId(null)} onSaved={reload} />
+    // 保存模型后刷新弹窗里的模型列表，避免用旧列表覆盖刚做的改动（名称/Base URL 等未保存输入保留）
+    const handleModelsSaved = async (): Promise<void> => {
+      await reload()
+      setEditing((prev) => {
+        if (!prev || !editingId) return prev
+        const fresh = useSettings.getState().settings?.providers.find((p) => p.id === editingId)
+        return fresh ? { ...prev, models: [...fresh.models], modelSettings: { ...fresh.modelSettings } } : prev
+      })
+    }
+    return <ModelManagerView provider={managing} onClose={() => setManagingId(null)} onSaved={handleModelsSaved} />
   }
 
   const openCreate = (): void => {
