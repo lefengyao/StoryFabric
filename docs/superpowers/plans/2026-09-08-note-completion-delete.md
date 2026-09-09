@@ -136,18 +136,31 @@ In `src/core/agent/workspacePolicy.ts`, add this explicit policy block:
 
 ## Task 3: Verify and clean up
 
-- [ ] Run the focused tests and confirm all new cases pass.
-- [ ] Run `npm test` and confirm the complete suite passes.
-- [ ] Run `npx tsc --noEmit` and confirm there are no type errors.
-- [ ] Run `npm run build` and confirm the Electron bundles build successfully.
-- [ ] Run `npm run dist:win` and confirm both Windows targets are generated.
-- [ ] Start `release/win-unpacked/StoryFabric.exe` for eight seconds with `Start-Process -WindowStyle Hidden`; confirm it stays alive, then stop only that process.
-- [ ] Run `npm audit --registry=https://registry.npmjs.org --audit-level=moderate` and confirm zero vulnerabilities.
-- [ ] Run `git diff --check` and `git status --short`; do not stage or remove the user-owned reproduction files in `examples/minimal-workspace`.
-- [ ] Update the session log with test, build, smoke-test, and audit results.
+- [x] Run the focused tests and confirm all new cases pass.
+- [x] Run `npm test` and confirm the complete suite passes.（25 个文件 / 89 个用例通过）
+- [x] Run `npx tsc --noEmit` and confirm there are no type errors.（注意：根 `tsconfig.json` 是 solution-style，`npx tsc --noEmit` 只检查 0 个文件、属于假通过；实际执行 `npx tsc -b --pretty false`，exit 0）
+- [x] Run `npm run build` and confirm the Electron bundles build successfully.
+- [x] Run `npm run dist:win` and confirm both Windows targets are generated.（NSIS 安装包 + portable 包）
+- [x] Start `release/win-unpacked/StoryFabric.exe` for eight seconds with `Start-Process -WindowStyle Hidden`; confirm it stays alive, then stop only that process.（存活 8 秒、3 个子进程，停止后无残留）
+- [x] Run `npm audit --registry=https://registry.npmjs.org --audit-level=moderate` and confirm zero vulnerabilities.（先发现 `sharp <0.35.4` 的 libheif high 漏洞，升级到 0.35.4 后为 0 vulnerabilities）
+- [x] Run `git diff --check` and `git status --short`; do not stage or remove the user-owned reproduction files in `examples/minimal-workspace`.
+- [x] Update the session log with test, build, smoke-test, and audit results.
 
 ## Commit sequence
 
 1. `test: cover completed note deletion workflow`
 2. `feat: ask before deleting completed notes`
 3. `test: verify completed note cleanup end to end` (only if the desktop regression test is isolated as a separate change)
+
+## Verification results (2026-09-09)
+
+验证阶段发现并修复了两处计划未覆盖的缺陷：
+
+1. **core 与 main 的待确认变更标题不一致**（`core/tools/registry.ts` 为 `移入回收站：<title>`，`main/tools/registry.ts` 为 `删除便签：<title>`）。按本计划 `:112`/`:121` 与仓库既有 `<动作>：<标题>` 约定，修正的是 core；并新增 `src/main/tools/__tests__/registryParity.test.ts` 与两端 title 断言作为回归保护。
+2. **`tsc` 检查从未真正执行过**：已提交的 `src/core/tools/__tests__/registryPlacement.test.ts` 未收窄 `ToolOutcome` 联合类型，`src/core/agent/__tests__/prompts.test.ts` 反向 import `src/main/agent/prompts.ts` 触发 TS6307（web 项目不含 `src/main/agent/**`）。前者加 `expectResult` 收窄守卫，后者把跨端提示词一致性断言移到主进程测试。
+
+同时补齐了提示词缺失规则、统一了两端 `delete_note` 工具定义、把 `sharp` 升级到 0.35.4（清除 libheif high 漏洞）。
+
+质量审查（两轮，只读代理）：第二轮 **PASS**，需求 1–6 全部满足。
+
+Follow-up（不阻塞本计划）：`PendingChangeDialog` 把 `afterText` 当行级 diff 渲染；`src/core/agent/agentLoop.ts` 无测试文件；失败结果 `preview` 前缀两端不一致；`ENTITY_KIND_LABEL` 缺 `note`/`setting`。
