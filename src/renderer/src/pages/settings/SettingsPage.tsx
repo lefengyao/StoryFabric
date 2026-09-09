@@ -1,17 +1,16 @@
-import { KeyRound, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { KeyRound, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
+import { ModelManagerView } from './ModelManagerView'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
-import { profileForModel } from '../../../../core/llm/modelCatalog'
-import { CONTEXT_PRESETS, OUTPUT_PRESETS, formatTokens, modelParamOptions } from '../../lib/modelParamOptions'
 import { EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS } from '../../lib/editorStyle'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
-import type { ChatDensity, EditorFontFamily, ModelSettings, Protocol, ProviderInput, ProviderPublic, ReasoningLevel, SendShortcut } from '../../../../shared/types'
+import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
@@ -46,12 +45,17 @@ export function SettingsPage(): React.ReactElement {
 
   const [editing, setEditing] = useState<ProviderInput | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [managingId, setManagingId] = useState<string | null>(null)
   const [savingProvider, setSavingProvider] = useState(false)
-  const [fetchingModels, setFetchingModels] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState<string | null>(null)
 
   if (!settings) return <div className="flex h-full items-center justify-center"><Spinner /></div>
+
+  const managing = managingId ? settings.providers.find((p) => p.id === managingId) ?? null : null
+  if (managing) {
+    return <ModelManagerView provider={managing} onClose={() => setManagingId(null)} onSaved={reload} />
+  }
 
   const openCreate = (): void => {
     setEditingId(null)
@@ -77,26 +81,6 @@ export function SettingsPage(): React.ReactElement {
       setFormError(err instanceof Error ? err.message : String(err))
     } finally {
       setSavingProvider(false)
-    }
-  }
-
-  const doFetchModels = async (): Promise<void> => {
-    if (!editing) return
-    setFetchingModels(true)
-    setFormError(null)
-    try {
-      const models = await api.fetchModels({
-        providerId: editingId ?? undefined,
-        protocol: editing.protocol,
-        baseUrl: editing.baseUrl,
-        apiKey: editing.apiKey
-      })
-      if (models.length === 0) setFormError('服务未返回任何模型，请检查 Base URL')
-      setEditing({ ...editing, models })
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setFetchingModels(false)
     }
   }
 
@@ -179,6 +163,9 @@ export function SettingsPage(): React.ReactElement {
                         </div>
                         <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
                       </div>
+                      <Button size="sm" variant="ghost" onClick={() => setManagingId(p.id)} title="管理模型">
+                        <Settings2 size={13} />
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
                         <Pencil size={13} />
                       </Button>
@@ -471,78 +458,18 @@ export function SettingsPage(): React.ReactElement {
             <Field label={editingId ? 'API Key（留空则沿用原密钥）' : 'API Key'}>
               <Input type="password" value={editing.apiKey ?? ''} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value || undefined })} placeholder="sk-…" />
             </Field>
-            <Field label={`模型列表（${editing.models.length} 个）`}>
-              <textarea
-                value={editing.models.join('\n')}
-                onChange={(e) => setEditing({ ...editing, models: e.target.value.split('\n').map((x) => x.trim()).filter(Boolean) })}
-                rows={5}
-                className="w-full rounded-lg border border-line bg-panel px-3 py-2 font-mono text-xs outline-none focus:border-accent resize-y"
-                placeholder={'deepseek-chat\ndeepseek-reasoner'}
-              />
+            <Field label="模型" hint="模型列表与逐模型能力改到「管理模型」里设置（拉取、勾选、手动添加、思考强度映射）">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
+                <span className="text-muted">已配置 {editing.models.length} 个模型</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => (editingId ? setManagingId(editingId) : setFormError('请先保存供应商，再管理模型'))}
+                >
+                  <Settings2 size={13} /> 管理模型
+                </Button>
+              </div>
             </Field>
-            <Button size="sm" variant="outline" onClick={() => void doFetchModels()} loading={fetchingModels} disabled={!editing.baseUrl.trim()}>
-              <RefreshCw size={13} /> 从服务拉取模型列表
-            </Button>
-
-            {editing.models.length > 0 && (
-              <Field label="模型参数" hint="留空则使用内置档案的默认值（按模型名自动识别，可逐模型覆盖）">
-                <div className="max-h-72 space-y-1.5 overflow-y-auto rounded-lg border border-line p-2">
-                  {editing.models.map((model) => {
-                    const profile = profileForModel(model)
-                    const current = editing.modelSettings?.[model] ?? {}
-                    const setModelSetting = (patch: Partial<ModelSettings>): void => {
-                      const next = { ...(editing.modelSettings ?? {}) }
-                      next[model] = { ...next[model], ...patch }
-                      setEditing({ ...editing, modelSettings: next })
-                    }
-                    const controlClass = 'h-7 shrink-0 rounded-md border border-line bg-panel px-1 text-xs'
-                    return (
-                      <div key={model} className="flex flex-wrap items-center gap-2 rounded-md bg-app px-2 py-1.5">
-                        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={`${model}（${profile.label}）`}>
-                          {model}
-                        </span>
-                        <select
-                          value={current.reasoning ?? 'off'}
-                          onChange={(e) => setModelSetting({ reasoning: e.target.value as ReasoningLevel })}
-                          disabled={!profile.reasoning}
-                          title={profile.reasoning ? '推理等级' : '该模型档案不支持推理参数'}
-                          className={`${controlClass} disabled:opacity-40`}
-                        >
-                          <option value="off">推理 关</option>
-                          <option value="low">低</option>
-                          <option value="medium">中</option>
-                          <option value="high">高</option>
-                        </select>
-                        <select
-                          value={current.contextTokens ?? profile.contextTokens}
-                          onChange={(e) => setModelSetting({ contextTokens: Number(e.target.value) })}
-                          title="上下文窗口（仅记录与展示）"
-                          className={controlClass}
-                        >
-                          {modelParamOptions(CONTEXT_PRESETS, profile.contextTokens).map((value) => (
-                            <option key={value} value={value}>
-                              上下文 {formatTokens(value)}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={current.maxOutputTokens ?? profile.maxOutputTokens}
-                          onChange={(e) => setModelSetting({ maxOutputTokens: Number(e.target.value) })}
-                          title="单次回复输出上限"
-                          className={controlClass}
-                        >
-                          {modelParamOptions(OUTPUT_PRESETS, profile.maxOutputTokens).map((value) => (
-                            <option key={value} value={value}>
-                              输出 {formatTokens(value)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )
-                  })}
-                </div>
-              </Field>
-            )}
 
             {formError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{formError}</div>}
 
