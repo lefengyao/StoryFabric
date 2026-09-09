@@ -32,15 +32,12 @@
 
 ### 3. Token 消耗监测（左侧栏新入口）
 
-现状：**全仓库没有任何 LLM 用量采集** —— `grep -E 'usage|prompt_tokens|completion_tokens|cached_tokens|input_tokens|output_tokens'` 在 `src` 的 `.ts` 文件里零命中（`token` 一词只出现在访问密钥会话 `src/server/auth.ts` 等处）；`openaiCompatible.ts` / `anthropic.ts` / `gemini.ts` 都丢弃了 API 返回的用量字段。
+现状（实现前）：**全仓库没有任何 LLM 用量采集**。现已完成：
 
-- [ ] 适配器解析 usage → 统一类型 → 经 agent loop / IPC / SSE 传到渲染端 → 持久化 → 左侧栏新页面展示。
-- 需要的数据：**各模型消耗**、**日消耗**、**平均缓存命中**。
-- 落点：
-  - `src/main/llm/{openaiCompatible,anthropic,gemini}.ts` 与 `src/core/llm/*` 的流式解析
-  - `StreamResult`（`src/main/llm/types.ts`、`src/core/llm/types.ts`）增加 `usage?`
-  - 左侧栏 `NAV_ITEMS`（`src/renderer/src/layouts/AppLayout.tsx:11-18`）+ 新路由 + 新页面
-- 待确认：持久化位置（工作区 `.storyfabric/` vs 全局 `settings.json`，前者随工作区备份、后者跨项目汇总）、统计范围（仅智能体对话 vs 含续写/润色等快捷操作）、日切分时区、缓存口径（OpenAI `prompt_tokens_details.cached_tokens`、Anthropic `cache_read_input_tokens` / `cache_creation_input_tokens`、Gemini `cachedContentTokenCount`）、是否需要费用估算（需模型单价表，维护成本高）。
+- [x] 适配器解析 usage → 统一类型 `TokenUsage` → agent loop 回报 `UsageRecord` → 落盘 `usage.json` → 左侧栏「用量」页面。
+- [x] 需要的数据：**各模型消耗**、**日消耗（最近 14 天）**、**平均缓存命中**。
+- 决策：持久化用独立 `usage.json`（桌面 userData / 服务端 data 目录，非 `settings.json`）；统计范围为**全部 LLM 调用**（当前快捷操作未单独发起调用，因此等同智能体对话）；缓存口径已按三家协议归一。
+- 后续可做（未排期）：费用估算（需模型单价表）、按工作区拆分、导出 CSV。
 
 ## 待排期
 
@@ -52,6 +49,7 @@
 
 ## 已完成（2026-09-09）
 
+- [x] **清单第 (4) 项 Token 消耗监测**：三家协议 usage 归一（OpenAI 需 `stream_options.include_usage`，被拒时回退重试）、`usage.json` 独立持久化、`getUsageRecords()` 三端打通、左侧栏「用量」页（各模型 / 最近 14 天 / 平均缓存命中）。
 - [x] **清单第 (5) 项代码质量批次**：新建实体的待确认 `entityId` 与落盘 id 对齐（core 六个分支 + main 的 setting/note）；`save_relationship` 两端 title（空 type 不再渲染 `【】`）与错误文案对齐；`kindOfTool(name)` 取代不可达的 restore 死分支；`pendingChangeView` 测试解耦 `outcome` 键存在性、core loop 请求快照改深拷贝。
 - [x] A+B 批次：`restore_from_trash` 用回收站条目的真实 `entityKind`（core/main）；桌面端首次建关系的 `beforeText` 与 core 对齐；确认按钮按操作显示「移入回收站 / 确认恢复 / 应用写入」；`pendingChangeView` 测试改 `toStrictEqual` 全量断言；core loop 假适配器记录请求快照并断言回注内容。
 - [x] 便签删除的待确认变更标题两端对齐、失败 preview 两端对齐（见 `plans/2026-09-08-note-completion-delete.md`）。
