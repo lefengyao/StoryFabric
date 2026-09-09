@@ -380,3 +380,100 @@ export interface UsageRecord {
 }
 
 export const MAX_TOOL_ROUNDS = 10
+
+/* ---------------- 远程部署（仅桌面端） ---------------- */
+
+export type DeployStep = 'connect' | 'probe' | 'upload' | 'build' | 'run' | 'healthcheck'
+export type DeployStepStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
+
+/** 单步进度（主进程 → 渲染进程） */
+export interface DeployProgress {
+  runId: string
+  step: DeployStep
+  status: DeployStepStatus
+  message?: string
+  output?: string
+  at: number
+}
+
+export interface DeployProbeResult {
+  os: string
+  arch: string
+  distro?: string
+  isRoot: boolean
+  /** `sudo -n true` 成功（免密 sudo） */
+  passwordlessSudo: boolean
+  dockerVersion?: string
+  portFree: boolean
+  portOwner?: string
+  /** 服务器上现有 storyfabric 容器的镜像 tag */
+  installedImage?: string
+}
+
+export interface DeployConnectionInput {
+  targetId?: string
+  host: string
+  port: number
+  username: string
+  /** 缺省表示使用已保存密码 */
+  password?: string
+}
+
+export interface DeployTestResult {
+  fingerprint: string
+  probe: DeployProbeResult
+  /** 已保存目标且指纹不一致 */
+  fingerprintChanged: boolean
+}
+
+export interface DeployOptions {
+  installDir: string
+  servicePort: number
+  baseImage: string
+}
+
+export interface DeployRunResult {
+  ok: boolean
+  version?: string
+  url?: string
+  accessKey?: string
+  failedStep?: DeployStep
+  error?: string
+}
+
+export interface DeployTargetStored {
+  id: string
+  label: string
+  host: string
+  port: number
+  username: string
+  passwordEncrypted: string
+  hostKeyFingerprint: string
+  installDir: string
+  servicePort: number
+  baseImage: string
+  bundleSource: 'bundled' | 'url'
+  os: 'linux'
+  arch?: string
+  distro?: string
+  dockerVersion?: string
+  installedVersion?: string
+  lastDeployedAt?: number
+  lastStatus?: 'ok' | 'failed'
+  lastError?: string
+}
+
+export type DeployTargetPublic = Omit<DeployTargetStored, 'passwordEncrypted'> & { hasPassword: boolean }
+
+export interface DeployTargetInput {
+  id?: string
+  label: string
+  host: string
+  port: number
+  username: string
+  password?: string
+  hostKeyFingerprint?: string
+  installDir: string
+  servicePort: number
+  baseImage: string
+}
