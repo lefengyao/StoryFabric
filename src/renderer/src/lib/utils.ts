@@ -26,7 +26,9 @@ export const ENTITY_KIND_LABEL: Record<string, string> = {
   relationship: '关系',
   outline: '大纲',
   event: '事件',
-  chapter: '章节'
+  chapter: '章节',
+  note: '便签',
+  setting: '设定'
 }
 
 export function formatTime(ts: number): string {
