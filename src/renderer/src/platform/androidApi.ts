@@ -81,7 +81,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       getAdapter,
       settings: async () => {
         const s = await this.loadSettings()
-        return { customPrompt: s.customPrompt, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id) }))) }
+        return { customPrompt: s.customPrompt, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
       },
       emit: (sessionId, event) => this.emitAgentEvent(sessionId, event)
     })
