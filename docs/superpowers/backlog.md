@@ -3,6 +3,71 @@
 > 记录已知但未排期的工作项。完成一项后移到对应的 plan/spec，或直接删除。
 > 最后更新：2026-09-09
 
+## 全项目审核待修复清单（2026-09-09）
+
+来源：`reviews/2026-09-09-full-project-audit.md`（6 名独立只读审核员 + 主审核人执行复现）。以下按优先级排列，每条都附位置与验收方式。
+
+### P0 阻塞（发布前必须修）
+
+- [ ] **P0-1 恶意/损坏的回收站索引可删除整个工作区**（已实测复现）
+  - 位置：`core/storage/fileStore.ts:19-25`、`core/storage/nodeFileStore.ts:12-21,81-83`、`core/workspace/trash.ts:6-8,55-61`、`core/workspace/archive.ts:16-18,34-40`
+  - 修复：①`normalizeRelativePath` 拒绝 `''`/`'.'`；②`NodeFileStore.remove` 拒绝工作区根；③读 trash 索引时校验（`trashPath` 必须以 `.storyfabric/trash/` 开头、`originalPath` 必须是可移植路径）；④归档导入拒绝 `.storyfabric/**`（仅放行 `layout.json`）。
+  - 验收：新测试 —— 含 `trashPath:""` 的索引条目调用 `purgeTrashEntry` 后工作区文件仍在；含 `.storyfabric/trash/index.json` 的 ZIP 被拒绝导入。
+- [ ] **P0-2 窗口无导航守卫，Markdown 链接可把完整 IPC 桥交给远程页面**（渲染结果已实测）
+  - 位置：`main/index.ts:44-49`、`renderer/src/components/markdown/Markdown.tsx:8`、`preload/index.ts:16,96`
+  - 修复：①`will-navigate` 只允许自身 origin，其余 `shell.openExternal`；②Markdown 链接加 `target="_blank" rel="noopener noreferrer"`；③`setWindowOpenHandler` 校验协议白名单。
+  - 验收：测试断言渲染出的链接带 `target`/`rel`；手工点一个外链确认在系统浏览器打开而非窗口内跳转。
+- [ ] **P0-3 `fetchModels` 把已存密钥发往调用方指定的 baseUrl**（已实测：`Authorization: Bearer <密钥>` 发到攻击者 URL）
+  - 位置：`main/ipc.ts:164-168`、`server/server.ts:287-291`、`core/llm/openaiCompatible.ts:126-129`、`gemini.ts:136-139`、`anthropic.ts:195`
+  - 修复：传了 `providerId` 时从存储读取 `protocol`/`baseUrl`，忽略入参；仅新建供应商（无 id）时才用自定义地址。
+  - 验收：新测试 —— 传 `providerId` + 攻击者 `baseUrl` 时，请求实际发往存储里的地址。
+- [ ] **P0-4 智能体无法向正文箱写章节（`volumeId` 无处可查）**（已实测：全部读工具无 `vol_` 泄漏）
+  - 位置：`core/tools/registry.ts:20-48`、`core/tools/writeValidation.ts:23-25,33-35`、`core/agent/prompts.ts:10-11`
+  - 修复：新增 `list_volumes` 读工具（两套注册表 + 提示词同步），或在 `list_chapters` 结果中始终附带卷列表。
+  - 验收：`registrySmoke.test.ts` 增加「新工作区里模型能拿到 volumeId 并成功写入正文箱」用例。
+
+### P1 重大（下一批次）
+
+**智能体工具链**
+
+- [ ] **P1-1 两套注册表 25/27 个工具描述与 schema 漂移**：`core/tools/registry.ts:20-48` vs `main/tools/registry.ts:69-301`；`registryParity.test.ts:14` 只锁 `delete_note`。修复：以 core 为唯一源、main 薄封装，parity 测试遍历全部 27 个工具。
+- [ ] **P1-2 待确认变更 `apply()` 抛错会终止整轮对话**：`core/agent/agentLoop.ts:32`、`main/agent/agentLoop.ts:158-160`；`apply` 恒返回 `{ok:true}`。修复：包 try/catch，失败时回注「写入失败」并让模型重试。
+- [ ] **P1-3 桌面端 `move_chapter` 不校验目标卷**：`main/tools/registry.ts:655-665`（core 在 `:121` 校验）。修复：补同样的 `listVolumes` 检查。
+- [ ] **P1-4 core 写工具不校验 payload**：`core/tools/registry.ts:92-109`，`{"character":"str"}` 会生成「未命名人物」。修复：把 main 的必填校验下沉到共享 `writeValidation.ts` 并两端调用。
+- [ ] **P1-5 `restore_from_trash` 的 id 无法获得**：27 个工具无列回收站工具。修复：新增 `list_trash` 读工具。
+- [ ] **P1-6 `save_relationship` 丢失更新**：`core/tools/registry.ts:127` / `main/tools/registry.ts:587-608` 在预览时抓取整份列表。修复：apply 时重新读取并按 id 追加。
+- [ ] **P1-7 `get_chapter_context` 数值参数未校验**：`core/retrieval/contextBuilder.ts:27-28`，传 `"abc"` 时 `ok:true` 但正文为空、`returnedChars:NaN`。修复：`Number.isFinite` 校验/夹取。
+
+**数据完整性**
+
+- [ ] **P1-8 新建人物忽略 `tier`**（已实测）：`core/workspace/entityStore.ts:123-124` 新建分支漏了 `tier`，所有人默认落 `characters/secondary/`。修复：新文档分支补 `tier`。
+- [ ] **P1-9 未知字段被丢弃、无前向兼容**：`entityStore.ts:110,187,225,273,330,375`、`migration.ts:126-132`。修复：序列化时以原始 map 为底再覆盖已知键；`version > 当前` 时拒绝或警告。
+- [ ] **P1-10 `restoreFromTrash` 按索引搬运任意文件**：`trash.ts:6-8,44-61`（与 P0-1 同源）。修复随 P0-1 一并处理。
+- [ ] **P1-11 桌面端无按工作区的写队列**：`main/ipc.ts`、`main/services/entityStore.ts:57`、`core/storage/nodeFileStore.ts:8`；并发写会 EPERM / 丢更新 / 章节 `order` 重复。修复：在 `main/ipc.ts` 加与 `server.ts:213-217` 同构的串行队列，并复用单个 `NodeFileStore`。
+- [ ] **P1-12 删除人物会丢关系且恢复不还原**：`entityStore.ts:145`。修复：把被删边存入回收站条目，恢复时回填。
+
+**架构与安全**
+
+- [ ] **P1-13 两套 agent 循环漂移**：`@` 附件只在桌面端注入、流式期间改会话名被覆盖、中止在 web/Android 被标红、标题规则不同（`core/agent/agentLoop.ts:25,31,35` vs `main/agent/agentLoop.ts:88-91,94,123,180,184-189`）。修复：以 `CoreAgentService` 为唯一循环，main 只做适配。
+- [ ] **P1-14 Android `keyPreview` 泄漏短密钥**：`renderer/src/platform/androidApi.ts:263`，≤8 位密钥会整把写进明文 Preferences 并显示。修复：与桌面/服务端一致的掩码（短密钥只显示首 2 位 + `****`）。
+- [ ] **P1-15 渲染层类型检查能看到 `@types/node`**：`tsconfig.web.json` 无 `types`。修复：加 `"types": []` 或 `["vite/client"]`，并清理 `core/storage/index.ts:2` 对 Node 专属模块的再导出。
+- [ ] **P1-16 服务端静态文件路径守卫零测试覆盖**：`server/server.ts:142`（守卫在鉴权前执行；关掉后能读出 `apiKeyEncrypted`）。修复：`server.test.ts` 增加 `/%2e%2e%2fsettings.json`、`/..%2fsettings.json` → 403 用例。
+- [ ] **P1-17 密钥降级明文且文件无 0600**：`main/services/settingsService.ts:53-61,109-112`、`main/services/deployTargetsStore.ts:27-30`。修复：写入时 `mode: 0o600` + `chmod`，并在 UI 标出「明文降级」。
+
+### P2 轻微/建议
+
+- [ ] **文档**：`design.md` 已严重过时（14 vs 27 工具、flat v1 目录、gray-matter、导航项）→ 加「历史文档」横幅或重写；`linux-server.md:16` 与多工作区实现矛盾、`:55-58` 缺 `STORYFABRIC_DATA_DIR`、密钥权限写 0400（实际 0600）；`android-handoff.md:10` 声称 API 29 而 `android/variables.gradle:2` 是 23；远程部署 spec 的「按发行版给 Docker 安装命令」「报告端口占用进程」两条未实现（`portOwner` 从未赋值）；`backlog.md:71` 与 `specs/2026-09-09-pending-change-presentation-design.md:98` 引用不存在的 `src/main/llm/__tests__/adapters.test.ts`；`README.md:95` 说 `docs/` 不入版本控制（实际已跟踪 15 个文件）。
+- [ ] **文案**：模型管理页「支持图片输入」与聊天窗口「图片」徽标暗示可发图片（实际不在范围内）；`server.ts` 归档下载头硬编码文件名；README 未引入中文品牌「织章」；`npm run dist` 与 `dist:win` 重复。
+- [ ] **测试**：37/111 个源文件无测试可达（全部 20 个 `.tsx`、`preload/index.ts`、`main/ipc.ts`、3 个 store）；6 条变异未被捕获（静态守卫、登录限流、`settingsService` 更新分支 prune、`hasKey`、`isChildOf`、`isWithin`）；补一条「每个 `StoryFabricApi` 方法都有 `ipcMain.handle`」的测试。
+- [ ] **发布**：CI 与脚本都没有 `tsc`；没有 asar/bundle/版本一致性校验；`SHA256SUMS` 只覆盖 5 个文件（tar 内另有 166 个 `web/**`）且无人消费；`electron-builder.yml` 的 `files` 白名单实际不生效（asar 里含 `@capacitor/*` 等）。
+- [ ] **结构**：`main/tools/registry.ts`（698 行）与 core 重复，应合并；`ChatPage.tsx`（511 行）、`SettingsPage.tsx`（495 行）按职责拆分；`quickActionModel` 设置项被持久化但运行时从不读取（接线或删除）；`core/deploy/bundle.ts` 的 `BUNDLE_ENTRIES` 与 `scripts/build-server-bundle.mjs` 各自硬编码清单（建议共用一个清单文件）。
+
+### 已在本轮清理（2026-09-09）
+
+- 删除未使用的 `renderer/src/components/ui/select.tsx` 与 7 个未使用的 Radix 依赖（仅保留 `@radix-ui/react-dialog`）。
+- 删除死代码：`Textarea`、`DeployOptions`、`ensureServerWorkspace`、main 重复的 `WORKSPACE_MARKERS`、从未抛出的 `AbortedError`（含永远为假的 `instanceof` 分支）、`bundleFileName`。
+- 删除可再生的 `release/server-bundle/` 暂存目录。
+
 ## UI 展示平滑度（用户反馈 2026-09-09）
 
 用户反馈「有一些 UI 展示不够平滑」，并给出第一处具体位置（其余**待补充**）。
