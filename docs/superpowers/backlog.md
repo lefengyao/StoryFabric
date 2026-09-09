@@ -41,6 +41,9 @@
 
 ## 待排期
 
+- [ ] **用量持久化的跨实例并发**：`UsageService` 的队列是实例私有的，多进程/多实例写同一 `usage.json` 会互相覆盖（桌面单实例锁 + 服务端单进程下不触发）。若未来支持共享 data 目录，改为 JSONL 追加写。
+- [ ] **`UsagePage` 无渲染端测试**（仓库无 jsdom/@testing-library）；页面层空态/加载态/错误态/条形图仅人工确认。
+- [ ] **Anthropic 流缺少 `message_start` 时**（非标准流）：`message_delta` 单独出现会把 `promptTokens` 记为 0，缓存命中率随之失真；正常流不受影响。
 - [ ] **`PendingChangeDialog` 的 `view.confirmLabel` 接线无测试保护**：仓库无 React 组件测试设施；变异验证表明改回硬编码文案全量测试仍绿（风险低：单一调用点 + 必填字段由 tsc 兜底）。
 - [ ] core agent loop 的假适配器只验证注入结果与请求快照，未覆盖真实协议适配器的消息映射（已由 `src/main/llm/__tests__/adapters.test.ts` 部分覆盖）。
 - [ ] 主线计划 `docs/superpowers/plans/2026-09-05-writing-structure-and-hybrid-retrieval.md`（50 项未勾选）。
