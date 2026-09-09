@@ -2,7 +2,7 @@
  * 智能体工具注册表：读取工具直接执行；写入工具只生成「待确认变更」，
  * 由用户在界面确认后才真正落盘（commit）。
  */
-import type { ChapterDoc, CharacterDoc, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson } from '../../shared/types'
+import type { ChapterDoc, CharacterDoc, EntityKind, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson } from '../../shared/types'
 import {
   countWords,
   findCharacter,
@@ -404,6 +404,7 @@ interface SimulatedChange {
   beforeText: string
   afterText: string
   title: string
+  entityKind?: EntityKind | 'relationship'
   commit: () => Promise<string>
 }
 
@@ -588,7 +589,7 @@ async function simulateRelationship(
   const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id
   return {
     entityId: 'relationships',
-    beforeText: oldList.length ? serializeRelationships(oldList, nameOf) : '（当前无关系数据）',
+    beforeText: serializeRelationships(oldList, nameOf),
     afterText: serializeRelationships(newList, nameOf),
     title: `新增关系：${from.name} → ${to.name}【${input.type}】`,
     commit: async () => {
@@ -655,7 +656,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
         const id = String(a.id ?? '')
         const entry = (await listTrash(root)).find((item) => item.id === id)
         if (!entry) throw new Error(`回收站中未找到实体：${id}`)
-        sim = { entityId: id, title: `恢复：${entry.title}`, beforeText: JSON.stringify(entry, null, 2), afterText: `恢复到 ${entry.originalPath}`, commit: async () => { await restoreTrash(root, id); return `已恢复「${entry.title}」` } }
+        sim = { entityId: id, title: `恢复：${entry.title}`, beforeText: JSON.stringify(entry, null, 2), afterText: `恢复到 ${entry.originalPath}`, entityKind: entry.kind, commit: async () => { await restoreTrash(root, id); return `已恢复「${entry.title}」` } }
         break
       }
       default:
@@ -665,7 +666,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
     const change: PendingChange = {
       id: genId('chg'),
       toolName: name,
-      entityKind: name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline',
+      entityKind: sim.entityKind ?? (name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline'),
       entityId: sim.entityId,
       title: sim.title,
       beforeText: sim.beforeText,

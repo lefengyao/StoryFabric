@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../../core/storage/fileStore'
 import { NodeFileStore } from '../../../core/storage/nodeFileStore'
 import { initializeWorkspace } from '../../../core/workspace/workspaceService'
+import { saveCharacter, saveNote } from '../../../core/workspace/entityStore'
 import { executeTool as executeCoreTool, TOOL_DEFS as CORE_TOOL_DEFS } from '../../../core/tools/registry'
 import { executeTool as executeMainTool, TOOL_DEFS as MAIN_TOOL_DEFS } from '../registry'
 
@@ -28,6 +29,66 @@ describe('desktop tool registry parity', () => {
       const core = await executeCoreTool(memory, 'delete_note', args)
       const main = await executeMainTool(root, 'delete_note', args)
       expect(main).toEqual(core)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('restores a note with its own entity kind on both runtimes', async () => {
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '测试')
+    const root = await mkdtemp(join(tmpdir(), 'sf-parity-'))
+    try {
+      await initializeWorkspace(new NodeFileStore(root), '测试')
+
+      const coreNote = await saveNote(memory, { title: '恢复测试便签', content: '内容' })
+      const coreDelete = await executeCoreTool(memory, 'delete_note', JSON.stringify({ noteId: coreNote.id }))
+      if (coreDelete.kind !== 'pending') throw new Error('core 未生成待确认删除')
+      await coreDelete.apply()
+      const coreRestore = await executeCoreTool(memory, 'restore_from_trash', JSON.stringify({ id: coreNote.id }))
+
+      const mainNote = await saveNote(new NodeFileStore(root), { title: '恢复测试便签', content: '内容' })
+      const mainDelete = await executeMainTool(root, 'delete_note', JSON.stringify({ noteId: mainNote.id }))
+      if (mainDelete.kind !== 'pending') throw new Error('main 未生成待确认删除')
+      await mainDelete.apply()
+      const mainRestore = await executeMainTool(root, 'restore_from_trash', JSON.stringify({ id: mainNote.id }))
+
+      if (coreRestore.kind !== 'pending' || mainRestore.kind !== 'pending') throw new Error('恢复未生成待确认变更')
+      expect(coreRestore.change.entityKind).toBe('note')
+      expect(mainRestore.change.entityKind).toBe(coreRestore.change.entityKind)
+      expect(mainRestore.change.title).toBe(coreRestore.change.title)
+      expect(mainRestore.change.afterText).toBe(coreRestore.change.afterText)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports the same empty relationship baseline as core', async () => {
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '测试')
+    const root = await mkdtemp(join(tmpdir(), 'sf-parity-'))
+    try {
+      await initializeWorkspace(new NodeFileStore(root), '测试')
+
+      const coreFrom = await saveCharacter(memory, { name: '甲' })
+      const coreTo = await saveCharacter(memory, { name: '乙' })
+      const coreRel = await executeCoreTool(
+        memory,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: coreFrom.id, toCharacterId: coreTo.id, type: '朋友' } })
+      )
+
+      const mainFrom = await saveCharacter(new NodeFileStore(root), { name: '甲' })
+      const mainTo = await saveCharacter(new NodeFileStore(root), { name: '乙' })
+      const mainRel = await executeMainTool(
+        root,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: mainFrom.id, toCharacterId: mainTo.id, type: '朋友' } })
+      )
+
+      if (coreRel.kind !== 'pending' || mainRel.kind !== 'pending') throw new Error('未生成待确认关系变更')
+      expect(coreRel.change.beforeText).toBe('')
+      expect(mainRel.change.beforeText).toBe(coreRel.change.beforeText)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
