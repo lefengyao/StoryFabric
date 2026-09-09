@@ -18,7 +18,7 @@ import {
   Waypoints,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ChatMessage, SessionMeta } from '../../../../shared/types'
 import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
@@ -399,7 +399,7 @@ function ToolChip({ name, argsJson, status, preview }: { name: string; argsJson:
   )
 }
 
-function MessageItem({ msg }: { msg: ChatMessage }): React.ReactElement {
+function MessageItemInner({ msg }: { msg: ChatMessage }): React.ReactElement {
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end gap-3">
@@ -433,6 +433,9 @@ function MessageItem({ msg }: { msg: ChatMessage }): React.ReactElement {
     </div>
   )
 }
+
+/** 历史消息在流式期间引用不变，memo 可避免每个 token 都重渲染并重新解析 Markdown。 */
+const MessageItem = memo(MessageItemInner)
 
 /** @引用选择器：从当前工作区实体中挑选并附加到消息 */
 function AttachPicker({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }): React.ReactElement {

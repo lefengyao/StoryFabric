@@ -13,6 +13,7 @@ import type { ToolCallData } from '../../../shared/types'
 import { getPlatformApi } from '../platform/platformApi'
 import { sessionEventPatch } from './chatEvents'
 import { playCompletionSound, shouldPlayCompletionSound } from '../lib/completionSound'
+import { createRafBatcher } from '../lib/rafBatcher'
 import { useSettings } from './settingsStore'
 
 /** 流式期间的临时工具调用展示项 */
@@ -154,6 +155,7 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
     } finally {
+      flushStreamingDelta()
       set({ streaming: false, streamingText: '', liveTools: [] })
     }
   },
@@ -167,6 +169,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   abort: async () => {
+    flushStreamingDelta()
     const id = get().activeId ?? runningSessionId
     if (id) await getPlatformApi().agentAbort(id)
   },
@@ -187,6 +190,23 @@ function useWorkspaceRefresh(): Promise<void> {
   return useWorkspace.getState().refresh()
 }
 
+/**
+ * 流式文本按帧合并：token 可能比帧率快得多，逐条 set 会让整段 Markdown 反复重解析。
+ * set 在 zustand store 内是稳定引用，因此延迟创建一次即可。
+ */
+let streamingBatcher: ReturnType<typeof createRafBatcher<string>> | null = null
+
+function pushStreamingDelta(set: SetFn, delta: string): void {
+  if (!streamingBatcher) {
+    streamingBatcher = createRafBatcher<string>((deltas) => set((p) => ({ streamingText: (p.streamingText ?? '') + deltas.join('') })))
+  }
+  streamingBatcher.push(delta)
+}
+
+function flushStreamingDelta(): void {
+  streamingBatcher?.flush()
+}
+
 function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatState): void {
   // 仅处理当前激活会话的事件；后台会话的结果在 send() 完成时统一落库
   if (envelope.sessionId !== get().activeId && !(get().streaming && !get().activeId)) {
@@ -204,7 +224,7 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       break
     }
     case 'text-delta':
-      set((p) => ({ streamingText: (p.streamingText ?? '') + ev.delta }))
+      pushStreamingDelta(set, ev.delta)
       break
     case 'tool-start':
       set((p) => ({
@@ -228,9 +248,11 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       }
       break
     case 'error':
+      flushStreamingDelta()
       set({ error: ev.message })
       break
     case 'done': {
+      flushStreamingDelta()
       const enabled = useSettings.getState().settings?.completionSound ?? false
       if (shouldPlayCompletionSound({ enabled, error: get().error !== null })) playCompletionSound()
       break
