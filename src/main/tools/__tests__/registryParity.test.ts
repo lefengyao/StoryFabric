@@ -124,6 +124,15 @@ describe('desktop tool registry parity', () => {
       if (emptyType.kind !== 'pending') throw new Error('空类型未生成待确认关系变更')
       expect(emptyType.change.title).toBe('新增关系：甲 → 乙')
 
+      // 空 type 时 main 也必须不渲染【】：只断言 core 会漏掉主进程回退成无条件后缀的情况
+      const mainEmpty = await executeMainTool(
+        root,
+        'save_relationship',
+        JSON.stringify({ relationship: { fromCharacterId: mainFrom.id, toCharacterId: mainTo.id, type: '' } })
+      )
+      if (mainEmpty.kind !== 'pending') throw new Error('空类型未生成待确认关系变更（main）')
+      expect(mainEmpty.change.title).toBe(emptyType.change.title)
+
       const coreErr = await executeCoreTool(
         memory,
         'save_relationship',
