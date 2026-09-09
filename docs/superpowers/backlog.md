@@ -48,6 +48,9 @@
 - [ ] **Anthropic 流缺少 `message_start` 时**（非标准流）：`message_delta` 单独出现会把 `promptTokens` 记为 0，缓存命中率随之失真；正常流不受影响。
 - [ ] **`PendingChangeDialog` 的 `view.confirmLabel` 接线无测试保护**：仓库无 React 组件测试设施；变异验证表明改回硬编码文案全量测试仍绿（风险低：单一调用点 + 必填字段由 tsc 兜底）。
 - [ ] core agent loop 的假适配器只验证注入结果与请求快照，未覆盖真实协议适配器的消息映射（已由 `src/main/llm/__tests__/adapters.test.ts` 部分覆盖）。
+- [ ] **`ChaptersPage` 自动保存的页面级接线无组件测试**（仓库无 jsdom/@testing-library，页面目录下无任何测试文件）：`flush`/`discard`/覆盖确认的调用时机只由 `lib/__tests__/autosave.test.ts` 单测 + 人工验证保障，`discard()` 的两次接线（删除前、无改动时）一旦被误删，全量测试不会报警。
+- [ ] **自动保存的调度 effect 在 React StrictMode 下会双跑**（dev only）：当前实现幂等（重新 schedule 只重置计时），仅在有共享实例时需重新评估。
+- [ ] **覆盖确认弹窗的 `setConfirmOverwrite(true)` 可能在组件卸载后触发**：React 18 已不产生告警，仅是一次无用渲染。
 - [ ] 主线计划 `docs/superpowers/plans/2026-09-05-writing-structure-and-hybrid-retrieval.md`（50 项未勾选）。
 - [ ] Android 端按 `docs/android-handoff.md` 的验收清单恢复（当前暂缓）。
 - [ ] `docs/design.md` 已与实现脱节（仍写 14 个工具、`src/main/agent/prompts.ts` 等旧结构），需要重写或标注为历史文档。
@@ -59,3 +62,4 @@
 - [x] A+B 批次：`restore_from_trash` 用回收站条目的真实 `entityKind`（core/main）；桌面端首次建关系的 `beforeText` 与 core 对齐；确认按钮按操作显示「移入回收站 / 确认恢复 / 应用写入」；`pendingChangeView` 测试改 `toStrictEqual` 全量断言；core loop 假适配器记录请求快照并断言回注内容。
 - [x] 便签删除的待确认变更标题两端对齐、失败 preview 两端对齐（见 `plans/2026-09-08-note-completion-delete.md`）。
 - [x] 待确认变更弹窗的删除/恢复展示（见 `plans/2026-09-09-pending-change-presentation.md`）。
+- [x] 终检非阻塞项收尾（`34ddc20`）：新增 `Autosave.discard()`，删除章节前丢弃待执行保存（避免删完又被写回）、无未保存改动时用 discard 取代 cancel（干净卸载不再多写一次磁盘）；补适配器级测试「关闭推理时请求体不带 thinking 且不回放历史思考块」（两处变异均被捕获）。
