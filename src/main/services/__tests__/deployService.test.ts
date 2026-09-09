@@ -127,14 +127,26 @@ describe('DeployService', () => {
       ...linuxRules.map((r) =>
         r.match === 'sudo -n true' ? { ...r, result: { code: 1, stdout: '', stderr: 'sudo: a password is required' } } : r
       ),
-      { match: 'sudo -S true', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } },
-      // 真实环境里 docker 探测本身也带 sudo，会一起失败
-      { match: 'sudo -S docker version', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } }
+      { match: 'sudo -S true', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } }
     ]
     await withService(async (service) => {
       const result = await service.install(target, () => {})
       expect(result.ok).toBe(false)
       expect(result.failedStep).toBe('probe')
+      expect(result.error).toContain('sudo')
+      expect(result.error).not.toContain('未安装 Docker')
+    }, rules)
+  })
+
+  it('sudo 可用但 docker 探测仍报 sudo 错误时，提示 sudo 而不是未安装', async () => {
+    // 规则顺序即优先级：把 sudo-docker 放在通用 docker version 之前
+    const rules: FakeRule[] = [
+      { match: 'sudo -S docker version', result: { code: 1, stdout: '', stderr: 'sudo: 1 incorrect password attempt' } },
+      ...linuxRules
+    ]
+    await withService(async (service) => {
+      const result = await service.install(target, () => {})
+      expect(result.ok).toBe(false)
       expect(result.error).toContain('sudo')
       expect(result.error).not.toContain('未安装 Docker')
     }, rules)
