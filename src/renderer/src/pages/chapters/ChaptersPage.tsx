@@ -5,9 +5,11 @@ import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { createAutosave } from '../../lib/autosave'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
 import { useChat } from '../../stores/chatStore'
+import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 
 const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
@@ -117,6 +119,21 @@ export function ChaptersPage(): React.ReactElement {
     }
     await doSave()
   }
+
+  /** 空闲自动保存：只在有未保存改动时计时，到点仍走 save()（外部修改照旧弹确认） */
+  const autosaveSeconds = useSettings((s) => s.settings?.autosaveSeconds ?? 0)
+  const autosave = useMemo(() => createAutosave(autosaveSeconds * 1000), [autosaveSeconds])
+  const saveRef = useRef(save)
+  saveRef.current = save
+
+  useEffect(() => {
+    if (!dirty || !draft || autosaveSeconds <= 0) {
+      autosave.cancel()
+      return
+    }
+    autosave.schedule(() => void saveRef.current())
+    return () => autosave.cancel()
+  }, [draft?.title, draft?.content, dirty, autosave, autosaveSeconds])
 
   const remove = async (): Promise<void> => {
     if (!selectedId) return
