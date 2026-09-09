@@ -6,6 +6,10 @@ $ErrorActionPreference = 'Stop'
 $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
 $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 
+# 先产出随包分发的服务端部署包（electron-builder 的 extraResources 依赖它）
+npm run server:bundle
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 npx electron-vite build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

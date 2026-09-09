@@ -1,0 +1,12 @@
+services:
+  storyfabric:
+    image: storyfabric:__VERSION__
+    container_name: storyfabric
+    restart: unless-stopped
+    ports:
+      - "__PORT__:8787"
+    volumes:
+      - __INSTALL_DIR__/data:/data
+      - __INSTALL_DIR__/secrets/storyfabric_key:/run/secrets/storyfabric_key:ro
+    environment:
+      STORYFABRIC_ACCESS_KEY_FILE: /run/secrets/storyfabric_key
