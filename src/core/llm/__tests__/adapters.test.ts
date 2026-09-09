@@ -137,6 +137,40 @@ describe('OpenAICompatibleAdapter', () => {
     expect(capturedBody.reasoning_effort).toBe('high')
     expect(capturedBody.max_tokens).toBeUndefined()
   })
+
+  it('自定义映射经适配器落到请求体，且不再附加内置推理参数', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: [DONE]\n\n'])
+      })
+    )
+
+    const adapter = new OpenAICompatibleAdapter('https://api.deepseek.com/v1')
+    await adapter.stream(
+      'deepseek-chat',
+      {
+        system: '',
+        messages: [],
+        tools: [],
+        signal: undefined,
+        params: {
+          reasoning: 'high',
+          reasoningSupport: true,
+          reasoningMap: { path: 'enable_thinking', values: { high: 'true' } },
+          contextTokens: 131072,
+          maxOutputTokens: 8192
+        }
+      },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.enable_thinking).toBe(true)
+    expect(capturedBody.reasoning_effort).toBeUndefined()
+  })
 })
 
 describe('AnthropicAdapter', () => {
@@ -389,6 +423,38 @@ describe('GeminiAdapter', () => {
     )
 
     expect(capturedBody.generationConfig).toEqual({ maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: 2048 } })
+  })
+
+  it('嵌套映射并入 generationConfig，不覆盖输出上限', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: {"candidates":[{"content":{"parts":[{"text":"好"}]}}]}\n\n'])
+      })
+    )
+
+    const adapter = new GeminiAdapter('https://generativelanguage.googleapis.com')
+    await adapter.stream(
+      'gemini-2.5-pro',
+      {
+        system: '',
+        messages: [],
+        tools: [],
+        signal: undefined,
+        params: {
+          reasoning: 'high',
+          reasoningMap: { path: 'generationConfig.thinkingConfig.thinkingBudget', values: { high: '4096' } },
+          contextTokens: 1048576,
+          maxOutputTokens: 8192
+        }
+      },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.generationConfig).toEqual({ maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } })
   })
 
   it('工具结果转为 functionResponse', () => {
