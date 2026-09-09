@@ -94,4 +94,27 @@ describe('resolveModelSettings', () => {
     expect(resolved.contextTokens).toBe(131072)
     expect(resolved.maxOutputTokens).toBe(16384)
   })
+
+  it('用户声明优先：明确开关覆盖档案，未表态时保持 undefined', () => {
+    expect(resolveModelSettings({}, 'gpt-4o').reasoningSupport).toBeUndefined()
+    expect(
+      resolveModelSettings({ modelSettings: { 'deepseek-chat': { reasoningSupport: true } } }, 'deepseek-chat').reasoningSupport
+    ).toBe(true)
+    expect(resolveModelSettings({ modelSettings: { 'gpt-5': { reasoningSupport: false } } }, 'gpt-5').reasoningSupport).toBe(false)
+  })
+
+  it('映射原样透传给请求构建层', () => {
+    const map = { path: 'enable_thinking', values: { low: 'true' } }
+    expect(resolveModelSettings({ modelSettings: { x: { reasoningMap: map } } }, 'x').reasoningMap).toEqual(map)
+  })
+})
+
+describe('模型档案的图片能力默认值', () => {
+  it('多模态家族默认 true，其余默认 false', () => {
+    expect(profileForModel('gpt-4o').vision).toBe(true)
+    expect(profileForModel('claude-sonnet-4-5').vision).toBe(true)
+    expect(profileForModel('gemini-2.5-pro').vision).toBe(true)
+    expect(profileForModel('deepseek-chat').vision).toBe(false)
+    expect(profileForModel('some-internal-model').vision).toBe(false)
+  })
 })

@@ -1,5 +1,5 @@
 /** LLM 协议适配层公共类型 */
-import type { ChatMessage, Protocol, ReasoningLevel, ToolCallData, ToolDefJson } from '../../shared/types'
+import type { ChatMessage, Protocol, ReasoningLevel, ReasoningMap, ToolCallData, ToolDefJson } from '../../shared/types'
 
 export interface StreamRequest {
   /** 系统提示词（各协议自行放到正确位置） */
@@ -14,6 +14,10 @@ export interface StreamRequest {
 
 export interface ModelParams {
   reasoning: ReasoningLevel
+  /** 用户声明优先；缺省时 `buildModelParams` 回落到内置档案 */
+  reasoningSupport?: boolean
+  /** 官方思考强度映射；缺省或该等级没填时回落内置形式 */
+  reasoningMap?: ReasoningMap
   contextTokens: number
   maxOutputTokens: number
 }
