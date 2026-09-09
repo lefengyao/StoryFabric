@@ -137,4 +137,16 @@ export interface StoryFabricApi {
   /** 更新会话元信息：重命名 / 归档 */
   updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void>
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void
+
+  /* 远程部署（仅桌面端；其它平台实现为抛出「仅支持桌面端」） */
+  deployTestConnection(input: import('./types').DeployConnectionInput): Promise<import('./types').DeployTestResult>
+  deployInstall(input: import('./types').DeployTargetInput): Promise<import('./types').DeployRunResult>
+  deployUpdate(targetId: string): Promise<import('./types').DeployRunResult>
+  deployCancel(): Promise<void>
+  deployLogs(targetId: string): Promise<string>
+  deployUninstall(targetId: string): Promise<void>
+  deployListTargets(): Promise<import('./types').DeployTargetPublic[]>
+  deploySaveTarget(input: import('./types').DeployTargetInput): Promise<import('./types').DeployTargetPublic>
+  deployDeleteTarget(id: string): Promise<void>
+  onDeployEvent(cb: (progress: import('./types').DeployProgress) => void): () => void
 }

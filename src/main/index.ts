@@ -7,10 +7,20 @@ import { IPC } from '../shared/ipc'
 import type { AgentEventEnvelope } from '../shared/api'
 import { SettingsService } from './services/settingsService'
 import { UsageService } from '../core/usage/usageService'
+import { DeployService } from './services/deployService'
+import { DeployTargetsStore } from './services/deployTargetsStore'
+import { Ssh2Transport } from './services/ssh2Transport'
 
 function resolveIconPath(): string {
   // 开发态取项目 resources/；打包后 extraResources 会把 icon.ico 放到 resources 根目录
   return app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(app.getAppPath(), 'resources', 'icon.ico')
+}
+
+function resolveServerBundlePath(): string {
+  // 打包后由 extraResources 放到 resources 根目录；开发态用 release/ 里生成的包，便于本地联调
+  return app.isPackaged
+    ? join(process.resourcesPath, 'server-bundle.tar.gz')
+    : join(app.getAppPath(), 'release', `storyfabric-server-${app.getVersion()}.tar.gz`)
 }
 
 function createWindow(): BrowserWindow {
@@ -66,6 +76,12 @@ if (!gotLock) {
 
     const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
     const usage = new UsageService(join(app.getPath('userData'), 'usage.json'))
+    const deploy = new DeployService({
+      store: new DeployTargetsStore(join(app.getPath('userData'), 'deploy-targets.json')),
+      createTransport: () => new Ssh2Transport(),
+      bundlePath: resolveServerBundlePath(),
+      version: app.getVersion()
+    })
 
     const agent = new AgentService(
       settings,
@@ -78,7 +94,7 @@ if (!gotLock) {
       (record) => void usage.append(record).catch(() => {})
     )
 
-    const ctx: AppContext = { win: () => win, settings, agent, usage }
+    const ctx: AppContext = { win: () => win, settings, agent, usage, deploy }
     registerIpc(ctx)
 
     app.on('activate', () => {

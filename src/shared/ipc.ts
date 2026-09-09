@@ -64,5 +64,17 @@ export const IPC = {
   LoadSession: 'agent:sessions:get',
   DeleteSession: 'agent:sessions:delete',
   UpdateSession: 'agent:sessions:update',
-  AgentEvent: 'agent:event'
+  AgentEvent: 'agent:event',
+
+  /* 远程部署（仅桌面端） */
+  DeployTestConnection: 'deploy:test',
+  DeployInstall: 'deploy:install',
+  DeployUpdate: 'deploy:update',
+  DeployCancel: 'deploy:cancel',
+  DeployLogs: 'deploy:logs',
+  DeployUninstall: 'deploy:uninstall',
+  DeployListTargets: 'deploy:targets:list',
+  DeploySaveTarget: 'deploy:targets:save',
+  DeployDeleteTarget: 'deploy:targets:delete',
+  DeployEvent: 'deploy:event'
 } as const

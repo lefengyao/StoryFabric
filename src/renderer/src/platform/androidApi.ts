@@ -297,6 +297,21 @@ export class AndroidPlatformApi implements StoryFabricApi {
   deleteSession(id: string): Promise<void> { return this.sessions().delete(id) }
   async updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { if (!(await this.sessions().updateMeta(id, patch))) throw new Error('会话不存在') }
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void { this.eventListeners.add(cb); return () => this.eventListeners.delete(cb) }
+
+  /* 远程部署仅桌面端可用 */
+  private unsupported(): never {
+    throw new Error('远程部署仅支持桌面端')
+  }
+  deployTestConnection(): Promise<never> { return this.unsupported() }
+  deployInstall(): Promise<never> { return this.unsupported() }
+  deployUpdate(): Promise<never> { return this.unsupported() }
+  deployCancel(): Promise<never> { return this.unsupported() }
+  deployLogs(): Promise<never> { return this.unsupported() }
+  deployUninstall(): Promise<never> { return this.unsupported() }
+  deployListTargets(): Promise<never> { return this.unsupported() }
+  deploySaveTarget(): Promise<never> { return this.unsupported() }
+  deployDeleteTarget(): Promise<never> { return this.unsupported() }
+  onDeployEvent(): () => void { return () => undefined }
 }
 
 let instance: AndroidPlatformApi | null = null

@@ -75,6 +75,21 @@ const api: StoryFabricApi = {
     const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
     ipcRenderer.on(IPC.AgentEvent, listener)
     return () => ipcRenderer.removeListener(IPC.AgentEvent, listener)
+  },
+
+  deployTestConnection: (input) => ipcRenderer.invoke(IPC.DeployTestConnection, input),
+  deployInstall: (input) => ipcRenderer.invoke(IPC.DeployInstall, input),
+  deployUpdate: (targetId) => ipcRenderer.invoke(IPC.DeployUpdate, targetId),
+  deployCancel: () => ipcRenderer.invoke(IPC.DeployCancel),
+  deployLogs: (targetId) => ipcRenderer.invoke(IPC.DeployLogs, targetId),
+  deployUninstall: (targetId) => ipcRenderer.invoke(IPC.DeployUninstall, targetId),
+  deployListTargets: () => ipcRenderer.invoke(IPC.DeployListTargets),
+  deploySaveTarget: (input) => ipcRenderer.invoke(IPC.DeploySaveTarget, input),
+  deployDeleteTarget: (id) => ipcRenderer.invoke(IPC.DeployDeleteTarget, id),
+  onDeployEvent: (cb) => {
+    const listener = (_e: IpcRendererEvent, progress: unknown) => cb(progress as Parameters<typeof cb>[0])
+    ipcRenderer.on(IPC.DeployEvent, listener)
+    return () => ipcRenderer.removeListener(IPC.DeployEvent, listener)
   }
 }
 

@@ -25,7 +25,14 @@ import type { SettingsService } from './services/settingsService'
 import type { UsageService } from '../core/usage/usageService'
 import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
-import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
+import type { DeployService } from './services/deployService'
+import type {
+  DeployConnectionInput,
+  DeployProgress,
+  DeployTargetInput,
+  PublicAppSettings,
+  RunAgentRequest
+} from '../shared/types'
 import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
 import { fetchProviderModels } from '../core/llm'
 import { decryptApiKey } from './services/settingsService'
@@ -41,6 +48,7 @@ export interface AppContext {
   settings: SettingsService
   agent: AgentService
   usage: UsageService
+  deploy: DeployService
 }
 
 let currentRoot: string | null = null
@@ -188,4 +196,18 @@ export function registerIpc(ctx: AppContext): void {
     const okFlag = await sessionStore().updateMeta(id, patch)
     if (!okFlag) throw new Error('会话不存在')
   })
+
+  /* ---------- 远程部署（仅桌面端） ---------- */
+  const deploySink = (): ((progress: DeployProgress) => void) => {
+    return (progress) => ctx.win()?.webContents.send(IPC.DeployEvent, progress)
+  }
+  ipcMain.handle(IPC.DeployTestConnection, async (_e, input: DeployConnectionInput) => ctx.deploy.testConnection(input))
+  ipcMain.handle(IPC.DeployInstall, async (_e, input: DeployTargetInput) => ctx.deploy.install(input, deploySink()))
+  ipcMain.handle(IPC.DeployUpdate, async (_e, targetId: string) => ctx.deploy.update(targetId, deploySink()))
+  ipcMain.handle(IPC.DeployCancel, async () => ctx.deploy.cancel())
+  ipcMain.handle(IPC.DeployLogs, async (_e, targetId: string) => ctx.deploy.logs(targetId))
+  ipcMain.handle(IPC.DeployUninstall, async (_e, targetId: string) => ctx.deploy.uninstall(targetId))
+  ipcMain.handle(IPC.DeployListTargets, async () => ctx.deploy.listTargets())
+  ipcMain.handle(IPC.DeploySaveTarget, async (_e, input: DeployTargetInput) => ctx.deploy.saveTarget(input))
+  ipcMain.handle(IPC.DeployDeleteTarget, async (_e, id: string) => ctx.deploy.deleteTarget(id))
 }

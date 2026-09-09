@@ -114,6 +114,21 @@ export class HttpPlatformApi implements StoryFabricApi {
   deleteSession(id: string): Promise<void> { return this.rpc('deleteSession', [id]) }
   updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { return this.rpc('updateSession', [id, patch]) }
 
+  /* 远程部署仅桌面端可用 */
+  private unsupported(): never {
+    throw new Error('远程部署仅支持桌面端')
+  }
+  deployTestConnection(): Promise<never> { return this.unsupported() }
+  deployInstall(): Promise<never> { return this.unsupported() }
+  deployUpdate(): Promise<never> { return this.unsupported() }
+  deployCancel(): Promise<never> { return this.unsupported() }
+  deployLogs(): Promise<never> { return this.unsupported() }
+  deployUninstall(): Promise<never> { return this.unsupported() }
+  deployListTargets(): Promise<never> { return this.unsupported() }
+  deploySaveTarget(): Promise<never> { return this.unsupported() }
+  deployDeleteTarget(): Promise<never> { return this.unsupported() }
+  onDeployEvent(): () => void { return () => undefined }
+
   onAgentEvent(callback: (envelope: AgentEventEnvelope) => void): () => void {
     if (this.auth.kind === 'cookie' && typeof EventSource !== 'undefined') {
       const source = new EventSource(`${this.baseUrl}/api/events`, { withCredentials: true })
