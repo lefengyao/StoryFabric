@@ -163,7 +163,7 @@ export function CharactersPage(): React.ReactElement {
                       <button
                         key={c.id}
                         onClick={() => selectedId !== c.id && openEditor(c)}
-                        className={`w-full rounded-lg border p-2.5 text-left transition cursor-pointer ${
+                        className={`list-row w-full rounded-lg border p-2.5 text-left transition cursor-pointer ${
                           selectedId === c.id ? 'border-accent bg-accent-soft' : 'border-line bg-panel hover:bg-elevated'
                         } ${faction ? 'ml-4 w-[calc(100%-1rem)]' : ''}`}
                       >

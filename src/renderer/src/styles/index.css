@@ -62,6 +62,66 @@
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
+/* 弹窗与遮罩过渡：原代码用的 animate-in 来自未安装的 tailwindcss-animate，实际不生效。
+   这里用 Tailwind v4 的 --animate-* 主题键自行定义，不新增依赖。
+   内容动画只用独立的 scale/translate 属性，避免覆盖居中用的 transform。 */
+@theme {
+  --animate-overlay-in: overlay-in 160ms ease-out;
+  --animate-overlay-out: overlay-out 120ms ease-in;
+  --animate-modal-in: modal-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-modal-out: modal-out 130ms ease-in;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+    translate: 0 6px;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+    translate: 0 0;
+  }
+}
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    scale: 1;
+    translate: 0 0;
+  }
+  to {
+    opacity: 0;
+    scale: 0.98;
+    translate: 0 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-overlay-in,
+  .animate-overlay-out,
+  .animate-modal-in,
+  .animate-modal-out {
+    animation: none;
+  }
+}
+
 html,
 body,
 #root {
@@ -134,6 +194,12 @@ body {
 }
 .react-flow__controls-button {
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* 长列表行：离屏内容跳过布局与绘制，滚动时不必为所有行付出代价 */
+.list-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 ::-webkit-scrollbar {

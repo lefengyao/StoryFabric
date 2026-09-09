@@ -72,7 +72,7 @@ export function OutlinePage(): React.ReactElement {
             <button
               key={d.id}
               onClick={() => draft === null && openDoc(d)}
-              className={`w-full rounded-lg px-3 py-2 text-left transition cursor-pointer flex items-center gap-2 ${
+              className={`list-row w-full rounded-lg px-3 py-2 text-left transition cursor-pointer flex items-center gap-2 ${
                 selectedId === d.id ? 'bg-accent-soft text-accent' : 'hover:bg-elevated'
               }`}
             >

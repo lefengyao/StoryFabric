@@ -187,7 +187,7 @@ export function ChaptersPage(): React.ReactElement {
                     <button
                       key={c.id}
                       onClick={() => draft === null && void openChapter(c)}
-                      className={`w-full rounded-xl border px-3 py-2.5 text-left transition cursor-pointer ${
+                      className={`list-row w-full rounded-xl border px-3 py-2.5 text-left transition cursor-pointer ${
                         selectedId === c.id ? 'border-accent/40 bg-accent-soft text-accent shadow-sm' : 'border-line/70 bg-app hover:border-line hover:bg-elevated'
                       }`}
                     >
