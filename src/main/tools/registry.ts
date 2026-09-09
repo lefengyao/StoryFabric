@@ -408,6 +408,17 @@ interface SimulatedChange {
   commit: () => Promise<string>
 }
 
+/** 除 restore_from_trash 外，工具名直接决定实体类型；restore 用回收站条目的真实 kind（见 SimulatedChange.entityKind）。 */
+function kindOfTool(name: string): EntityKind | 'relationship' {
+  if (name === 'save_character') return 'character'
+  if (name === 'save_relationship') return 'relationship'
+  if (name === 'save_event') return 'event'
+  if (name === 'save_chapter' || name === 'move_chapter') return 'chapter'
+  if (name === 'save_setting') return 'setting'
+  if (name === 'save_note' || name === 'delete_note') return 'note'
+  return 'outline'
+}
+
 async function simulateCharacter(root: string, patch: Partial<CharacterDoc> & { id?: string }): Promise<SimulatedChange> {
   const existing = patch.id ? await findCharacter(root, { id: patch.id }) : null
   const newPatch: Partial<CharacterDoc> & { id?: string } = existing ? { ...patch } : { ...patch, id: patch.id ?? genId('char') }
@@ -666,7 +677,7 @@ export async function executeTool(root: string, name: string, argsJson: string):
     const change: PendingChange = {
       id: genId('chg'),
       toolName: name,
-      entityKind: sim.entityKind ?? (name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline'),
+      entityKind: sim.entityKind ?? kindOfTool(name),
       entityId: sim.entityId,
       title: sim.title,
       beforeText: sim.beforeText,

@@ -32,20 +32,23 @@ describe('pendingChangeView', () => {
   })
 
   it('内容变更保持新建/更新语义且不带结果说明', () => {
-    expect(pendingChangeView(change({ beforeText: '' }))).toStrictEqual({
+    const created = pendingChangeView(change({ beforeText: '' }))
+    expect(created).toStrictEqual({
       variant: 'create',
       label: '便签',
       caption: '智能体请求新建便签 —— 确认后才会写入工作区',
-      outcome: undefined,
       confirmLabel: '应用写入'
     })
-    expect(pendingChangeView(change({ beforeText: '旧内容' }))).toStrictEqual({
+    expect(created.outcome).toBeUndefined()
+
+    const updated = pendingChangeView(change({ beforeText: '旧内容' }))
+    expect(updated).toStrictEqual({
       variant: 'update',
       label: '便签',
       caption: '智能体请求更新便签 —— 确认后才会写入工作区',
-      outcome: undefined,
       confirmLabel: '应用写入'
     })
+    expect(updated.outcome).toBeUndefined()
   })
 
   it('未知实体类型回退为通用标签', () => {

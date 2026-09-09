@@ -38,7 +38,6 @@ export function pendingChangeView(change: PendingChange): PendingChangeView {
     variant,
     label,
     caption: `智能体请求${variant === 'update' ? '更新' : '新建'}${label} —— 确认后才会写入工作区`,
-    outcome: undefined,
     confirmLabel: '应用写入'
   }
 }

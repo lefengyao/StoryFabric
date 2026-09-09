@@ -76,6 +76,17 @@ async function readTool(store: FileStore, name: string, a: Record<string, any>):
 
 interface Simulated { entityId: string; title: string; beforeText: string; afterText: string; entityKind?: EntityKind | 'relationship'; commit: () => Promise<string> }
 
+/** 除 restore_from_trash 外，工具名直接决定实体类型；restore 用回收站条目的真实 kind（见 Simulated.entityKind）。 */
+function kindOfTool(name: string): EntityKind | 'relationship' {
+  if (name === 'save_character') return 'character'
+  if (name === 'save_relationship') return 'relationship'
+  if (name === 'save_event') return 'event'
+  if (name === 'save_chapter' || name === 'move_chapter') return 'chapter'
+  if (name === 'save_setting') return 'setting'
+  if (name === 'save_note' || name === 'delete_note') return 'note'
+  return 'outline'
+}
+
 async function writeTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   let sim: Simulated
   if (name === 'save_character') {
@@ -115,7 +126,7 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
   } else {
     const r = a.relationship as { fromCharacterId: string; toCharacterId: string; type: string; label?: string; description?: string; directed?: boolean }; const chars = await listCharacters(store); const from = chars.find((c) => c.id === r.fromCharacterId); const to = chars.find((c) => c.id === r.toCharacterId); if (!from || !to) throw new Error(`人物不存在：${!from ? r.fromCharacterId : r.toCharacterId}。请先用 list_characters 获取有效 id。`); const old = await loadRelationships(store); const next = [...old, { id: genId('rel'), fromId: r.fromCharacterId, toId: r.toCharacterId, type: r.type ?? '', label: r.label ?? '', description: r.description ?? '', directed: Boolean(r.directed) }]; const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id; sim = { entityId: 'relationships', title: `新增关系：${from.name} → ${to.name}${r.type ? `【${r.type}】` : ''}`, beforeText: serializeRelationships(old, nameOf), afterText: serializeRelationships(next, nameOf), commit: async () => { await saveRelationships(store, next); return `已保存关系：${from.name} ⇄ ${to.name}` } }
   }
-  const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: sim.entityKind ?? (name === 'save_character' ? 'character' : name === 'save_relationship' ? 'relationship' : name === 'save_event' ? 'event' : name === 'save_chapter' || name === 'move_chapter' ? 'chapter' : name === 'save_setting' ? 'setting' : name === 'save_note' || name === 'delete_note' ? 'note' : name === 'restore_from_trash' ? 'chapter' : 'outline'), entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
+  const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: sim.entityKind ?? kindOfTool(name), entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
   return { kind: 'pending', change, apply: async () => ({ ok: true, text: await sim.commit() }) }
 }
 
