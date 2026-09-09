@@ -49,6 +49,11 @@ describe('profileForModel', () => {
     expect(profileForModel('google/gemini-2.5-pro').reasoning).toBe(true)
   })
 
+  it('Gemini 3 取保守输出上限', () => {
+    expect(profileForModel('gemini-3-pro').maxOutputTokens).toBe(64000)
+    expect(profileForModel('gemini-3-pro').reasoning).toBe(true)
+  })
+
   it('未知模型回落到通用档案（128K / 8K / max_tokens / 无 reasoning）', () => {
     const profile = profileForModel('some-local-model')
     expect(profile.contextTokens).toBe(131072)

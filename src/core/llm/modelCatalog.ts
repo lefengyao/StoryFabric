@@ -70,6 +70,10 @@ const PROFILES: Array<{ test: RegExp; profile: ModelProfile }> = [
     profile: { label: 'Gemini 1.5/2.0', contextTokens: 1048576, maxOutputTokens: 8192, openaiOutputParam: 'max_tokens', reasoning: false }
   },
   {
+    test: /^gemini-3/,
+    profile: { label: 'Gemini 3', contextTokens: 1048576, maxOutputTokens: 64000, openaiOutputParam: 'max_tokens', reasoning: true }
+  },
+  {
     test: /^gemini/,
     profile: { label: 'Gemini', contextTokens: 1048576, maxOutputTokens: 65536, openaiOutputParam: 'max_tokens', reasoning: true }
   },

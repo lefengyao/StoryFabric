@@ -21,15 +21,20 @@ interface ContentBlock {
 }
 
 /** 规范化历史 → Anthropic messages（tool 结果并入其后的 user 轮次） */
-export function toAnthropicMessages(messages: ChatMessage[]): { role: 'user' | 'assistant'; content: ContentBlock[] }[] {
+export function toAnthropicMessages(
+  messages: ChatMessage[],
+  options: { replayThinking?: boolean } = {}
+): { role: 'user' | 'assistant'; content: ContentBlock[] }[] {
+  const replayThinking = options.replayThinking ?? true
   const out: { role: 'user' | 'assistant'; content: ContentBlock[] }[] = []
   for (const m of messages) {
     if (m.role === 'user') {
       out.push({ role: 'user', content: [{ type: 'text', text: m.text ?? '' }] })
     } else if (m.role === 'assistant') {
       const blocks: ContentBlock[] = []
-      // 扩展思考：thinking 块必须排在正文与 tool_use 之前原样回传，否则带工具的多轮对话会被拒
-      for (const block of m.thinkingBlocks ?? []) blocks.push(block as ContentBlock)
+      // 扩展思考：thinking 块必须排在正文与 tool_use 之前原样回传，否则带工具的多轮对话会被拒；
+      // 本轮未启用推理时不回放（Anthropic 要求 thinking 块与启用的扩展思考同时出现）
+      if (replayThinking) for (const block of m.thinkingBlocks ?? []) blocks.push(block as ContentBlock)
       if (m.text) blocks.push({ type: 'text', text: m.text })
       for (const tc of m.toolCalls ?? []) {
         let input: unknown = {}
@@ -66,7 +71,7 @@ export class AnthropicAdapter implements LlmAdapter {
       model,
       max_tokens: (modelParams.max_tokens as number | undefined) ?? DEFAULT_MAX_TOKENS,
       stream: true,
-      messages: toAnthropicMessages(req.messages),
+      messages: toAnthropicMessages(req.messages, { replayThinking: Boolean(modelParams.thinking) }),
       ...(modelParams.thinking ? { thinking: modelParams.thinking } : {})
     }
     if (req.system) body.system = req.system
@@ -143,7 +148,7 @@ export class AnthropicAdapter implements LlmAdapter {
             if (entry) entry.block.thinking = (entry.block.thinking ?? '') + (d.thinking ?? '')
           } else if (d?.type === 'signature_delta') {
             const entry = thinkingBlocks.find((item) => item.index === json.index)
-            if (entry) entry.block.signature = d.signature ?? ''
+            if (entry) entry.block.signature = (entry.block.signature ?? '') + (d.signature ?? '')
           }
           break
         }

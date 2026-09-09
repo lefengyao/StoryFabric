@@ -210,7 +210,8 @@ describe('AnthropicAdapter', () => {
           'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\n',
           'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
           'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先想"}}\n\n',
-          'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-"}}\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"1"}}\n\n',
           'data: {"type":"content_block_stop","index":0}\n\n',
           'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"get_outline"}}\n\n',
           'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
@@ -243,6 +244,13 @@ describe('AnthropicAdapter', () => {
       }
     ])
     expect(out[0].content.map((block) => block.type)).toEqual(['thinking', 'text', 'tool_use'])
+  })
+
+  it('本轮未启用推理时不回放历史 thinking 块', () => {
+    const messages: ChatMessage[] = [
+      { id: 'a', role: 'assistant', text: '好', thinkingBlocks: [{ type: 'thinking', thinking: '想', signature: 's' }] }
+    ]
+    expect(toAnthropicMessages(messages, { replayThinking: false })[0].content.map((block) => block.type)).toEqual(['text'])
   })
 
   it('历史转换：连续 tool 结果合并进同一 user 轮', () => {
