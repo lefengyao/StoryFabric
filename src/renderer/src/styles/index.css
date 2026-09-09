@@ -18,6 +18,13 @@
   --danger: #dc2626;
   --danger-soft: #fef2f2;
   --ok: #16a34a;
+  /* React Flow 控件跟随应用配色：默认按钮是纯白 (#fefefe)，在深色主题下非常刺眼 */
+  --xy-controls-button-background-color: var(--panel);
+  --xy-controls-button-color: var(--muted);
+  --xy-controls-button-border-color: var(--line);
+  --xy-controls-button-background-color-hover: var(--elevated);
+  --xy-controls-button-color-hover: var(--fg);
+  --xy-controls-box-shadow: 0 0 0 1px var(--line), 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 .dark {
@@ -117,6 +124,16 @@ body {
 }
 .set-select:focus {
   border-color: var(--accent);
+}
+
+/* React Flow 缩放控件：与面板同色、圆角、细边框，避免默认纯白方块 */
+.react-flow__controls {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 ::-webkit-scrollbar {
