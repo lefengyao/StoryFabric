@@ -33,7 +33,8 @@ describe('pendingChangeView', () => {
 
   it('内容变更保持新建/更新语义且不带结果说明', () => {
     const created = pendingChangeView(change({ beforeText: '' }))
-    expect(created).toStrictEqual({
+    // 用 toMatchObject 而不是 toStrictEqual：后者会与「实现是否显式写出 outcome 键」耦合
+    expect(created).toMatchObject({
       variant: 'create',
       label: '便签',
       caption: '智能体请求新建便签 —— 确认后才会写入工作区',
@@ -42,7 +43,7 @@ describe('pendingChangeView', () => {
     expect(created.outcome).toBeUndefined()
 
     const updated = pendingChangeView(change({ beforeText: '旧内容' }))
-    expect(updated).toStrictEqual({
+    expect(updated).toMatchObject({
       variant: 'update',
       label: '便签',
       caption: '智能体请求更新便签 —— 确认后才会写入工作区',

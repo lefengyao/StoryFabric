@@ -16,8 +16,8 @@ function scriptedFactory(results: StreamResult[]): { factory: LlmAdapterFactory;
   const requests: StreamRequest[] = []
   const adapter: LlmAdapter = {
     stream: async (_model, request) => {
-      // core 按引用传入 session.messages，后续轮次会继续 push；这里必须深拷贝快照。
-      requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })), tools: [...request.tools] })
+      // core 按引用传入 session.messages，后续轮次会继续 push；这里与当时状态完全解耦（含嵌套 toolCalls）
+      requests.push({ ...request, messages: structuredClone(request.messages), tools: [...request.tools] })
       const next = queue.shift()
       if (!next) throw new Error('脚本已耗尽：出现未预期的额外模型调用')
       return next
