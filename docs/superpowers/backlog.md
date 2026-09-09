@@ -9,12 +9,12 @@
 
 - [x] **关系图谱左下角缩放控件是纯白方块**（`RelationsPage.tsx:254` 的 xyflow `<Controls>`），深色主题下与背景反差过大、刺眼。已修：`styles/index.css` 通过 xyflow 主题变量把按钮背景/边框/悬停接入 `--panel` / `--line` / `--elevated` / `--muted`，并加圆角与细边框（`706e074`）。
 - [ ] 其余位置待用户指明（页面 + 操作 + 观感）
-- 候选自查方向（未确认，仅供排查参考）：
-  - [ ] 弹窗开合过渡（`components/ui/modal.tsx`）与遮罩动画
-  - [ ] 智能体流式文本逐字重渲染（`pages/chat/ChatPage.tsx` + `stores/chatStore.ts`）
-  - [ ] 长列表滚动（章节 / 便签 / 角色，是否需虚拟化或分批渲染）
-  - [ ] 页面切换与首屏骨架（路由切换时的空白/跳动）
-  - [ ] 关系图谱（`@xyflow/react` + d3-force）布局抖动
+- 已按候选方向逐项排查并优化（2026-09-09）：
+  - [x] 弹窗开合过渡（`9bd68ec`）：原 `animate-in` 类依赖未安装的 tailwindcss-animate，实际无动画；改为自定义 keyframes + `--animate-*` 令牌，尊重 `prefers-reduced-motion`。
+  - [x] 智能体流式文本重渲染（`eb7c2b0`）：`MessageItem` 加 `memo`；`text-delta` 改 rAF 批处理（`rafBatcher.ts`），done/error/abort 处强制冲刷。
+  - [x] 长列表滚动（`9bd68ec`）：新增 `.list-row { content-visibility: auto; contain-intrinsic-size: auto 44px }` 并应用到章节/便签/角色/大纲列表。
+  - [x] 页面切换与首屏（`19c263c`）：导航项 hover/focus/touch 预取路由 chunk，消除首次进入的 Spinner 闪烁。
+  - [x] 关系图谱布局抖动（`f8db594`）：`Math.random()` 初值改为按 id 确定性播种（`graphSeed.ts`），已有坐标用 `fx/fy` 钉住，`chars.find` 改 Map。
 
 ## 新功能（用户提出 2026-09-09）
 
@@ -29,7 +29,8 @@
 
 - [x] **对话完成提示音**：`done` 事件时播放 WebAudio 合成双音；「通知」tab 提供开关 + 试听；出错/中止不响。
 - [x] **自定义主题色**：深浅主题各存一个基色，`accent.ts` 推导 `--accent` 家族；「外观」tab 提供取色器、十六进制输入、预设与重置。
-- [ ] 其他候选（待用户确认）：字号/行距、编辑器字体、自动保存间隔、发送快捷键、消息气泡密度。
+- [x] 其他外观设置（2026-09-09，提交 `c832223`/`40635de`/`3ea72fb`/`bfe6f7a`）：编辑器字号/行距/字体（CSS 变量驱动 `.cm-scroller`）、消息气泡密度、发送快捷键、章节空闲自动保存（关闭/5s/15s/30s）；默认值均等于改动前观感。
+- [x] 每模型参数（2026-09-09，提交 `2a94685`/`6753813`/`b126211`）：内置模型档案（上下文/输出上限/输出参数名/推理支持）+ 供应商弹窗逐模型覆盖 + 三家协议请求映射。
 
 ### 3. Token 消耗监测（左侧栏新入口）
 
