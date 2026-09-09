@@ -1,6 +1,6 @@
 /** 轻量 UI 原语（shadcn 风格、基于 Tailwind token） */
 import { Loader2 } from 'lucide-react'
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react'
 import { cn } from '../../lib/utils'
 
 /* eslint-disable react-refresh/only-export-components */
@@ -52,18 +52,6 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
     <input
       className={cn(
         'h-9 w-full rounded-lg border border-line bg-panel px-3 text-sm text-fg placeholder:text-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition',
-        className
-      )}
-      {...rest}
-    />
-  )
-}
-
-export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={cn(
-        'w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-fg placeholder:text-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition resize-y',
         className
       )}
       {...rest}

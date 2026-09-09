@@ -1,4 +1,4 @@
-/** 部署包（storyfabric-server-<version>.tar.gz）的清单与命名。 */
+/** 部署包（storyfabric-server-<version>.tar.gz）的清单。 */
 export const BUNDLE_ENTRIES = [
   'dist-server/index.mjs',
   'web',
@@ -8,7 +8,3 @@ export const BUNDLE_ENTRIES = [
   'VERSION',
   'SHA256SUMS'
 ] as const
-
-export function bundleFileName(version: string): string {
-  return `storyfabric-server-${version}.tar.gz`
-}

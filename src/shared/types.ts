@@ -432,12 +432,6 @@ export interface DeployTestResult {
   bundleVersion: string
 }
 
-export interface DeployOptions {
-  installDir: string
-  servicePort: number
-  baseImage: string
-}
-
 export interface DeployRunResult {
   ok: boolean
   version?: string

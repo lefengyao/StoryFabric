@@ -73,10 +73,3 @@ export async function httpError(res: Response): Promise<Error> {
   return new Error(`请求失败 HTTP ${res.status}${detail ? `：${detail.slice(0, 400)}` : ''}`)
 }
 
-export class AbortedError extends Error {
-  constructor() {
-    super('已中止')
-    this.name = 'AbortedError'
-  }
-}
-

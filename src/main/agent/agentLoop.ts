@@ -7,7 +7,6 @@ import type { AgentEvent, ChatMessage, RunAgentRequest, UsageRecord } from '../.
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import { getAdapter } from '../../core/llm'
 import { resolveModelSettings } from '../../core/llm/modelCatalog'
-import { AbortedError } from '../../core/llm/types'
 import { decryptApiKey } from '../services/settingsService'
 import { genId } from '../services/entityStore'
 import { SessionStore, titleFromMessage } from '../services/sessionStore'
@@ -175,7 +174,7 @@ export class AgentService {
       }
       this.emit(sid, { type: 'done' })
     } catch (err) {
-      const aborted = err instanceof AbortedError || (err as Error)?.name === 'AbortError'
+      const aborted = (err as Error)?.name === 'AbortError'
       const msg = aborted ? '已中止本次生成。' : `出错了：${err instanceof Error ? err.message : String(err)}`
       session.messages.push({ id: genId('msg'), role: 'assistant', text: msg, isError: !aborted })
       this.emit(sid, { type: 'error', message: msg })

@@ -154,11 +154,6 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, root: stri
   } catch { return false }
 }
 
-/** Compatibility helper for callers that still bootstrap from a legacy root. */
-export async function ensureServerWorkspace(root: string): Promise<void> {
-  await WorkspaceRegistry.open(resolve(root, '..'), root)
-}
-
 export function createStoryFabricServer(options: StoryFabricServerOptions): Server {
   const dataRoot = resolve(options.dataDir ?? (options.workspaceRoot ? join(options.workspaceRoot, '..') : '/data'))
   const registry = options.workspaceRegistry ?? new WorkspaceRegistry(dataRoot, options.workspaceRoot ?? join(dataRoot, 'workspace'))
