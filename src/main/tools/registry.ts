@@ -538,14 +538,14 @@ async function simulateOutline(root: string, patch: Partial<OutlineDoc> & { id?:
 async function simulateSetting(root: string, patch: Partial<SettingDoc> & { id?: string }): Promise<SimulatedChange> {
   const old = patch.id ? await getSetting(root, patch.id) : null
   const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('set'), title: patch.title ?? '未命名设定', category: patch.category === 'other' ? 'other' : 'background', tags: patch.tags ?? [], content: patch.content ?? '' }) as SettingDoc
-  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}设定：${after.title}`, commit: async () => `已保存设定「${(await saveSetting(root, patch)).title}」` }
+  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}设定：${after.title}`, commit: async () => `已保存设定「${(await saveSetting(root, { ...patch, id: after.id })).title}」` }
 }
 
 async function simulateNote(root: string, patch: Partial<NoteDoc> & { id?: string }): Promise<SimulatedChange> {
   const old = patch.id ? await getNote(root, patch.id) : null
   const now = Date.now()
   const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('note'), title: patch.title ?? '未命名便签', tags: patch.tags ?? [], pinned: Boolean(patch.pinned), createdAt: patch.createdAt ?? now, updatedAt: now, content: patch.content ?? '' }) as NoteDoc
-  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}便签：${after.title}`, commit: async () => `已保存便签「${(await saveNote(root, patch)).title}」` }
+  return { entityId: after.id, beforeText: old ? JSON.stringify(old, null, 2) : '', afterText: JSON.stringify(after, null, 2), title: `${old ? '更新' : '新建'}便签：${after.title}`, commit: async () => `已保存便签「${(await saveNote(root, { ...patch, id: after.id })).title}」` }
 }
 
 async function simulateDeleteNote(root: string, noteId: unknown): Promise<SimulatedChange> {
