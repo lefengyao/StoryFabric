@@ -1,9 +1,12 @@
 import { KeyRound, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
+import { isValidHexColor } from '../../lib/accent'
+import { playCompletionSound } from '../../lib/completionSound'
 import type { Protocol, ProviderInput, ProviderPublic } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
 
@@ -15,10 +18,24 @@ const PROTOCOL_HINTS: Record<Protocol, string> = {
   gemini: 'Base URL 如 https://generativelanguage.googleapis.com'
 }
 
+const TABS = [
+  { key: 'models', label: '模型与供应商' },
+  { key: 'agent', label: '智能体' },
+  { key: 'appearance', label: '外观' },
+  { key: 'notifications', label: '通知' }
+] as const
+
+type TabKey = (typeof TABS)[number]['key']
+
+const ACCENT_PRESETS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+
 export function SettingsPage(): React.ReactElement {
   const settings = useSettings((s) => s.settings)
   const reload = useSettings((s) => s.load)
   const update = useSettings((s) => s.update)
+
+  const [params, setParams] = useSearchParams()
+  const active: TabKey = TABS.find((tab) => tab.key === params.get('tab'))?.key ?? 'models'
 
   const [editing, setEditing] = useState<ProviderInput | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -91,129 +108,245 @@ export function SettingsPage(): React.ReactElement {
       await update({ [key]: { providerId, model } })
     }
 
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-2xl space-y-6 p-6">
-        {/* 供应商 */}
-        <section>
-          <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="text-sm font-semibold">模型供应商</h2>
-              <p className="mt-0.5 text-xs leading-5 text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥经系统级加密存储在本机</p>
-            </div>
-            <Button size="sm" variant="primary" onClick={openCreate} className="shrink-0 whitespace-nowrap px-2.5 sm:px-3">
-              <Plus size={13} /> <span className="hidden sm:inline">添加供应商</span><span className="sm:hidden">添加</span>
-            </Button>
-          </div>
+  /** 取色器只接受合法 hex，文本输入非法时不污染预览 */
+  const accentValue = (value: string, fallback: string): string => (isValidHexColor(value) ? value : fallback)
 
-          {settings.providers.length === 0 && (
-            <Card>
-              <EmptyState icon={<KeyRound size={26} />} title="还没有供应商" hint="添加 DeepSeek / Kimi / OpenRouter 等任意 OpenAI 兼容服务即可开始" />
-            </Card>
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setParams({ tab: tab.key })}
+            className={`shrink-0 rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              active === tab.key ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-elevated hover:text-fg'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-2xl space-y-6 p-6">
+          {active === 'models' && (
+            <>
+              {/* 供应商 */}
+              <section>
+                <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold">模型供应商</h2>
+                    <p className="mt-0.5 text-xs leading-5 text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥经系统级加密存储在本机</p>
+                  </div>
+                  <Button size="sm" variant="primary" onClick={openCreate} className="shrink-0 whitespace-nowrap px-2.5 sm:px-3">
+                    <Plus size={13} /> <span className="hidden sm:inline">添加供应商</span><span className="sm:hidden">添加</span>
+                  </Button>
+                </div>
+
+                {settings.providers.length === 0 && (
+                  <Card>
+                    <EmptyState icon={<KeyRound size={26} />} title="还没有供应商" hint="添加 DeepSeek / Kimi / OpenRouter 等任意 OpenAI 兼容服务即可开始" />
+                  </Card>
+                )}
+
+                <div className="space-y-2">
+                  {settings.providers.map((p) => (
+                    <Card key={p.id} className="flex items-center gap-3 p-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{p.name}</span>
+                          <Badge tone="accent">{PROTOCOL_LABEL[p.protocol]}</Badge>
+                          {p.hasKey ? <Badge tone="ok">Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
+                      </div>
+                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
+                        <Pencil size={13} />
+                      </Button>
+                      <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)}>
+                        <Trash2 size={13} />
+                      </Button>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+
+              {/* 默认模型 */}
+              <section>
+                <h2 className="mb-3 text-sm font-semibold">默认模型</h2>
+                <Card className="space-y-4 p-4">
+                  <Field label="智能体对话模型">
+                    <select value={modelValue(settings.defaultChatModel)} onChange={(e) => void modelOnChange('defaultChatModel')(e.target.value)} className="set-select">
+                      <option value="">请选择</option>
+                      {modelOptions.map((p) => (
+                        <optgroup key={p.id} label={p.name}>
+                          {p.models.map((m) => (
+                            <option key={m} value={`${p.id}::${m}`}>{m}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="快捷操作模型（续写/润色等轻量任务）">
+                    <select value={modelValue(settings.quickActionModel)} onChange={(e) => void modelOnChange('quickActionModel')(e.target.value)} className="set-select">
+                      <option value="">请选择</option>
+                      {modelOptions.map((p) => (
+                        <optgroup key={p.id} label={p.name}>
+                          {p.models.map((m) => (
+                            <option key={m} value={`${p.id}::${m}`}>{m}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                </Card>
+              </section>
+            </>
           )}
 
-          <div className="space-y-2">
-            {settings.providers.map((p) => (
-              <Card key={p.id} className="flex items-center gap-3 p-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{p.name}</span>
-                    <Badge tone="accent">{PROTOCOL_LABEL[p.protocol]}</Badge>
-                    {p.hasKey ? <Badge tone="ok">Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
-                  </div>
-                  <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
-                </div>
-                <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
-                  <Pencil size={13} />
-                </Button>
-                <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)}>
-                  <Trash2 size={13} />
-                </Button>
+          {active === 'agent' && (
+            <section>
+              <h2 className="mb-3 text-sm font-semibold">智能体</h2>
+              <Card className="space-y-4 p-4">
+                <Field
+                  label="自定义提示词"
+                  hint="将附加在内置系统提示词之后，用于注入文风偏好、世界观规则等；失焦时自动保存，留空则不附加"
+                >
+                  <textarea
+                    value={promptDraft ?? settings.customPrompt ?? ''}
+                    onChange={(e) => setPromptDraft(e.target.value)}
+                    onBlur={() => {
+                      if (promptDraft !== null) {
+                        void update({ customPrompt: promptDraft })
+                        setPromptDraft(null)
+                      }
+                    }}
+                    rows={6}
+                    className="w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
+                    placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
+                  />
+                </Field>
+                <label className="flex items-center gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={settings.showSessionLength}
+                    onChange={(e) => void update({ showSessionLength: e.target.checked })}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
+                  在会话顶部显示会话长度（消息数与约计字数）
+                </label>
               </Card>
-            ))}
-          </div>
-        </section>
+            </section>
+          )}
 
-        {/* 智能体 */}
-        <section>
-          <h2 className="mb-3 text-sm font-semibold">智能体</h2>
-          <Card className="space-y-4 p-4">
-            <Field
-              label="自定义提示词"
-              hint="将附加在内置系统提示词之后，用于注入文风偏好、世界观规则等；失焦时自动保存，留空则不附加"
-            >
-              <textarea
-                value={promptDraft ?? settings.customPrompt ?? ''}
-                onChange={(e) => setPromptDraft(e.target.value)}
-                onBlur={() => {
-                  if (promptDraft !== null) {
-                    void update({ customPrompt: promptDraft })
-                    setPromptDraft(null)
-                  }
-                }}
-                rows={6}
-                className="w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
-                placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
-              />
-            </Field>
-            <label className="flex items-center gap-2.5 text-sm">
-              <input
-                type="checkbox"
-                checked={settings.showSessionLength}
-                onChange={(e) => void update({ showSessionLength: e.target.checked })}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              在会话顶部显示会话长度（消息数与约计字数）
-            </label>
-          </Card>
-        </section>
+          {active === 'appearance' && (
+            <>
+              <section>
+                <h2 className="mb-3 text-sm font-semibold">主题</h2>
+                <Card className="p-4">
+                  <Field label="明暗模式">
+                    <select value={settings.theme} onChange={(e) => void update({ theme: e.target.value as 'light' | 'dark' | 'system' })} className="set-select max-w-48">
+                      <option value="system">跟随系统</option>
+                      <option value="light">浅色</option>
+                      <option value="dark">深色</option>
+                    </select>
+                  </Field>
+                </Card>
+              </section>
 
-        {/* 默认模型 */}
-        <section>
-          <h2 className="mb-3 text-sm font-semibold">默认模型</h2>
-          <Card className="space-y-4 p-4">
-            <Field label="智能体对话模型">
-              <select value={modelValue(settings.defaultChatModel)} onChange={(e) => void modelOnChange('defaultChatModel')(e.target.value)} className="set-select">
-                <option value="">请选择</option>
-                {modelOptions.map((p) => (
-                  <optgroup key={p.id} label={p.name}>
-                    {p.models.map((m) => (
-                      <option key={m} value={`${p.id}::${m}`}>{m}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </Field>
-            <Field label="快捷操作模型（续写/润色等轻量任务）">
-              <select value={modelValue(settings.quickActionModel)} onChange={(e) => void modelOnChange('quickActionModel')(e.target.value)} className="set-select">
-                <option value="">请选择</option>
-                {modelOptions.map((p) => (
-                  <optgroup key={p.id} label={p.name}>
-                    {p.models.map((m) => (
-                      <option key={m} value={`${p.id}::${m}`}>{m}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </Field>
-          </Card>
-        </section>
+              <section>
+                <h2 className="mb-3 text-sm font-semibold">主题色</h2>
+                <Card className="space-y-4 p-4">
+                  <Field label="浅色主题强调色">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        aria-label="浅色主题强调色"
+                        value={accentValue(settings.accentColorLight, '#6366f1')}
+                        onChange={(e) => void update({ accentColorLight: e.target.value })}
+                        className="h-8 w-12 shrink-0 cursor-pointer rounded border border-line bg-panel"
+                      />
+                      <Input
+                        key={settings.accentColorLight}
+                        defaultValue={settings.accentColorLight}
+                        onBlur={(e) => void update({ accentColorLight: e.target.value })}
+                        className="max-w-32 font-mono text-xs"
+                      />
+                      <Button size="sm" onClick={() => void update({ accentColorLight: '#6366f1' })}>
+                        重置
+                      </Button>
+                    </div>
+                  </Field>
+                  <Field label="深色主题强调色">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        aria-label="深色主题强调色"
+                        value={accentValue(settings.accentColorDark, '#818cf8')}
+                        onChange={(e) => void update({ accentColorDark: e.target.value })}
+                        className="h-8 w-12 shrink-0 cursor-pointer rounded border border-line bg-panel"
+                      />
+                      <Input
+                        key={settings.accentColorDark}
+                        defaultValue={settings.accentColorDark}
+                        onBlur={(e) => void update({ accentColorDark: e.target.value })}
+                        className="max-w-32 font-mono text-xs"
+                      />
+                      <Button size="sm" onClick={() => void update({ accentColorDark: '#818cf8' })}>
+                        重置
+                      </Button>
+                    </div>
+                  </Field>
+                  <div>
+                    <div className="mb-2 text-xs text-muted">预设（同时应用到浅色与深色）</div>
+                    <div className="flex flex-wrap gap-2">
+                      {ACCENT_PRESETS.map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          title={color}
+                          aria-label={`预设主题色 ${color}`}
+                          onClick={() => void update({ accentColorLight: color, accentColorDark: color })}
+                          className="h-6 w-6 rounded-full border border-line transition-transform hover:scale-110"
+                          style={{ background: color }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              </section>
+            </>
+          )}
 
-        {/* 外观 */}
-        <section>
-          <h2 className="mb-3 text-sm font-semibold">外观</h2>
-          <Card className="p-4">
-            <Field label="主题">
-              <select value={settings.theme} onChange={(e) => void update({ theme: e.target.value as 'light' | 'dark' | 'system' })} className="set-select max-w-48">
-                <option value="system">跟随系统</option>
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-              </select>
-            </Field>
-          </Card>
-        </section>
+          {active === 'notifications' && (
+            <section>
+              <h2 className="mb-3 text-sm font-semibold">通知</h2>
+              <Card className="flex items-center justify-between gap-4 p-4">
+                <div className="min-w-0">
+                  <div className="text-sm">对话完成提示音</div>
+                  <div className="mt-0.5 text-xs text-muted">智能体回答完成时播放一声柔和提示音；被中止或出错时不响</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <Button size="sm" onClick={() => playCompletionSound()}>
+                    试听
+                  </Button>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.completionSound}
+                      onChange={(e) => void update({ completionSound: e.target.checked })}
+                      className="h-4 w-4 accent-[var(--accent)]"
+                    />
+                    启用
+                  </label>
+                </div>
+              </Card>
+            </section>
+          )}
 
-        <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
+          <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
+        </div>
       </div>
 
       {/* 供应商编辑弹窗 */}

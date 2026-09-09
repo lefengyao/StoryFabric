@@ -12,6 +12,8 @@ import { useWorkspace } from './workspaceStore'
 import type { ToolCallData } from '../../../shared/types'
 import { getPlatformApi } from '../platform/platformApi'
 import { sessionEventPatch } from './chatEvents'
+import { playCompletionSound, shouldPlayCompletionSound } from '../lib/completionSound'
+import { useSettings } from './settingsStore'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
@@ -228,8 +230,11 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
     case 'error':
       set({ error: ev.message })
       break
-    case 'done':
+    case 'done': {
+      const enabled = useSettings.getState().settings?.completionSound ?? false
+      if (shouldPlayCompletionSound({ enabled, error: get().error !== null })) playCompletionSound()
       break
+    }
   }
 }
 
