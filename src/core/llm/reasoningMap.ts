@@ -1,5 +1,8 @@
 /** 官方思考强度映射：值解析与点路径写入。 */
 
+/** 禁止写入的键：防止用户自填路径污染原型链 */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 /**
  * 空/空白 → undefined；先按 JSON 解析（2048 / true / "low"），
  * 失败则按裸字符串（low → 'low'），这样用户不必给字符串加引号。
@@ -15,10 +18,10 @@ export function parseReasoningValue(raw?: string): unknown | undefined {
   }
 }
 
-/** 按点路径逐级建对象写入；路径为空或含空段时忽略。已有同级字段不会被清空。 */
+/** 按点路径逐级建对象写入；路径为空、含空段或含危险段时忽略。已有同级字段不会被清空。 */
 export function setByPath(target: Record<string, unknown>, path: string, value: unknown): void {
   const segments = path.split('.').map((s) => s.trim())
-  if (segments.some((s) => !s)) return
+  if (segments.some((s) => !s || FORBIDDEN_KEYS.has(s))) return
   let cursor = target
   for (let i = 0; i < segments.length - 1; i += 1) {
     const key = segments[i]

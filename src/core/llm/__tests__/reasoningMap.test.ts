@@ -43,4 +43,13 @@ describe('setByPath', () => {
     setByPath(body, 'a.', 1)
     expect(body).toEqual({})
   })
+
+  it('拒绝原型链相关路径，避免污染 Object.prototype', () => {
+    const body: Record<string, unknown> = {}
+    setByPath(body, '__proto__.polluted', 1)
+    setByPath(body, 'constructor.prototype.x', 1)
+    setByPath(body, 'a.prototype.b', 1)
+    expect(body).toEqual({})
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
 })
