@@ -23,23 +23,47 @@ const GENERIC: ModelProfile = {
   reasoning: false
 }
 
-/** 顺序敏感：先匹配到的生效。数值取自公开资料，仅作默认值。 */
+/** 顺序敏感：先匹配到的生效。数值取自公开资料，默认取**该型号的真实上限**，宁保守不激进。 */
 const PROFILES: Array<{ test: RegExp; profile: ModelProfile }> = [
   {
-    test: /^o[1-9]|^gpt-5/,
-    profile: { label: 'OpenAI 推理模型', contextTokens: 400000, maxOutputTokens: 128000, openaiOutputParam: 'max_completion_tokens', reasoning: true }
+    test: /^gpt-5/,
+    profile: { label: 'GPT-5', contextTokens: 400000, maxOutputTokens: 128000, openaiOutputParam: 'max_completion_tokens', reasoning: true }
+  },
+  {
+    test: /^o[1-9]/,
+    profile: { label: 'OpenAI 推理模型', contextTokens: 200000, maxOutputTokens: 100000, openaiOutputParam: 'max_completion_tokens', reasoning: true }
   },
   {
     test: /^gpt-4\.1/,
     profile: { label: 'GPT-4.1', contextTokens: 1048576, maxOutputTokens: 32768, openaiOutputParam: 'max_tokens', reasoning: false }
   },
   {
-    test: /^gpt-4o|^gpt-4/,
-    profile: { label: 'GPT-4 系列', contextTokens: 131072, maxOutputTokens: 16384, openaiOutputParam: 'max_tokens', reasoning: false }
+    test: /^gpt-4o/,
+    profile: { label: 'GPT-4o', contextTokens: 131072, maxOutputTokens: 16384, openaiOutputParam: 'max_tokens', reasoning: false }
+  },
+  {
+    test: /^gpt-4/,
+    profile: { label: 'GPT-4', contextTokens: 131072, maxOutputTokens: 4096, openaiOutputParam: 'max_tokens', reasoning: false }
+  },
+  {
+    test: /^claude-opus-4/,
+    profile: { label: 'Claude Opus 4', contextTokens: 200000, maxOutputTokens: 32000, openaiOutputParam: 'max_tokens', reasoning: true }
+  },
+  {
+    test: /^claude-3-opus/,
+    profile: { label: 'Claude 3 Opus', contextTokens: 200000, maxOutputTokens: 4096, openaiOutputParam: 'max_tokens', reasoning: false }
+  },
+  {
+    test: /^claude-3/,
+    profile: { label: 'Claude 3', contextTokens: 200000, maxOutputTokens: 8192, openaiOutputParam: 'max_tokens', reasoning: false }
   },
   {
     test: /^claude/,
     profile: { label: 'Claude', contextTokens: 200000, maxOutputTokens: 64000, openaiOutputParam: 'max_tokens', reasoning: true }
+  },
+  {
+    test: /^gemini-1\.5|^gemini-2\.0/,
+    profile: { label: 'Gemini 1.5/2.0', contextTokens: 1048576, maxOutputTokens: 8192, openaiOutputParam: 'max_tokens', reasoning: false }
   },
   {
     test: /^gemini/,
@@ -68,7 +92,9 @@ const PROFILES: Array<{ test: RegExp; profile: ModelProfile }> = [
 ]
 
 export function profileForModel(model: string): ModelProfile {
-  const name = (model ?? '').trim().toLowerCase()
+  const raw = (model ?? '').trim().toLowerCase()
+  // 网关常带供应商前缀（openai/gpt-4o、anthropic/claude-*），只取最后一段做匹配
+  const name = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
   for (const { test, profile } of PROFILES) {
     if (test.test(name)) return profile
   }

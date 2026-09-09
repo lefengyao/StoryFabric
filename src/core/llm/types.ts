@@ -23,6 +23,8 @@ export interface StreamResult {
   toolCalls: ToolCallData[]
   stopReason: 'stop' | 'tool_calls'
   usage?: TokenUsage
+  /** Anthropic 扩展思考块（原样回传用），其他协议不产生 */
+  thinkingBlocks?: unknown[]
 }
 
 /** 单次模型调用用量：三家协议的字段已归一，缺失项为 0。 */

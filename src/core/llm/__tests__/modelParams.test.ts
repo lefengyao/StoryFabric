@@ -55,12 +55,12 @@ describe('buildModelParams', () => {
     })
   })
 
-  it('Gemini 走 generationConfig，关闭推理时 thinkingBudget 为 0', () => {
+  it('Gemini 走 generationConfig；关闭推理时整个省略 thinkingConfig（2.5 Pro 拒绝 budget 0）', () => {
     expect(buildModelParams('gemini', 'gemini-2.5-pro', params({ reasoning: 'low' }))).toEqual({
       generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 2048 } }
     })
     expect(buildModelParams('gemini', 'gemini-2.5-pro', params())).toEqual({
-      generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } }
+      generationConfig: { maxOutputTokens: 8192 }
     })
   })
 

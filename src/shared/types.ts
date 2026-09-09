@@ -278,6 +278,8 @@ export interface ChatMessage {
   toolCallId?: string
   toolName?: string
   isError?: boolean
+  /** Anthropic 扩展思考块：开启推理后带工具调用继续对话必须原样回传 */
+  thinkingBlocks?: unknown[]
 }
 
 export interface SessionMeta {

@@ -133,7 +133,8 @@ export class AgentService {
           id: assistantId,
           role: 'assistant',
           text: result.text || undefined,
-          toolCalls: result.toolCalls.length ? result.toolCalls : undefined
+          toolCalls: result.toolCalls.length ? result.toolCalls : undefined,
+          thinkingBlocks: result.thinkingBlocks
         }
         session.messages.push(assistantMsg)
         if (result.usage) {

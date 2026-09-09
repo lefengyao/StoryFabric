@@ -29,6 +29,21 @@ describe('profileForModel', () => {
     expect(profileForModel('qwen3-max').contextTokens).toBe(1048576)
   })
 
+  it('旧型号取保守输出上限，避免默认值超过真实限制', () => {
+    expect(profileForModel('claude-3-5-sonnet-latest').maxOutputTokens).toBe(8192)
+    expect(profileForModel('claude-3-opus-20240229').maxOutputTokens).toBe(4096)
+    expect(profileForModel('gpt-4-turbo').maxOutputTokens).toBe(4096)
+    expect(profileForModel('gemini-2.0-flash').maxOutputTokens).toBe(8192)
+    expect(profileForModel('gemini-2.0-flash').reasoning).toBe(false)
+    expect(profileForModel('gemini-1.5-pro').reasoning).toBe(false)
+  })
+
+  it('识别网关前缀（openai/gpt-4o、anthropic/claude-*）', () => {
+    expect(profileForModel('openai/gpt-4o').maxOutputTokens).toBe(16384)
+    expect(profileForModel('anthropic/claude-sonnet-4-5').maxOutputTokens).toBe(64000)
+    expect(profileForModel('google/gemini-2.5-pro').reasoning).toBe(true)
+  })
+
   it('未知模型回落到通用档案（128K / 8K / max_tokens / 无 reasoning）', () => {
     const profile = profileForModel('some-local-model')
     expect(profile.contextTokens).toBe(131072)

@@ -30,7 +30,8 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
     return {
       generationConfig: {
         maxOutputTokens: params.maxOutputTokens,
-        ...(profile.reasoning ? { thinkingConfig: { thinkingBudget: reasoningOn ? budget : 0 } } : {})
+        // 关闭推理时整体省略：Gemini 2.5 Pro 拒绝 thinkingBudget 0，1.5/2.0 系列不支持该字段
+        ...(reasoningOn ? { thinkingConfig: { thinkingBudget: budget } } : {})
       }
     }
   }

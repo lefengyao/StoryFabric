@@ -28,6 +28,8 @@ export function toAnthropicMessages(messages: ChatMessage[]): { role: 'user' | '
       out.push({ role: 'user', content: [{ type: 'text', text: m.text ?? '' }] })
     } else if (m.role === 'assistant') {
       const blocks: ContentBlock[] = []
+      // 扩展思考：thinking 块必须排在正文与 tool_use 之前原样回传，否则带工具的多轮对话会被拒
+      for (const block of m.thinkingBlocks ?? []) blocks.push(block as ContentBlock)
       if (m.text) blocks.push({ type: 'text', text: m.text })
       for (const tc of m.toolCalls ?? []) {
         let input: unknown = {}
@@ -92,6 +94,8 @@ export class AnthropicAdapter implements LlmAdapter {
     let stopReason: StreamResult['stopReason'] = 'stop'
     let usage: TokenUsage | undefined
     const toolBlocks = new Map<number, { id: string; name: string; args: string }>()
+    /** 扩展思考块：按 index 记录，结束时按顺序输出，供下一轮回传 */
+    const thinkingBlocks: Array<{ index: number; block: { type: string; thinking?: string; signature?: string; data?: string } }> = []
 
     for await (const line of sseLines(res)) {
       const data = sseData(line)
@@ -119,6 +123,10 @@ export class AnthropicAdapter implements LlmAdapter {
           const b = json.content_block
           if (b?.type === 'tool_use') {
             toolBlocks.set(json.index ?? toolBlocks.size, { id: b.id, name: b.name, args: '' })
+          } else if (b?.type === 'thinking') {
+            thinkingBlocks.push({ index: json.index ?? 0, block: { type: 'thinking', thinking: b.thinking ?? '', signature: b.signature ?? '' } })
+          } else if (b?.type === 'redacted_thinking') {
+            thinkingBlocks.push({ index: json.index ?? 0, block: { type: 'redacted_thinking', data: b.data } })
           }
           break
         }
@@ -130,6 +138,12 @@ export class AnthropicAdapter implements LlmAdapter {
           } else if (d?.type === 'input_json_delta' && d.partial_json) {
             const tb = toolBlocks.get(json.index)
             if (tb) tb.args += d.partial_json
+          } else if (d?.type === 'thinking_delta') {
+            const entry = thinkingBlocks.find((item) => item.index === json.index)
+            if (entry) entry.block.thinking = (entry.block.thinking ?? '') + (d.thinking ?? '')
+          } else if (d?.type === 'signature_delta') {
+            const entry = thinkingBlocks.find((item) => item.index === json.index)
+            if (entry) entry.block.signature = d.signature ?? ''
           }
           break
         }
@@ -156,7 +170,14 @@ export class AnthropicAdapter implements LlmAdapter {
       name: tb.name,
       argsJson: tb.args || '{}'
     }))
-    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason, usage }
+    const orderedThinking = thinkingBlocks.sort((a, b) => a.index - b.index).map((item) => item.block)
+    return {
+      text,
+      toolCalls,
+      stopReason: toolCalls.length ? 'tool_calls' : stopReason,
+      usage,
+      ...(orderedThinking.length ? { thinkingBlocks: orderedThinking } : {})
+    }
   }
 }
 

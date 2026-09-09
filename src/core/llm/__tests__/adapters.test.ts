@@ -202,6 +202,49 @@ describe('AnthropicAdapter', () => {
     expect(capturedBody.thinking).toEqual({ type: 'enabled', budget_tokens: 7168 })
   })
 
+  it('捕获扩展思考块供下一轮回传', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}\n\n',
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先想"}}\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}\n\n',
+          'data: {"type":"content_block_stop","index":0}\n\n',
+          'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"get_outline"}}\n\n',
+          'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+          'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}\n\n',
+          'data: {"type":"message_stop"}\n\n'
+        ])
+      )
+    )
+
+    const adapter = new AnthropicAdapter('https://api.anthropic.com')
+    const result = await adapter.stream(
+      'claude-sonnet-4-5',
+      { system: '', messages: [], tools: [], signal: undefined, params: { reasoning: 'medium', contextTokens: 200000, maxOutputTokens: 8192 } },
+      'k',
+      noopHandlers
+    )
+
+    expect(result.thinkingBlocks).toEqual([{ type: 'thinking', thinking: '先想', signature: 'sig-1' }])
+    expect(result.toolCalls[0]).toMatchObject({ id: 't1', name: 'get_outline' })
+  })
+
+  it('回放 thinking 块并排在正文与 tool_use 之前', () => {
+    const out = toAnthropicMessages([
+      {
+        id: 'a',
+        role: 'assistant',
+        text: '好',
+        thinkingBlocks: [{ type: 'thinking', thinking: '想', signature: 's' }],
+        toolCalls: [{ id: 't1', name: 'f1', argsJson: '{}' }]
+      }
+    ])
+    expect(out[0].content.map((block) => block.type)).toEqual(['thinking', 'text', 'tool_use'])
+  })
+
   it('历史转换：连续 tool 结果合并进同一 user 轮', () => {
     const msgs: ChatMessage[] = [
       { id: 'a', role: 'user', text: '查一下' },
