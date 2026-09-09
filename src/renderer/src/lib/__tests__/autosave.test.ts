@@ -19,7 +19,7 @@ describe('createAutosave', () => {
     expect(runs).toEqual([2])
   })
 
-  it('cancel 阻止保存', () => {
+  it('cancel 停表：不再自动触发', () => {
     vi.useFakeTimers()
     const runs: string[] = []
     const autosave = createAutosave(5000)
@@ -29,6 +29,17 @@ describe('createAutosave', () => {
     vi.advanceTimersByTime(10000)
 
     expect(runs).toEqual([])
+  })
+
+  it('cancel 之后 flush 仍能补上保存（卸载时 cleanup 顺序不影响结果）', () => {
+    const runs: string[] = []
+    const autosave = createAutosave(15000)
+
+    autosave.schedule(() => runs.push('a'))
+    autosave.cancel()
+    autosave.flush()
+
+    expect(runs).toEqual(['a'])
   })
 
   it('间隔为 0 表示关闭', () => {

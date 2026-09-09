@@ -128,6 +128,10 @@ export function ChaptersPage(): React.ReactElement {
     saveRef.current = save
   })
 
+  // 离开页面时把未到点的自动保存立即执行一次，避免改动丢失。
+  // 声明在调度 effect 之前：React 卸载按声明顺序跑 cleanup，先 flush 再 cancel。
+  useEffect(() => () => autosave.flush(), [autosave])
+
   useEffect(() => {
     if (!dirty || !draft || autosaveSeconds <= 0) {
       autosave.cancel()
@@ -136,9 +140,6 @@ export function ChaptersPage(): React.ReactElement {
     autosave.schedule(() => void saveRef.current().catch(() => {}))
     return () => autosave.cancel()
   }, [draft?.title, draft?.content, dirty, autosave, autosaveSeconds])
-
-  // 离开页面时把未到点的自动保存立即执行一次，避免改动丢失
-  useEffect(() => () => autosave.flush(), [autosave])
 
   const remove = async (): Promise<void> => {
     if (!selectedId) return
