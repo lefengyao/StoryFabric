@@ -26,7 +26,7 @@ import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash,
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
 import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
-import { fetchProviderModels } from './llm'
+import { fetchProviderModels } from '../core/llm'
 import { decryptApiKey } from './services/settingsService'
 import { SessionStore } from './services/sessionStore'
 import { NodeFileStore } from '../core/storage/nodeFileStore'

@@ -5,8 +5,8 @@
  */
 import type { AgentEvent, ChatMessage, RunAgentRequest } from '../../shared/types'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
-import { getAdapter } from '../llm'
-import { AbortedError } from '../llm/types'
+import { getAdapter } from '../../core/llm'
+import { AbortedError } from '../../core/llm/types'
 import { decryptApiKey } from '../services/settingsService'
 import { genId } from '../services/entityStore'
 import { SessionStore, titleFromMessage } from '../services/sessionStore'
