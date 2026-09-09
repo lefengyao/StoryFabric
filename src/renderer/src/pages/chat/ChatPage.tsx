@@ -19,10 +19,12 @@ import {
   X
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { Attachment, ChatMessage, SessionMeta } from '../../../../shared/types'
+import type { Attachment, ChatDensity, ChatMessage, SessionMeta } from '../../../../shared/types'
 import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
+import { chatDensityClasses } from '../../lib/chatDensity'
+import { shouldSendOnKey } from '../../lib/sendShortcut'
 import { cn, ENTITY_KIND_LABEL, formatTime } from '../../lib/utils'
 import { toolArgsPreview, useChat } from '../../stores/chatStore'
 import { useSettings } from '../../stores/settingsStore'
@@ -59,6 +61,8 @@ export function ChatPage(): React.ReactElement {
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
+  const density = settings?.chatDensity ?? 'comfortable'
+  const densityClasses = chatDensityClasses(density)
 
   /* 从未选择过模型时，自动采用第一个可用模型作为默认 */
   useEffect(() => {
@@ -295,16 +299,16 @@ export function ChatPage(): React.ReactElement {
             </div>
           )}
 
-          <div className="mx-auto max-w-3xl space-y-4">
+          <div className={cn('mx-auto max-w-3xl', densityClasses.list)}>
             {chat.messages.map((m) => (
-              <MessageItem key={m.id} msg={m} />
+              <MessageItem key={m.id} msg={m} density={density} />
             ))}
 
             {(chat.streamingText || chat.streaming) && (
               <div className="flex gap-3">
                 <Avatar icon={<Bot size={15} />} accent />
                 <div className="min-w-0 flex-1">
-                  <div className="rounded-xl border border-line bg-panel px-4 py-3">
+                  <div className={cn('rounded-xl border border-line bg-panel', densityClasses.assistantBubble)}>
                     {chat.streamingText ? <Markdown text={chat.streamingText} /> : <span className="text-xs text-faint">思考中…</span>}
                   </div>
                   {chat.liveTools.length > 0 && (
@@ -343,13 +347,23 @@ export function ChatPage(): React.ReactElement {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  if (shouldSendOnKey(settings?.sendShortcut ?? 'enter', {
+                    key: e.key,
+                    shiftKey: e.shiftKey,
+                    metaKey: e.metaKey,
+                    ctrlKey: e.ctrlKey,
+                    isComposing: e.nativeEvent.isComposing
+                  })) {
                     e.preventDefault()
                     void send()
                   }
                 }}
                 rows={3}
-                placeholder="和智能体聊聊你的故事……（Enter 发送 / Shift+Enter 换行）"
+                placeholder={
+                  (settings?.sendShortcut ?? 'enter') === 'mod+enter'
+                    ? '和智能体聊聊你的故事……（Ctrl/⌘+Enter 发送 / Enter 换行）'
+                    : '和智能体聊聊你的故事……（Enter 发送 / Shift+Enter 换行）'
+                }
                 className="w-full resize-none rounded-xl bg-transparent px-4 py-3 pr-24 text-sm outline-none placeholder:text-faint"
               />
               <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1">
@@ -399,11 +413,12 @@ function ToolChip({ name, argsJson, status, preview }: { name: string; argsJson:
   )
 }
 
-function MessageItemInner({ msg }: { msg: ChatMessage }): React.ReactElement {
+function MessageItemInner({ msg, density }: { msg: ChatMessage; density: ChatDensity }): React.ReactElement {
+  const cls = chatDensityClasses(density)
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end gap-3">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-accent px-4 py-2.5 text-sm leading-relaxed text-accent-fg">{msg.text}</div>
+        <div className={cn('max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-accent text-accent-fg', cls.userBubble)}>{msg.text}</div>
         <Avatar icon={<UserRound size={14} />} />
       </div>
     )
@@ -426,7 +441,7 @@ function MessageItemInner({ msg }: { msg: ChatMessage }): React.ReactElement {
     <div className="flex gap-3">
       <Avatar icon={<Bot size={15} />} accent />
       <div className="min-w-0 flex-1">
-        <div className={cn('rounded-xl border border-line bg-panel px-4 py-3', msg.isError && 'border-danger/40')}>
+        <div className={cn('rounded-xl border border-line bg-panel', cls.assistantBubble, msg.isError && 'border-danger/40')}>
           {msg.text && <Markdown text={msg.text} />}
         </div>
       </div>
