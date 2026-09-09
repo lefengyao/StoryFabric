@@ -1,0 +1,123 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { AgentEvent, ChatSession } from '../../../shared/types'
+import type { LlmAdapter, LlmAdapterFactory, StreamResult } from '../../llm/types'
+import { MemoryFileStore } from '../../storage/fileStore'
+import { initializeWorkspace } from '../../workspace/workspaceService'
+import { listNotes, saveNote } from '../../workspace/entityStore'
+import { listTrash } from '../../workspace/trash'
+import { CoreSessionStore } from '../../workspace/sessionStore'
+import { CoreAgentService } from '../agentLoop'
+
+const providerId = 'prov_openai'
+
+/** 脚本化适配器：按顺序返回预置结果，不触网。 */
+function scriptedFactory(results: StreamResult[]): LlmAdapterFactory {
+  const queue = [...results]
+  const adapter: LlmAdapter = {
+    stream: async () => {
+      const next = queue.shift()
+      if (!next) throw new Error('脚本已耗尽：出现未预期的额外模型调用')
+      return next
+    }
+  }
+  return () => adapter
+}
+
+const text = (value: string): StreamResult => ({ text: value, toolCalls: [], stopReason: 'stop' })
+const call = (id: string, name: string, args: Record<string, unknown>): StreamResult => ({
+  text: '',
+  toolCalls: [{ id, name, argsJson: JSON.stringify(args) }],
+  stopReason: 'tool_calls'
+})
+
+async function createStore(): Promise<MemoryFileStore> {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, '测试')
+  return store
+}
+
+function makeService(store: MemoryFileStore, results: StreamResult[], events: AgentEvent[]): CoreAgentService {
+  return new CoreAgentService({
+    store,
+    sessions: new CoreSessionStore(store),
+    settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+    getAdapter: scriptedFactory(results),
+    emit: (_sid, event) => events.push(event)
+  })
+}
+
+async function loadSession(store: MemoryFileStore, sessionId: string): Promise<ChatSession> {
+  const session = await new CoreSessionStore(store).load(sessionId)
+  if (!session) throw new Error('会话未落盘')
+  return session
+}
+
+describe('CoreAgentService', () => {
+  it('读工具自动执行并把结果回注给模型', async () => {
+    const store = await createStore()
+    await saveNote(store, { title: '林晚的设定', content: '主角' })
+    const events: AgentEvent[] = []
+    const service = makeService(store, [call('c1', 'list_notes', {}), text('工作区里有 1 条便签。')], events)
+
+    const { sessionId } = await service.run({ message: '有哪些便签？', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(session.messages.some((m) => m.role === 'tool' && m.text?.includes('林晚的设定'))).toBe(true)
+    expect(session.messages.at(-1)?.text).toBe('工作区里有 1 条便签。')
+  })
+
+  it('delete_note 被拒绝后保留便签、回收站为空并回注拒绝消息', async () => {
+    const store = await createStore()
+    const note = await saveNote(store, { title: '待删除便签', content: '保留内容' })
+    const events: AgentEvent[] = []
+    const service = makeService(store, [call('c1', 'delete_note', { noteId: note.id }), text('好的，已保留这条便签。')], events)
+
+    const runPromise = service.run({ message: '删除这条便签', providerId, model: 'mock-model' })
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'pending-change')).toBe(true))
+    const changeEvent = events.find((e) => e.type === 'pending-change')
+    if (!changeEvent || changeEvent.type !== 'pending-change') throw new Error('未收到待确认变更事件')
+    expect(changeEvent.change.title).toBe('删除便签：待删除便签')
+    service.confirmChange(changeEvent.change.id, false)
+
+    const { sessionId } = await runPromise
+    expect((await listNotes(store)).some((item) => item.id === note.id)).toBe(true)
+    expect(await listTrash(store)).toHaveLength(0)
+    const session = await loadSession(store, sessionId)
+    expect(session.messages.some((m) => m.role === 'tool' && m.text?.includes('拒绝'))).toBe(true)
+  })
+
+  it('delete_note 被批准后移入回收站并回注成功消息', async () => {
+    const store = await createStore()
+    const note = await saveNote(store, { title: '批准删除便签', content: '待移入回收站' })
+    const events: AgentEvent[] = []
+    const service = makeService(store, [call('c1', 'delete_note', { noteId: ` ${note.id} ` }), text('已完成。')], events)
+
+    const runPromise = service.run({ message: '确认删除这条便签', providerId, model: 'mock-model' })
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'pending-change')).toBe(true))
+    const changeEvent = events.find((e) => e.type === 'pending-change')
+    if (!changeEvent || changeEvent.type !== 'pending-change') throw new Error('未收到待确认变更事件')
+    service.confirmChange(changeEvent.change.id, true)
+
+    const { sessionId } = await runPromise
+    expect((await listNotes(store)).some((item) => item.id === note.id)).toBe(false)
+    expect((await listTrash(store)).some((entry) => entry.id === note.id)).toBe(true)
+    const session = await loadSession(store, sessionId)
+    expect(session.messages.some((m) => m.role === 'tool' && m.text?.includes('已将便签「批准删除便签」移入回收站'))).toBe(true)
+  })
+
+  it.each([
+    ['缺失', null],
+    ['空字符串', ''],
+    ['纯空白', '   ']
+  ])('delete_note 对%s noteId 拒绝且不产生待确认变更', async (_label, noteId) => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const service = makeService(store, [call('c1', 'delete_note', noteId === null ? {} : { noteId }), text('参数无效。')], events)
+
+    const { sessionId } = await service.run({ message: '删除便签', providerId, model: 'mock-model' })
+
+    expect(events.some((e) => e.type === 'pending-change')).toBe(false)
+    const session = await loadSession(store, sessionId)
+    expect(session.messages.some((m) => m.role === 'tool' && m.isError && m.text?.includes('noteId'))).toBe(true)
+  })
+})
