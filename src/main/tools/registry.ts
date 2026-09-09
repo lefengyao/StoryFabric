@@ -681,6 +681,6 @@ export async function executeTool(root: string, name: string, argsJson: string):
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return { kind: 'result', ok: false, text: `工具执行失败：${msg}`, preview: clip(msg) }
+    return { kind: 'result', ok: false, text: `工具执行失败：${msg}`, preview: clip(`工具执行失败：${msg}`) }
   }
 }
