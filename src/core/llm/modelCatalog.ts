@@ -50,6 +50,10 @@ const PROFILES: Array<{ test: RegExp; profile: ModelProfile }> = [
     profile: { label: 'Claude Opus 4', contextTokens: 200000, maxOutputTokens: 32000, openaiOutputParam: 'max_tokens', reasoning: true }
   },
   {
+    test: /^claude-3[-.]7/,
+    profile: { label: 'Claude 3.7', contextTokens: 200000, maxOutputTokens: 64000, openaiOutputParam: 'max_tokens', reasoning: true }
+  },
+  {
     test: /^claude-3-opus/,
     profile: { label: 'Claude 3 Opus', contextTokens: 200000, maxOutputTokens: 4096, openaiOutputParam: 'max_tokens', reasoning: false }
   },

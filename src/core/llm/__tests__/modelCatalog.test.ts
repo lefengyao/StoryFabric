@@ -38,6 +38,11 @@ describe('profileForModel', () => {
     expect(profileForModel('gemini-1.5-pro').reasoning).toBe(false)
   })
 
+  it('Claude 3.7 支持扩展思考，不要被 Claude 3 的保守档吃掉', () => {
+    expect(profileForModel('claude-3-7-sonnet-20250219').reasoning).toBe(true)
+    expect(profileForModel('claude-3.7-sonnet').maxOutputTokens).toBe(64000)
+  })
+
   it('识别网关前缀（openai/gpt-4o、anthropic/claude-*）', () => {
     expect(profileForModel('openai/gpt-4o').maxOutputTokens).toBe(16384)
     expect(profileForModel('anthropic/claude-sonnet-4-5').maxOutputTokens).toBe(64000)
