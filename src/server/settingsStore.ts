@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
-import type { AppSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
+import type { AppSettings, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
+import { pruneModelSettings } from '../core/llm/modelCatalog'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
@@ -105,7 +106,8 @@ export class ServerSettingsStore {
       baseUrl: provider.baseUrl,
       models: provider.models,
       hasKey: Boolean(provider.apiKey),
-      keyPreview: keyPreview(provider.apiKey)
+      keyPreview: keyPreview(provider.apiKey),
+      modelSettings: provider.modelSettings ?? {}
     }))
     return { ...settings, providers }
   }
@@ -134,6 +136,7 @@ export class ServerSettingsStore {
           protocol: input.protocol,
           baseUrl: input.baseUrl.trim(),
           models: input.models,
+          modelSettings: pruneModelSettings(input.models, input.modelSettings ?? old.modelSettings),
           apiKey: input.apiKey ?? old.apiKey
         }
       } else {
@@ -143,6 +146,7 @@ export class ServerSettingsStore {
           protocol: input.protocol,
           baseUrl: input.baseUrl.trim(),
           models: input.models,
+          modelSettings: pruneModelSettings(input.models, input.modelSettings),
           apiKey: input.apiKey ?? ''
         })
       }
@@ -163,11 +167,11 @@ export class ServerSettingsStore {
     })
   }
 
-  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string }>; customPrompt?: string }> {
+  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string }> {
     const settings = await this.loadRaw()
     return {
       customPrompt: settings.customPrompt,
-      providers: settings.providers.map(({ id, protocol, baseUrl, apiKey, name }) => ({ id, protocol, baseUrl, apiKey, name }))
+      providers: settings.providers.map(({ id, protocol, baseUrl, apiKey, name, modelSettings }) => ({ id, protocol, baseUrl, apiKey, name, modelSettings }))
     }
   }
 

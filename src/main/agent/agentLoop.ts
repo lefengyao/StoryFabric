@@ -6,6 +6,7 @@
 import type { AgentEvent, ChatMessage, RunAgentRequest, UsageRecord } from '../../shared/types'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import { getAdapter } from '../../core/llm'
+import { resolveModelSettings } from '../../core/llm/modelCatalog'
 import { AbortedError } from '../../core/llm/types'
 import { decryptApiKey } from '../services/settingsService'
 import { genId } from '../services/entityStore'
@@ -121,7 +122,8 @@ export class AgentService {
             system: systemPrompt,
             messages: session.messages.filter((m) => m.role !== 'system'),
             tools: TOOL_DEFS,
-            signal: controller.signal
+            signal: controller.signal,
+            params: resolveModelSettings(provider, req.model)
           },
           apiKey,
           { onText: (delta) => this.emit(sid, { type: 'text-delta', messageId: assistantId, delta }) }

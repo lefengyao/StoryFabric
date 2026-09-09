@@ -1,12 +1,13 @@
-import type { AgentEvent, ChatMessage, ChatSession, PendingChange, RunAgentRequest, UsageRecord } from '../../shared/types'
+import type { AgentEvent, ChatMessage, ChatSession, ModelSettings, PendingChange, RunAgentRequest, UsageRecord } from '../../shared/types'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import type { LlmAdapter, LlmAdapterFactory } from '../llm/types'
 import { CoreSessionStore } from '../workspace/sessionStore'
 import type { FileStore } from '../storage/fileStore'
 import { executeTool, TOOL_DEFS } from '../tools/registry'
+import { resolveModelSettings } from '../llm/modelCatalog'
 import { SYSTEM_PROMPT } from './prompts'
 
-export interface AgentSettings { providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string }>; customPrompt?: string }
+export interface AgentSettings { providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string }
 export interface AgentRunOptions { store: FileStore; sessions: CoreSessionStore; settings: () => Promise<AgentSettings>; getAdapter: LlmAdapterFactory; emit: (sessionId: string, event: AgentEvent) => void; onUsage?: (record: UsageRecord) => void }
 
 interface Waiter { sessionId: string; resolve: (approved: boolean) => void }
@@ -27,7 +28,7 @@ export class CoreAgentService {
     try {
       let round = 0
       for (; round < MAX_TOOL_ROUNDS; round++) {
-        const assistantId = `msg_${Date.now().toString(36)}_${round}`; const result = await adapter.stream(req.model, { system: prompt, messages: session.messages, tools: TOOL_DEFS, signal: controller.signal }, provider.apiKey, { onText: (delta) => this.options.emit(sid, { type: 'text-delta', messageId: assistantId, delta }) }); if (result.usage) this.options.onUsage?.({ at: Date.now(), providerId: provider.id, providerName: provider.name ?? provider.id, model: req.model, ...result.usage }); session.messages.push({ id: assistantId, role: 'assistant', text: result.text || undefined, toolCalls: result.toolCalls.length ? result.toolCalls : undefined }); if (!result.toolCalls.length) break
+        const assistantId = `msg_${Date.now().toString(36)}_${round}`; const result = await adapter.stream(req.model, { system: prompt, messages: session.messages, tools: TOOL_DEFS, signal: controller.signal, params: resolveModelSettings(provider, req.model) }, provider.apiKey, { onText: (delta) => this.options.emit(sid, { type: 'text-delta', messageId: assistantId, delta }) }); if (result.usage) this.options.onUsage?.({ at: Date.now(), providerId: provider.id, providerName: provider.name ?? provider.id, model: req.model, ...result.usage }); session.messages.push({ id: assistantId, role: 'assistant', text: result.text || undefined, toolCalls: result.toolCalls.length ? result.toolCalls : undefined }); if (!result.toolCalls.length) break
         for (const tc of result.toolCalls) { this.options.emit(sid, { type: 'tool-start', callId: tc.id, name: tc.name, argsJson: tc.argsJson }); const outcome = await executeTool(this.options.store, tc.name, tc.argsJson); if (outcome.kind === 'result') { this.options.emit(sid, { type: 'tool-done', callId: tc.id, ok: outcome.ok, resultPreview: outcome.preview }); session.messages.push({ id: `msg_${Date.now().toString(36)}`, role: 'tool', toolCallId: tc.id, toolName: tc.name, text: outcome.text, isError: !outcome.ok }) } else { this.options.emit(sid, { type: 'pending-change', change: outcome.change }); const approved = await this.waitConfirm(outcome.change, sid, controller.signal); this.options.emit(sid, { type: 'change-applied', changeId: outcome.change.id, approved }); const text = approved ? (await outcome.apply()).text : '用户拒绝了此变更。请勿原样重复提交。'; this.options.emit(sid, { type: 'tool-done', callId: tc.id, ok: approved, resultPreview: approved ? '变更已写入' : '用户已拒绝' }); session.messages.push({ id: `msg_${Date.now().toString(36)}`, role: 'tool', toolCallId: tc.id, toolName: tc.name, text }) } }
       }
       if (round >= MAX_TOOL_ROUNDS) session.messages.push({ id: `msg_${Date.now().toString(36)}`, role: 'assistant', text: `连续工具调用已达上限（${MAX_TOOL_ROUNDS} 轮），已停止。` }); this.options.emit(sid, { type: 'done' })

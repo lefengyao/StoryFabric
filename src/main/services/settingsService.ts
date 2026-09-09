@@ -12,6 +12,7 @@ import type {
   ProviderStored,
   PublicAppSettings
 } from '../../shared/types'
+import { pruneModelSettings } from '../../core/llm/modelCatalog'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -132,6 +133,7 @@ export class SettingsService {
           protocol: input.protocol,
           baseUrl: input.baseUrl,
           models: input.models,
+          modelSettings: pruneModelSettings(input.models, input.modelSettings ?? old.modelSettings),
           apiKeyEncrypted: input.apiKey ? encryptApiKey(input.apiKey) : old.apiKeyEncrypted
         }
         list[idx] = stored
@@ -142,6 +144,7 @@ export class SettingsService {
           protocol: input.protocol,
           baseUrl: input.baseUrl,
           models: input.models,
+          modelSettings: pruneModelSettings(input.models, input.modelSettings),
           apiKeyEncrypted: encryptApiKey(input.apiKey ?? '')
         }
         list.push(stored)
@@ -178,7 +181,8 @@ export class SettingsService {
             baseUrl: p.baseUrl,
             models: p.models,
             hasKey: Boolean(plain),
-            keyPreview: keyPreview(plain)
+            keyPreview: keyPreview(plain),
+            modelSettings: p.modelSettings ?? {}
           }
         }
       )

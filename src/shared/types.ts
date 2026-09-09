@@ -216,6 +216,20 @@ export interface ProviderStored {
   baseUrl: string
   apiKeyEncrypted: string
   models: string[]
+  /** 按模型名的参数覆盖（缺省时取内置档案） */
+  modelSettings: Record<string, ModelSettings>
+}
+
+/** 推理等级：off 表示不发送推理参数 */
+export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high'
+
+/** 单个模型的参数覆盖 */
+export interface ModelSettings {
+  reasoning?: ReasoningLevel
+  /** 该模型的上下文窗口（仅记录/展示，协议无此参数） */
+  contextTokens?: number
+  /** 单次回复输出上限 */
+  maxOutputTokens?: number
 }
 
 /** 渲染进程可见态：不含密钥明文/密文 */
@@ -227,6 +241,7 @@ export interface ProviderPublic {
   models: string[]
   hasKey: boolean
   keyPreview?: string
+  modelSettings: Record<string, ModelSettings>
 }
 
 export interface PublicAppSettings extends Omit<AppSettings, 'providers'> {
@@ -241,6 +256,7 @@ export interface ProviderInput {
   baseUrl: string
   apiKey?: string
   models: string[]
+  modelSettings?: Record<string, ModelSettings>
 }
 
 /* ---------------- 智能体会话 ---------------- */

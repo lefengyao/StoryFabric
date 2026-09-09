@@ -17,6 +17,7 @@ import { listTrash, purgeTrashEntry, restoreFromTrash } from '../../../core/work
 import { CoreSessionStore } from '../../../core/workspace/sessionStore'
 import { CoreAgentService } from '../../../core/agent/agentLoop'
 import { fetchProviderModels, getAdapter } from '../../../core/llm'
+import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
@@ -259,7 +260,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async saveProvider(input: ProviderInput): Promise<PublicAppSettings> {
     const id = input.id ?? `prov_${Date.now().toString(36)}`
     const previous = this.settings.providers.find((p) => p.id === id)
-    this.settings.providers = [...this.settings.providers.filter((p) => p.id !== id), { id, name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, models: input.models, hasKey: input.apiKey ? true : Boolean(previous?.hasKey), keyPreview: input.apiKey ? `${input.apiKey.slice(0, 4)}****${input.apiKey.slice(-4)}` : previous?.keyPreview }]
+    this.settings.providers = [...this.settings.providers.filter((p) => p.id !== id), { id, name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, models: input.models, hasKey: input.apiKey ? true : Boolean(previous?.hasKey), keyPreview: input.apiKey ? `${input.apiKey.slice(0, 4)}****${input.apiKey.slice(-4)}` : previous?.keyPreview, modelSettings: pruneModelSettings(input.models, input.modelSettings ?? previous?.modelSettings) }]
     if (input.apiKey) await SecureStorage.setItem(this.keyName(id), input.apiKey)
     await this.saveSettings()
     return this.settings
