@@ -8,16 +8,19 @@ import { cn } from '../lib/utils'
 import { api } from '../lib/api'
 
 const NAV_ITEMS = [
-  { to: '/characters', icon: Users, label: '人物' },
-  { to: '/relations', icon: Network, label: '关系' },
-  { to: '/outline', icon: ListTree, label: '大纲' },
-  { to: '/events', icon: Waypoints, label: '事件' },
-  { to: '/chapters', icon: BookOpen, label: '章节' },
-  { to: '/settings-docs', icon: FileText, label: '设定' },
-  { to: '/notes', icon: StickyNote, label: '便签' },
-  { to: '/usage', icon: BarChart3, label: '用量' },
-  { to: '/chat', icon: Sparkles, label: '智能体' }
+  { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
+  { to: '/relations', icon: Network, label: '关系', load: () => import('../pages/relations/RelationsPage') },
+  { to: '/outline', icon: ListTree, label: '大纲', load: () => import('../pages/outline/OutlinePage') },
+  { to: '/events', icon: Waypoints, label: '事件', load: () => import('../pages/events/EventsPage') },
+  { to: '/chapters', icon: BookOpen, label: '章节', load: () => import('../pages/chapters/ChaptersPage') },
+  { to: '/settings-docs', icon: FileText, label: '设定', load: () => import('../pages/settingsDocs/SettingsDocsPage') },
+  { to: '/notes', icon: StickyNote, label: '便签', load: () => import('../pages/notes/NotesPage') },
+  { to: '/usage', icon: BarChart3, label: '用量', load: () => import('../pages/usage/UsagePage') },
+  { to: '/chat', icon: Sparkles, label: '智能体', load: () => import('../pages/chat/ChatPage') }
 ]
+
+/** 提前拉取路由 chunk，避免首次进入某页时闪一下 Spinner。 */
+const loadSettingsPage = (): Promise<unknown> => import('../pages/settings/SettingsPage')
 
 const TITLE_MAP: Record<string, string> = {
   characters: '人物',
@@ -91,11 +94,14 @@ export function AppLayout(): React.ReactElement {
         <NavLink to="/chat" title="织章 · StoryFabric" className="hidden mb-3 h-9 w-9 items-center justify-center rounded-xl shadow-sm sm:flex">
           <AppLogo size={36} className="rounded-[9px]" />
         </NavLink>
-        {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+        {NAV_ITEMS.map(({ to, icon: Icon, label, load }) => (
           <NavLink
             key={to}
             to={to}
             title={label}
+            onMouseEnter={() => void load()}
+            onFocus={() => void load()}
+            onTouchStart={() => void load()}
             className={({ isActive }) =>
               cn(
                 'group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:w-10 sm:rounded-lg',
@@ -113,6 +119,9 @@ export function AppLayout(): React.ReactElement {
         <NavLink
           to="/settings"
           title="设置"
+          onMouseEnter={() => void loadSettingsPage()}
+          onFocus={() => void loadSettingsPage()}
+          onTouchStart={() => void loadSettingsPage()}
           className={({ isActive }) =>
             cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors', isActive ? 'text-accent bg-accent-soft' : 'text-muted hover:bg-elevated hover:text-fg')
           }
