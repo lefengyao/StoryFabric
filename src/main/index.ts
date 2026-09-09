@@ -6,6 +6,7 @@ import { registerIpc, type AppContext } from './ipc'
 import { IPC } from '../shared/ipc'
 import type { AgentEventEnvelope } from '../shared/api'
 import { SettingsService } from './services/settingsService'
+import { UsageService } from '../core/usage/usageService'
 
 function resolveIconPath(): string {
   // 开发态取项目 resources/；打包后 extraResources 会把 icon.ico 放到 resources 根目录
@@ -64,15 +65,20 @@ if (!gotLock) {
     const win = createWindow()
 
     const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
+    const usage = new UsageService(join(app.getPath('userData'), 'usage.json'))
 
-    const agent = new AgentService(settings, (sessionId, event) => {
-      const envelope: AgentEventEnvelope = { sessionId, event }
-      for (const w of BrowserWindow.getAllWindows()) {
-        w.webContents.send(IPC.AgentEvent, envelope)
-      }
-    })
+    const agent = new AgentService(
+      settings,
+      (sessionId, event) => {
+        const envelope: AgentEventEnvelope = { sessionId, event }
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.send(IPC.AgentEvent, envelope)
+        }
+      },
+      (record) => void usage.append(record).catch(() => {})
+    )
 
-    const ctx: AppContext = { win: () => win, settings, agent }
+    const ctx: AppContext = { win: () => win, settings, agent, usage }
     registerIpc(ctx)
 
     app.on('activate', () => {

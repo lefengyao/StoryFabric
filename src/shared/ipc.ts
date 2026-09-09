@@ -50,6 +50,9 @@ export const IPC = {
   DeleteProvider: 'settings:delete-provider',
   FetchModels: 'settings:fetch-models',
 
+  /* 用量 */
+  GetUsageRecords: 'usage:list',
+
   /* 智能体 */
   AgentRun: 'agent:run',
   AgentConfirm: 'agent:confirm',

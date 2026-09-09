@@ -21,7 +21,8 @@ import type {
   SettingDoc,
   SettingMeta,
   NoteDoc,
-  NoteMeta
+  NoteMeta,
+  UsageRecord
 } from './types'
 import type { WorkspaceArchive } from '../core/workspace/archive'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
@@ -113,6 +114,8 @@ export interface StoryFabricApi {
   /* 设置与供应商 */
   getSettings(): Promise<PublicAppSettings>
   updateSettings(patch: SettingsPatch): Promise<PublicAppSettings>
+  /** 模型用量记录（最近若干次调用，按时间升序） */
+  getUsageRecords(): Promise<UsageRecord[]>
   saveProvider(input: import('./types').ProviderInput): Promise<PublicAppSettings>
   deleteProvider(id: string): Promise<PublicAppSettings>
   fetchModels(input: FetchModelsInput): Promise<string[]>

@@ -5,7 +5,7 @@ import { Directory, Filesystem } from '@capacitor/filesystem'
 import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
-import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
@@ -240,6 +240,9 @@ export class AndroidPlatformApi implements StoryFabricApi {
   deleteNote(id: string): Promise<void> { return deleteNote(this.requireStore(), id) }
 
   async getSettings(): Promise<PublicAppSettings> { return this.loadSettings() }
+
+  /** Android 端暂不落盘用量统计 */
+  async getUsageRecords(): Promise<UsageRecord[]> { return [] }
 
   async updateSettings(patch: SettingsPatch): Promise<PublicAppSettings> {
     this.settings = { ...this.settings, ...patch }

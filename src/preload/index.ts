@@ -56,6 +56,7 @@ const api: StoryFabricApi = {
 
   getSettings: () => ipcRenderer.invoke(IPC.GetSettings),
   updateSettings: (patch: SettingsPatch) => ipcRenderer.invoke(IPC.UpdateSettings, patch),
+  getUsageRecords: () => ipcRenderer.invoke(IPC.GetUsageRecords),
   saveProvider: (input) => ipcRenderer.invoke(IPC.SaveProvider, input),
   deleteProvider: (id) => ipcRenderer.invoke(IPC.DeleteProvider, id),
   fetchModels: (input: FetchModelsInput) => ipcRenderer.invoke(IPC.FetchModels, input),

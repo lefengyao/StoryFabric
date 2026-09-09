@@ -101,6 +101,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   deleteNote(id: string): Promise<void> { return this.rpc('deleteNote', [id]) }
   getSettings(): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('getSettings') }
   updateSettings(patch: Parameters<StoryFabricApi['updateSettings']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('updateSettings', [patch]) }
+  getUsageRecords(): Promise<import('../../../shared/types').UsageRecord[]> { return this.rpc('getUsageRecords') }
   saveProvider(input: Parameters<StoryFabricApi['saveProvider']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('saveProvider', [input]) }
   deleteProvider(id: string): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('deleteProvider', [id]) }
   fetchModels(input: Parameters<StoryFabricApi['fetchModels']>[0]): Promise<string[]> { return this.rpc('fetchModels', [input]) }

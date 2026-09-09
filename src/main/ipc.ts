@@ -22,6 +22,7 @@ import {
   saveSetting
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
+import type { UsageService } from '../core/usage/usageService'
 import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { PublicAppSettings, RunAgentRequest } from '../shared/types'
@@ -39,6 +40,7 @@ export interface AppContext {
   win: () => BrowserWindow | null
   settings: SettingsService
   agent: AgentService
+  usage: UsageService
 }
 
 let currentRoot: string | null = null
@@ -142,6 +144,7 @@ export function registerIpc(ctx: AppContext): void {
 
   /* ---------- 设置与供应商 ---------- */
   ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.load()))
+  ipcMain.handle(IPC.GetUsageRecords, async () => ctx.usage.list())
 
   ipcMain.handle(IPC.UpdateSettings, async (_e, patch: SettingsPatch): Promise<PublicAppSettings> =>
     ctx.settings.toPublic(await ctx.settings.update(patch))

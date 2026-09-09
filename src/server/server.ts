@@ -5,6 +5,7 @@ import { URL } from 'node:url'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { createAccessKeyVerifier, createSessionStore } from './auth'
 import { ServerSettingsStore } from './settingsStore'
+import { UsageService } from '../core/usage/usageService'
 import { WorkspaceRegistry } from './workspaceRegistry'
 import type { AgentEventEnvelope, FetchModelsInput, SettingsPatch, StoryFabricApi } from '../shared/api'
 import type { ChapterDoc, ChatSession, OutlineDoc, ProviderInput, Relationship, RunAgentRequest, SettingDoc, StoryEvent, NoteDoc, VolumeMeta } from '../shared/types'
@@ -163,6 +164,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   const registry = options.workspaceRegistry ?? new WorkspaceRegistry(dataRoot, options.workspaceRoot ?? join(dataRoot, 'workspace'))
   const registryReady = registry.ensureReady()
   const settings = new ServerSettingsStore(options.settingsPath ?? join(dataRoot, 'settings.json'), options.accessKey)
+  const usage = new UsageService(join(dataRoot, 'usage.json'))
   const verifier = createAccessKeyVerifier(options.accessKey)
   const authSessions = createSessionStore({ ttlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL })
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL
@@ -199,7 +201,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         sessions,
         settings: () => settings.agentSettings(),
         getAdapter,
-        emit: (sessionId, event) => events.emit({ workspaceId: id, sessionId, event })
+        emit: (sessionId, event) => events.emit({ workspaceId: id, sessionId, event }),
+        onUsage: (record) => void usage.append(record).catch(() => {})
       })
       runtime = { store, sessions, agent, operationQueue: Promise.resolve() }
       runtimes.set(id, runtime)
@@ -276,6 +279,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       case 'saveNote': return saveNote(store, arg<Partial<NoteDoc>>())
       case 'deleteNote': return deleteNote(store, arg<string>())
       case 'getSettings': return settings.load()
+      case 'getUsageRecords': return usage.list()
       case 'updateSettings': return settings.update(arg<SettingsPatch>())
       case 'saveProvider': return settings.saveProvider(arg<ProviderInput>())
       case 'deleteProvider': return settings.deleteProvider(arg<string>())

@@ -3,7 +3,7 @@
  * 用户消息 → [LLM 流式生成 → 读工具自动执行回注 / 写工具等用户确认] × N → 结束。
  * 全程通过 emitEvent 向渲染进程推送事件；会话持久化到工作区。
  */
-import type { AgentEvent, ChatMessage, RunAgentRequest } from '../../shared/types'
+import type { AgentEvent, ChatMessage, RunAgentRequest, UsageRecord } from '../../shared/types'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import { getAdapter } from '../../core/llm'
 import { AbortedError } from '../../core/llm/types'
@@ -33,7 +33,8 @@ export class AgentService {
 
   constructor(
     private settings: SettingsService,
-    private emitEvent: (sessionId: string, event: AgentEvent) => void
+    private emitEvent: (sessionId: string, event: AgentEvent) => void,
+    private onUsage?: (record: UsageRecord) => void
   ) {}
 
   private emit(sessionId: string, event: AgentEvent): void {
@@ -133,6 +134,9 @@ export class AgentService {
           toolCalls: result.toolCalls.length ? result.toolCalls : undefined
         }
         session.messages.push(assistantMsg)
+        if (result.usage) {
+          this.onUsage?.({ at: Date.now(), providerId: provider.id, providerName: provider.name, model: req.model, ...result.usage })
+        }
 
         if (!result.toolCalls.length) break
 
