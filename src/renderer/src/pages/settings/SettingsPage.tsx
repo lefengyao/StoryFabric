@@ -6,6 +6,7 @@ import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
+import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
 import type { Protocol, ProviderInput, ProviderPublic } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
@@ -34,7 +35,8 @@ export function SettingsPage(): React.ReactElement {
   const reload = useSettings((s) => s.load)
   const update = useSettings((s) => s.update)
   const previewAccent = useSettings((s) => s.previewAccent)
-  const accentTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 两个取色器各有独立定时器：先改浅色再改深色时不会取消前者；离开页面时让定时器照常落盘。
+  const accentCommit = useRef<ReturnType<typeof createKeyedDebounce<'accentColorLight' | 'accentColorDark'>> | null>(null)
 
   const [params, setParams] = useSearchParams()
   const active: TabKey = TABS.find((tab) => tab.key === params.get('tab'))?.key ?? 'models'
@@ -116,8 +118,12 @@ export function SettingsPage(): React.ReactElement {
   /** 拖动取色时即时预览（只改 CSS 变量），停手 400ms 后才落盘，避免每个 input 事件都走一次 IPC。 */
   const commitAccent = (key: 'accentColorLight' | 'accentColorDark', value: string): void => {
     previewAccent(value)
-    if (accentTimer.current) clearTimeout(accentTimer.current)
-    accentTimer.current = setTimeout(() => void update({ [key]: value }), 400)
+    if (!accentCommit.current) {
+      accentCommit.current = createKeyedDebounce<'accentColorLight' | 'accentColorDark'>(400, (patchKey, patchValue) => {
+        void update({ [patchKey]: patchValue }).catch(() => {})
+      })
+    }
+    accentCommit.current.schedule(key, value)
   }
 
   return (
