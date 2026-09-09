@@ -24,6 +24,7 @@ import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { chatDensityClasses } from '../../lib/chatDensity'
+import { resolveCapability } from '../../lib/modelCapability'
 import { shouldSendOnKey } from '../../lib/sendShortcut'
 import { cn, ENTITY_KIND_LABEL, formatTime } from '../../lib/utils'
 import { toolArgsPreview, useChat } from '../../stores/chatStore'
@@ -265,11 +266,16 @@ export function ChatPage(): React.ReactElement {
             >
               {providerOptions.map((p) => (
                 <optgroup key={p.id} label={p.name}>
-                  {p.models.map((m) => (
-                    <option key={m} value={`${p.id}::${m}`}>
-                      {m}
-                    </option>
-                  ))}
+                  {p.models.map((m) => {
+                    const capability = resolveCapability(m, p.modelSettings[m])
+                    const suffix = [capability.reasoning ? '思考' : '', capability.vision ? '图片' : ''].filter(Boolean).join(' · ')
+                    return (
+                      <option key={m} value={`${p.id}::${m}`}>
+                        {m}
+                        {suffix ? ` · ${suffix}` : ''}
+                      </option>
+                    )
+                  })}
                 </optgroup>
               ))}
             </select>
