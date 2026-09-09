@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentEvent, ChatSession, UsageRecord } from '../../../shared/types'
+import type { AgentEvent, ChatSession, ModelSettings, UsageRecord } from '../../../shared/types'
 import type { LlmAdapter, LlmAdapterFactory, StreamRequest, StreamResult } from '../../llm/types'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
@@ -43,13 +43,16 @@ function makeService(
   store: MemoryFileStore,
   results: StreamResult[],
   events: AgentEvent[],
-  usage: UsageRecord[] = []
+  usage: UsageRecord[] = [],
+  modelSettings?: Record<string, ModelSettings>
 ): { service: CoreAgentService; requests: StreamRequest[] } {
   const scripted = scriptedFactory(results)
   const service = new CoreAgentService({
     store,
     sessions: new CoreSessionStore(store),
-    settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', name: '模拟供应商' }] }),
+    settings: async () => ({
+      providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', name: '模拟供应商', modelSettings }]
+    }),
     getAdapter: scripted.factory,
     emit: (_sid, event) => events.push(event),
     onUsage: (record) => usage.push(record)
@@ -82,6 +85,29 @@ describe('CoreAgentService', () => {
     expect(requests[1].messages.some((m) => m.role === 'tool' && m.text?.includes('林晚的设定'))).toBe(true)
     expect(requests[1].tools.length).toBeGreaterThan(0)
     expect(requests[1].system).toContain('save_chapter')
+  })
+
+  it('按供应商的每模型设置注入请求参数', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [text('完成')], events, [], {
+      'mock-model': { reasoning: 'high', maxOutputTokens: 4096 }
+    })
+
+    await service.run({ message: '你好', providerId, model: 'mock-model' })
+
+    // 上下文未配置 → 取模型档案默认值（未知模型 128K）
+    expect(requests[0].params).toEqual({ reasoning: 'high', contextTokens: 131072, maxOutputTokens: 4096 })
+  })
+
+  it('没有每模型设置时用档案默认值', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [text('完成')], events)
+
+    await service.run({ message: '你好', providerId, model: 'mock-model' })
+
+    expect(requests[0].params).toEqual({ reasoning: 'off', contextTokens: 131072, maxOutputTokens: 8192 })
   })
 
   it('每次模型调用后回报归一化用量', async () => {
