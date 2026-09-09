@@ -52,6 +52,16 @@
 - [ ] 映射是**单一参数路径**：Anthropic 需直接填 `thinking` 并写完整 JSON 对象，Gemini 需 `generationConfig.` 前缀；多字段协同形式不支持。
 - [ ] 展开面板里「支持拓展思考」打开后强度默认仍是「关」，需要用户再选等级才会发送推理参数（与既有语义一致，若希望默认给中等强度需另定）。
 
+### 5. 远程服务器部署（SSH + Docker，2026-09-09）
+
+- [x] 欢迎页「服务」模式新增「安装到服务器」向导：SSH 地址/端口/用户名/密码 → 主机指纹核对并 pin → 环境检查（Linux / Docker / 端口 / sudo）→ 安装配置（安装目录、服务端口、基础镜像）→ 六步进度与实时日志 → 完成页显示服务地址与访问密钥。
+- [x] 已部署服务器卡片：检查更新（比对容器镜像 tag 与本地部署包版本）、更新（换容器不删数据）、查看日志、卸载（保留 `<安装目录>/data`）。
+- [x] 部署包随安装包分发：`npm run server:bundle` 生成 `release/storyfabric-server-<version>.tar.gz`，经 `extraResources` 落到 `resources/server-bundle.tar.gz`。
+- [x] 安全：所有用户输入经 `shQuote`；密码只走 `sudo -S` 的 stdin；密码 safeStorage 加密存独立 `deploy-targets.json`，不回传渲染层；访问密钥在服务器上用 `openssl rand` 生成（`umask 077`，0400）。
+- [x] 设计：`specs/2026-09-09-remote-server-deploy-design.md`；计划：`plans/2026-09-09-remote-server-deploy.md`。
+- [ ] **不做/未做**：自动安装 Docker、密钥登录（只支持密码）、HTTPS/证书（用 Caddy/Nginx 反代）、多服务器批量、从官网下载部署包（已预留 `bundleSource: 'bundled' | 'url'`）。
+- [ ] 真机走查由用户执行（安装 / 重启自愈 / 更新 / 卸载保留数据）；本机无 Docker、无 Linux 服务器，端到端只能靠真机验证。
+
 ## 待排期
 
 - [ ] **用量持久化的跨实例并发**：`UsageService` 的队列是实例私有的，多进程/多实例写同一 `usage.json` 会互相覆盖（桌面单实例锁 + 服务端单进程下不触发）。若未来支持共享 data 目录，改为 JSONL 追加写。
