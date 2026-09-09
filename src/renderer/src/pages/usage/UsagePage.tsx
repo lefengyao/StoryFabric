@@ -46,6 +46,7 @@ export function UsagePage(): React.ReactElement {
             <h1 className="text-base font-semibold">模型用量</h1>
             <p className="mt-1 text-xs leading-5 text-muted">
               记录最近 {fmt(records.length)} 次调用，保存在本机。缓存命中率 = 命中缓存的输入 token ÷ 输入 token。
+              顶部合计为全部记录，「最近 14 天」只统计窗口内的调用。
             </p>
           </div>
           <Button size="sm" variant="outline" onClick={() => void load()}>

@@ -98,11 +98,13 @@ export class GeminiAdapter implements LlmAdapter {
       const feedback = json.promptFeedback
       if (feedback?.blockReason) throw new Error(`请求被安全策略拦截：${feedback.blockReason}`)
       if (json.usageMetadata) {
+        const meta = json.usageMetadata
+        // 兼容中转站：分片可能只带部分字段，逐字段与已有值合并而不是整体覆盖
         usage = {
-          promptTokens: Number(json.usageMetadata.promptTokenCount ?? 0),
-          completionTokens: Number(json.usageMetadata.candidatesTokenCount ?? 0),
-          cachedTokens: Number(json.usageMetadata.cachedContentTokenCount ?? 0),
-          cacheWriteTokens: 0
+          promptTokens: Number(meta.promptTokenCount ?? usage?.promptTokens ?? 0),
+          completionTokens: Number(meta.candidatesTokenCount ?? usage?.completionTokens ?? 0),
+          cachedTokens: Number(meta.cachedContentTokenCount ?? usage?.cachedTokens ?? 0),
+          cacheWriteTokens: usage?.cacheWriteTokens ?? 0
         }
       }
       const candidate = json.candidates?.[0]

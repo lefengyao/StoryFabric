@@ -90,7 +90,7 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
         usage = {
           promptTokens: Number(json.usage.prompt_tokens ?? 0),
           completionTokens: Number(json.usage.completion_tokens ?? 0),
-          cachedTokens: Number(json.usage.prompt_tokens_details?.cached_tokens ?? 0),
+          cachedTokens: Number(json.usage.prompt_tokens_details?.cached_tokens ?? json.usage.prompt_cache_hit_tokens ?? 0),
           cacheWriteTokens: 0
         }
       }

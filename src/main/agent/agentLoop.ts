@@ -135,7 +135,7 @@ export class AgentService {
         }
         session.messages.push(assistantMsg)
         if (result.usage) {
-          this.onUsage?.({ at: Date.now(), providerId: provider.id, providerName: provider.name, model: req.model, ...result.usage })
+          this.onUsage?.({ at: Date.now(), providerId: provider.id, providerName: provider.name || provider.id, model: req.model, ...result.usage })
         }
 
         if (!result.toolCalls.length) break

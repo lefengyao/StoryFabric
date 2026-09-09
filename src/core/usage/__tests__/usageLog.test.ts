@@ -81,4 +81,29 @@ describe('summarizeUsage', () => {
     expect(stats.byModel).toEqual([])
     expect(stats.byDay.every((item) => item.calls === 0)).toBe(true)
   })
+
+  it('忽略非法数值，不污染总量', () => {
+    const stats = summarizeUsage(
+      [record({ at: now, promptTokens: Number.NaN, completionTokens: Number.POSITIVE_INFINITY, cachedTokens: 5 })],
+      { now }
+    )
+    expect(Number.isFinite(stats.promptTokens)).toBe(true)
+    expect(stats.promptTokens).toBe(0)
+    expect(stats.completionTokens).toBe(0)
+    expect(stats.cachedTokens).toBe(5)
+  })
+
+  it('总量相同时按模型名稳定排序', () => {
+    const stats = summarizeUsage(
+      [record({ at: now, model: 'zzz', promptTokens: 10 }), record({ at: now, model: 'aaa', promptTokens: 10 }), record({ at: now, model: 'mmm', promptTokens: 10 })],
+      { now }
+    )
+    expect(stats.byModel.map((item) => item.model)).toEqual(['aaa', 'mmm', 'zzz'])
+  })
+
+  it('窗口外的记录计入总量但不进 byDay', () => {
+    const stats = summarizeUsage([record({ at: now, promptTokens: 10 }), record({ at: now - 30 * day, promptTokens: 90 })], { now, days: 3 })
+    expect(stats.promptTokens).toBe(100)
+    expect(stats.byDay.reduce((sum, item) => sum + item.promptTokens, 0)).toBe(10)
+  })
 })

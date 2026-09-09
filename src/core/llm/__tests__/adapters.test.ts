@@ -76,6 +76,23 @@ describe('OpenAICompatibleAdapter', () => {
     expect(result.usage).toEqual({ promptTokens: 120, completionTokens: 30, cachedTokens: 64, cacheWriteTokens: 0 })
   })
 
+  it('兼容 DeepSeek 的 prompt_cache_hit_tokens 缓存字段', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":30,"prompt_cache_hit_tokens":64,"prompt_cache_miss_tokens":56}}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      )
+    )
+
+    const adapter = new OpenAICompatibleAdapter('https://api.deepseek.com/v1')
+    const result = await adapter.stream('deepseek-chat', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(result.usage).toEqual({ promptTokens: 120, completionTokens: 30, cachedTokens: 64, cacheWriteTokens: 0 })
+  })
+
   it('服务不认 stream_options 时退回重试一次', async () => {
     const bodies: Array<Record<string, unknown>> = []
     vi.stubGlobal(
@@ -206,6 +223,23 @@ describe('GeminiAdapter', () => {
     const result = await adapter.stream('gemini-2.0-flash', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
 
     expect(result.usage).toEqual({ promptTokens: 300, completionTokens: 50, cachedTokens: 128, cacheWriteTokens: 0 })
+  })
+
+  it('分片 usageMetadata 逐字段合并而不是整体覆盖', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"candidates":[{"content":{"parts":[{"text":"星"}]}}],"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":1}}\n\n',
+          'data: {"candidates":[{"content":{"parts":[{"text":"夜"}]}}],"usageMetadata":{"candidatesTokenCount":50}}\n\n'
+        ])
+      )
+    )
+
+    const adapter = new GeminiAdapter('https://generativelanguage.googleapis.com')
+    const result = await adapter.stream('gemini-2.0-flash', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(result.usage).toEqual({ promptTokens: 300, completionTokens: 50, cachedTokens: 0, cacheWriteTokens: 0 })
   })
 
   it('工具结果转为 functionResponse', () => {

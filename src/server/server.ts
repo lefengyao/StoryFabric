@@ -237,6 +237,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       const id = context.workspaceId
       return id ? registry.summary(id) : null
     }
+    // 用量日志是服务端全局的，与工作区无关，也不该排在 agent 长任务的操作队列后面
+    if (method === 'getUsageRecords') return usage.list()
     if (method === 'exportWorkspace' || method === 'importWorkspace') throw new Error('远程工作区请使用压缩包传输端点')
 
     const { id: workspaceId, runtime } = await runtimeOf(context)
@@ -279,7 +281,6 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       case 'saveNote': return saveNote(store, arg<Partial<NoteDoc>>())
       case 'deleteNote': return deleteNote(store, arg<string>())
       case 'getSettings': return settings.load()
-      case 'getUsageRecords': return usage.list()
       case 'updateSettings': return settings.update(arg<SettingsPatch>())
       case 'saveProvider': return settings.saveProvider(arg<ProviderInput>())
       case 'deleteProvider': return settings.deleteProvider(arg<string>())

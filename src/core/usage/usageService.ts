@@ -1,6 +1,8 @@
 /**
  * 模型用量日志：存于 userData/usage.json（服务端为 data/usage.json）。
- * 只保留最近 USAGE_LIMIT 条；读写排队，避免并发读改写互相覆盖。
+ * 只保留最近 USAGE_LIMIT 条；同一实例内的读改写串行化。
+ * 注意：队列是实例私有的，多个进程/多个实例同时写同一个文件仍可能互相覆盖；
+ * 当前部署（桌面单实例锁、服务端单进程）不会出现，如未来支持共享 data 目录需改为追加写。
  */
 import { promises as fs } from 'fs'
 import { dirname } from 'path'

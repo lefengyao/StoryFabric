@@ -74,7 +74,12 @@ function dayKey(at: number): string {
 }
 
 function rate(cached: number, prompt: number): number {
-  return prompt > 0 ? cached / prompt : 0
+  return Number.isFinite(prompt) && prompt > 0 && Number.isFinite(cached) ? cached / prompt : 0
+}
+
+/** 非法数值（NaN/Infinity）按 0 计，避免污染总量。 */
+function safe(value: number): number {
+  return Number.isFinite(value) ? value : 0
 }
 
 export function summarizeUsage(records: UsageRecord[], options: { now?: number; days?: number } = {}): UsageStats {
@@ -89,9 +94,9 @@ export function summarizeUsage(records: UsageRecord[], options: { now?: number; 
 
   for (const record of records) {
     calls += 1
-    promptTokens += record.promptTokens
-    completionTokens += record.completionTokens
-    cachedTokens += record.cachedTokens
+    promptTokens += safe(record.promptTokens)
+    completionTokens += safe(record.completionTokens)
+    cachedTokens += safe(record.cachedTokens)
 
     const key = `${record.providerId}::${record.model}`
     const current = models.get(key) ?? {
@@ -105,16 +110,19 @@ export function summarizeUsage(records: UsageRecord[], options: { now?: number; 
       cacheHitRate: 0
     }
     current.calls += 1
-    current.promptTokens += record.promptTokens
-    current.completionTokens += record.completionTokens
-    current.cachedTokens += record.cachedTokens
+    current.promptTokens += safe(record.promptTokens)
+    current.completionTokens += safe(record.completionTokens)
+    current.cachedTokens += safe(record.cachedTokens)
     current.cacheHitRate = rate(current.cachedTokens, current.promptTokens)
     models.set(key, current)
   }
 
-  const byModel = [...models.values()].sort(
-    (a, b) => b.promptTokens + b.completionTokens - (a.promptTokens + a.completionTokens)
-  )
+  const byModel = [...models.values()].sort((a, b) => {
+    const diff = b.promptTokens + b.completionTokens - (a.promptTokens + a.completionTokens)
+    if (diff !== 0) return diff
+    // 总量相同时按模型名、供应商 id 排序，保证跨刷新顺序稳定
+    return a.model.localeCompare(b.model) || a.providerId.localeCompare(b.providerId)
+  })
 
   const windowStart = new Date(now)
   windowStart.setHours(0, 0, 0, 0)
@@ -130,9 +138,9 @@ export function summarizeUsage(records: UsageRecord[], options: { now?: number; 
     const bucket = buckets.get(dayKey(record.at))
     if (!bucket) continue
     bucket.calls += 1
-    bucket.promptTokens += record.promptTokens
-    bucket.completionTokens += record.completionTokens
-    bucket.cachedTokens += record.cachedTokens
+    bucket.promptTokens += safe(record.promptTokens)
+    bucket.completionTokens += safe(record.completionTokens)
+    bucket.cachedTokens += safe(record.cachedTokens)
   }
 
   return {

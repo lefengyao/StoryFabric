@@ -18,5 +18,5 @@
       "@/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/core/**/*", "src/main/llm/**/*"]
+  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/core/**/*"]
 }
