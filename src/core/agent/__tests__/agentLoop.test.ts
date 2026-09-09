@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentEvent, ChatSession } from '../../../shared/types'
+import type { AgentEvent, ChatSession, UsageRecord } from '../../../shared/types'
 import type { LlmAdapter, LlmAdapterFactory, StreamRequest, StreamResult } from '../../llm/types'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
@@ -42,15 +42,17 @@ async function createStore(): Promise<MemoryFileStore> {
 function makeService(
   store: MemoryFileStore,
   results: StreamResult[],
-  events: AgentEvent[]
+  events: AgentEvent[],
+  usage: UsageRecord[] = []
 ): { service: CoreAgentService; requests: StreamRequest[] } {
   const scripted = scriptedFactory(results)
   const service = new CoreAgentService({
     store,
     sessions: new CoreSessionStore(store),
-    settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+    settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', name: '模拟供应商' }] }),
     getAdapter: scripted.factory,
-    emit: (_sid, event) => events.push(event)
+    emit: (_sid, event) => events.push(event),
+    onUsage: (record) => usage.push(record)
   })
   return { service, requests: scripted.requests }
 }
@@ -80,6 +82,48 @@ describe('CoreAgentService', () => {
     expect(requests[1].messages.some((m) => m.role === 'tool' && m.text?.includes('林晚的设定'))).toBe(true)
     expect(requests[1].tools.length).toBeGreaterThan(0)
     expect(requests[1].system).toContain('save_chapter')
+  })
+
+  it('每次模型调用后回报归一化用量', async () => {
+    const store = await createStore()
+    await saveNote(store, { title: '林晚的设定', content: '主角' })
+    const events: AgentEvent[] = []
+    const usage: UsageRecord[] = []
+    const { service } = makeService(
+      store,
+      [
+        { ...call('c1', 'list_notes', {}), usage: { promptTokens: 100, completionTokens: 10, cachedTokens: 40, cacheWriteTokens: 0 } },
+        { ...text('工作区里有 1 条便签。'), usage: { promptTokens: 200, completionTokens: 20, cachedTokens: 0, cacheWriteTokens: 0 } }
+      ],
+      events,
+      usage
+    )
+
+    await service.run({ message: '有哪些便签？', providerId, model: 'mock-model' })
+
+    expect(usage).toHaveLength(2)
+    expect(usage[0]).toMatchObject({
+      providerId,
+      providerName: '模拟供应商',
+      model: 'mock-model',
+      promptTokens: 100,
+      completionTokens: 10,
+      cachedTokens: 40,
+      cacheWriteTokens: 0
+    })
+    expect(typeof usage[0].at).toBe('number')
+    expect(usage[1]).toMatchObject({ promptTokens: 200, completionTokens: 20 })
+  })
+
+  it('模型未返回用量时不回报', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const usage: UsageRecord[] = []
+    const { service } = makeService(store, [text('完成')], events, usage)
+
+    await service.run({ message: '你好', providerId, model: 'mock-model' })
+
+    expect(usage).toEqual([])
   })
 
   it('delete_note 被拒绝后保留便签、回收站为空并回注拒绝消息', async () => {
