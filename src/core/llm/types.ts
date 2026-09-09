@@ -14,6 +14,17 @@ export interface StreamResult {
   text: string
   toolCalls: ToolCallData[]
   stopReason: 'stop' | 'tool_calls'
+  usage?: TokenUsage
+}
+
+/** 单次模型调用用量：三家协议的字段已归一，缺失项为 0。 */
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  /** 命中提示词缓存的输入 token（OpenAI `cached_tokens` / Anthropic `cache_read_input_tokens` / Gemini `cachedContentTokenCount`） */
+  cachedTokens: number
+  /** 为建立缓存而写入的输入 token（仅 Anthropic 有 `cache_creation_input_tokens`） */
+  cacheWriteTokens: number
 }
 
 export interface StreamHandlers {

@@ -1,6 +1,6 @@
 /** OpenAI 兼容协议适配器（覆盖 OpenAI / DeepSeek / Kimi / 智谱 / 各类中转站 / Ollama 等） */
 import type { ChatMessage, ToolDefJson } from '../../shared/types'
-import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult } from './types'
+import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -51,19 +51,29 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
     }
     if (req.tools.length) body.tools = toOpenAiTools(req.tools)
 
-    const res = await fetch(this.endpoint(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body),
-      signal: req.signal
-    })
-    if (!res.ok) throw await httpError(res)
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    }
+    const send = (includeUsage: boolean): Promise<Response> =>
+      fetch(this.endpoint(), {
+        method: 'POST',
+        headers,
+        // 只有显式声明才在流末尾返回 usage
+        body: JSON.stringify(includeUsage ? { ...body, stream_options: { include_usage: true } } : body),
+        signal: req.signal
+      })
+
+    let res = await send(true)
+    if (!res.ok) {
+      // 少数 OpenAI 兼容服务不认 stream_options：仅在明确报该字段时退回重试一次
+      if (res.status === 400 && (await res.clone().text()).includes('stream_options')) res = await send(false)
+      if (!res.ok) throw await httpError(res)
+    }
 
     let text = ''
     let stopReason: StreamResult['stopReason'] = 'stop'
+    let usage: TokenUsage | undefined
     const calls = new Map<number, { id: string; name: string; args: string }>()
 
     for await (const line of sseLines(res)) {
@@ -76,6 +86,14 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
         continue
       }
       if (json.error) throw new Error(String(json.error.message ?? JSON.stringify(json.error)))
+      if (json.usage) {
+        usage = {
+          promptTokens: Number(json.usage.prompt_tokens ?? 0),
+          completionTokens: Number(json.usage.completion_tokens ?? 0),
+          cachedTokens: Number(json.usage.prompt_tokens_details?.cached_tokens ?? 0),
+          cacheWriteTokens: 0
+        }
+      }
       const choice = json.choices?.[0]
       if (!choice) continue
       const delta = choice.delta ?? {}
@@ -98,7 +116,7 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
     const toolCalls = [...calls.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([i, c]) => ({ id: c.id || `call_${i}`, name: c.name, argsJson: c.args || '{}' }))
-    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason }
+    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason, usage }
   }
 }
 

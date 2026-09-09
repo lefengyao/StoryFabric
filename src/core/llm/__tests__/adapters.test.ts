@@ -54,6 +54,49 @@ describe('OpenAICompatibleAdapter', () => {
     const init = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-key')
   })
+
+  it('解析流末尾 usage，并在请求中声明 include_usage', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse([
+          'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}\n\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":64}}}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      })
+    )
+
+    const adapter = new OpenAICompatibleAdapter('https://api.test.com/v1')
+    const result = await adapter.stream('m1', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(capturedBody.stream_options).toEqual({ include_usage: true })
+    expect(result.usage).toEqual({ promptTokens: 120, completionTokens: 30, cachedTokens: 64, cacheWriteTokens: 0 })
+  })
+
+  it('服务不认 stream_options 时退回重试一次', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        if (bodies.length === 1) {
+          return new Response('{"error":{"message":"Unrecognized request argument supplied: stream_options"}}', { status: 400 })
+        }
+        return sseResponse(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n'])
+      })
+    )
+
+    const adapter = new OpenAICompatibleAdapter('https://api.test.com/v1')
+    const result = await adapter.stream('m1', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0].stream_options).toEqual({ include_usage: true })
+    expect(bodies[1].stream_options).toBeUndefined()
+    expect(result.text).toBe('ok')
+  })
 })
 
 describe('AnthropicAdapter', () => {
@@ -76,6 +119,25 @@ describe('AnthropicAdapter', () => {
     const result = await adapter.stream('claude-x', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
     expect(result.text).toBe('晨光')
     expect(result.toolCalls[0]).toMatchObject({ id: 't9', name: 'get_outline', argsJson: '{}' })
+  })
+
+  it('合并 message_start 与 message_delta 的用量', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":200,"output_tokens":1,"cache_read_input_tokens":150,"cache_creation_input_tokens":20}}}\n\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}\n\n',
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":45}}\n\n',
+          'data: {"type":"message_stop"}\n\n'
+        ])
+      )
+    )
+
+    const adapter = new AnthropicAdapter('https://api.anthropic.com')
+    const result = await adapter.stream('claude-x', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(result.usage).toEqual({ promptTokens: 200, completionTokens: 45, cachedTokens: 150, cacheWriteTokens: 20 })
   })
 
   it('历史转换：连续 tool 结果合并进同一 user 轮', () => {
@@ -127,6 +189,23 @@ describe('GeminiAdapter', () => {
 
     const body = capturedBody as { systemInstruction?: { parts: { text: string }[] }; contents: unknown[] }
     expect(body.systemInstruction?.parts[0].text).toBe('sys提示')
+  })
+
+  it('解析 usageMetadata', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"candidates":[{"content":{"parts":[{"text":"星"}]}}]}\n\n',
+          'data: {"candidates":[{"content":{"parts":[{"text":"夜"}]}}],"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":50,"cachedContentTokenCount":128}}\n\n'
+        ])
+      )
+    )
+
+    const adapter = new GeminiAdapter('https://generativelanguage.googleapis.com')
+    const result = await adapter.stream('gemini-2.0-flash', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(result.usage).toEqual({ promptTokens: 300, completionTokens: 50, cachedTokens: 128, cacheWriteTokens: 0 })
   })
 
   it('工具结果转为 functionResponse', () => {

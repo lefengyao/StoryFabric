@@ -1,6 +1,6 @@
 /** Google Gemini 原生协议适配器 */
 import type { ChatMessage } from '../../shared/types'
-import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult } from './types'
+import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -82,6 +82,7 @@ export class GeminiAdapter implements LlmAdapter {
 
     let text = ''
     let stopReason: StreamResult['stopReason'] = 'stop'
+    let usage: TokenUsage | undefined
     const toolCalls: StreamResult['toolCalls'] = []
 
     for await (const line of sseLines(res)) {
@@ -96,6 +97,14 @@ export class GeminiAdapter implements LlmAdapter {
       if (json.error) throw new Error(String(json.error.message ?? 'Gemini 流错误'))
       const feedback = json.promptFeedback
       if (feedback?.blockReason) throw new Error(`请求被安全策略拦截：${feedback.blockReason}`)
+      if (json.usageMetadata) {
+        usage = {
+          promptTokens: Number(json.usageMetadata.promptTokenCount ?? 0),
+          completionTokens: Number(json.usageMetadata.candidatesTokenCount ?? 0),
+          cachedTokens: Number(json.usageMetadata.cachedContentTokenCount ?? 0),
+          cacheWriteTokens: 0
+        }
+      }
       const candidate = json.candidates?.[0]
       for (const part of candidate?.content?.parts ?? []) {
         if (typeof part.text === 'string' && part.text) {
@@ -113,7 +122,7 @@ export class GeminiAdapter implements LlmAdapter {
       void stopReason
     }
 
-    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : 'stop' }
+    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : 'stop', usage }
   }
 }
 

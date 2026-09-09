@@ -1,6 +1,6 @@
 /** Anthropic Messages 原生协议适配器 */
 import type { ChatMessage, ToolDefJson } from '../../shared/types'
-import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult } from './types'
+import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { sseData, sseLines } from './sse'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -87,6 +87,7 @@ export class AnthropicAdapter implements LlmAdapter {
 
     let text = ''
     let stopReason: StreamResult['stopReason'] = 'stop'
+    let usage: TokenUsage | undefined
     const toolBlocks = new Map<number, { id: string; name: string; args: string }>()
 
     for await (const line of sseLines(res)) {
@@ -99,6 +100,18 @@ export class AnthropicAdapter implements LlmAdapter {
         continue
       }
       switch (json.type) {
+        case 'message_start': {
+          const u = json.message?.usage
+          if (u) {
+            usage = {
+              promptTokens: Number(u.input_tokens ?? 0),
+              completionTokens: Number(u.output_tokens ?? 0),
+              cachedTokens: Number(u.cache_read_input_tokens ?? 0),
+              cacheWriteTokens: Number(u.cache_creation_input_tokens ?? 0)
+            }
+          }
+          break
+        }
         case 'content_block_start': {
           const b = json.content_block
           if (b?.type === 'tool_use') {
@@ -119,6 +132,14 @@ export class AnthropicAdapter implements LlmAdapter {
         }
         case 'message_delta': {
           if (json.delta?.stop_reason === 'tool_use') stopReason = 'tool_calls'
+          if (json.usage?.output_tokens !== undefined) {
+            usage = {
+              promptTokens: usage?.promptTokens ?? 0,
+              completionTokens: Number(json.usage.output_tokens ?? 0),
+              cachedTokens: usage?.cachedTokens ?? 0,
+              cacheWriteTokens: usage?.cacheWriteTokens ?? 0
+            }
+          }
           break
         }
         case 'error': {
@@ -132,7 +153,7 @@ export class AnthropicAdapter implements LlmAdapter {
       name: tb.name,
       argsJson: tb.args || '{}'
     }))
-    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason }
+    return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason, usage }
   }
 }
 
