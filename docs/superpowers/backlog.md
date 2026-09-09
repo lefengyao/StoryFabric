@@ -17,7 +17,11 @@
 
 ## 待排期
 
-- [ ] **新建类写入工具的 `change.entityId` 是幻影 id**：`sim` 用 `genId()` 造了一个 id 放进 `PendingChange.entityId`，但 `commit` 保存的是**无 id 的 `patch`**，落盘时 `saveX(patch)` 又生成一次 id，两者不一致（core `tools/registry.ts` 与 main `tools/registry.ts` 的 `save_note`/`save_character`/`save_event`/`save_chapter`/`save_setting` 等分支皆然）。已读代码确认，并在 `src/main/tools/__tests__/registryParity.test.ts` 中实测：用 `save_note` 待确认变更的 `entityId` 去 `delete_note` 会报「未找到便签」。影响任何依赖 `change.entityId` 的 UI 跳转/高亮。
+- [ ] **新建类写入工具的 `change.entityId` 是幻影 id**：`sim` 用 `genId()` 造了一个 id 放进 `PendingChange.entityId`，但 `commit` 保存的是**无 id 的 `patch`**，落盘时 `saveX(patch)` 又生成一次 id，两者不一致（core `tools/registry.ts` 与 main `tools/registry.ts` 的 `save_note`/`save_character`/`save_event`/`save_chapter`/`save_setting` 等分支皆然）。已读代码确认（`entityStore.ts:340` 的 `input.id ?? genId(...)`）；观察来源：写 A+B 的 parity 测试时，用 `save_note` 待确认变更的 `entityId` 去 `delete_note` 得到「未找到便签」的非 pending 结果（该断言未保留在最终测试中）。影响任何依赖 `change.entityId` 的 UI 跳转/高亮。
+- [ ] **`save_relationship` 两端仍未完全等价**：main 的 title 多 `【${type}】`（`main/tools/registry.ts:594`），人物不存在的错误文案也不同。A3 只对齐了 `beforeText`。
+- [ ] **`PendingChangeDialog` 的 `view.confirmLabel` 接线无测试保护**：仓库无 React 组件测试设施；变异验证表明改回硬编码文案全量测试仍绿（风险低：单一调用点 + 必填字段由 tsc 兜底）。
+- [ ] **可清理的死分支**：`core/tools/registry.ts:118` 与 `main/tools/registry.ts:669` 的 `name === 'restore_from_trash' ? 'chapter'` 在 A1 后不可达；建议抽 `kindOfTool(name)` 映射。
+- [ ] **测试硬度**：`pendingChangeView` 的 `outcome: undefined` 与实现键存在性耦合（`toStrictEqual` 对 undefined 键做双向存在性检查）；core loop 的请求快照是浅拷贝，消息对象按引用。
 - [ ] core agent loop 的假适配器只验证注入结果与请求快照，未覆盖真实协议适配器的消息映射（已由 `src/main/llm/__tests__/adapters.test.ts` 部分覆盖）。
 - [ ] 主线计划 `docs/superpowers/plans/2026-09-05-writing-structure-and-hybrid-retrieval.md`（50 项未勾选）。
 - [ ] Android 端按 `docs/android-handoff.md` 的验收清单恢复（当前暂缓）。
