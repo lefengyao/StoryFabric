@@ -68,6 +68,30 @@ describe('linux web server', () => {
       const volumes = (await volumesResponse.json() as { result: Array<{ title: string }> }).result
       expect(volumes.map((volume) => volume.title)).toEqual(expect.arrayContaining(['并发卷 A', '并发卷 B']))
 
+      // 每模型参数要能经 RPC 保存并读回，且随模型列表清理失效项
+      const savedProvider = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookie ?? '' },
+        body: JSON.stringify({
+          method: 'saveProvider',
+          args: [
+            {
+              name: '网页供应商',
+              protocol: 'openai',
+              baseUrl: 'https://api.test/v1',
+              apiKey: 'sk-web',
+              models: ['gpt-4o', 'claude-x'],
+              modelSettings: { 'gpt-4o': { reasoning: 'high', maxOutputTokens: 4096 }, '已移除的模型': { reasoning: 'low' } }
+            }
+          ]
+        })
+      })
+      expect(savedProvider.status).toBe(200)
+      const settingsPayload = (await savedProvider.json() as { result: { providers: Array<{ name: string; modelSettings: Record<string, unknown> }> } }).result
+      expect(settingsPayload.providers.find((provider) => provider.name === '网页供应商')?.modelSettings).toEqual({
+        'gpt-4o': { reasoning: 'high', maxOutputTokens: 4096 }
+      })
+
       const downloaded = await fetch(`${base}/api/workspaces/default/archive`, { headers: { cookie: cookie ?? '' } })
       if (!downloaded.ok) throw new Error(await downloaded.text())
       expect(downloaded.status).toBe(200)
