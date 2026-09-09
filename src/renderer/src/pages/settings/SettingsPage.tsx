@@ -6,10 +6,12 @@ import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
+import { profileForModel } from '../../../../core/llm/modelCatalog'
+import { CONTEXT_PRESETS, OUTPUT_PRESETS, formatTokens, modelParamOptions } from '../../lib/modelParamOptions'
 import { EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS } from '../../lib/editorStyle'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
-import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
+import type { ChatDensity, EditorFontFamily, ModelSettings, Protocol, ProviderInput, ProviderPublic, ReasoningLevel, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
@@ -54,13 +56,13 @@ export function SettingsPage(): React.ReactElement {
   const openCreate = (): void => {
     setEditingId(null)
     setFormError(null)
-    setEditing({ name: '', protocol: 'openai', baseUrl: '', apiKey: undefined, models: [] })
+    setEditing({ name: '', protocol: 'openai', baseUrl: '', apiKey: undefined, models: [], modelSettings: {} })
   }
 
   const openEdit = (p: ProviderPublic): void => {
     setEditingId(p.id)
     setFormError(null)
-    setEditing({ name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: undefined, models: [...p.models] })
+    setEditing({ name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: undefined, models: [...p.models], modelSettings: { ...p.modelSettings } })
   }
 
   const saveProvider = async (): Promise<void> => {
@@ -481,6 +483,66 @@ export function SettingsPage(): React.ReactElement {
             <Button size="sm" variant="outline" onClick={() => void doFetchModels()} loading={fetchingModels} disabled={!editing.baseUrl.trim()}>
               <RefreshCw size={13} /> 从服务拉取模型列表
             </Button>
+
+            {editing.models.length > 0 && (
+              <Field label="模型参数" hint="留空则使用内置档案的默认值（按模型名自动识别，可逐模型覆盖）">
+                <div className="max-h-72 space-y-1.5 overflow-y-auto rounded-lg border border-line p-2">
+                  {editing.models.map((model) => {
+                    const profile = profileForModel(model)
+                    const current = editing.modelSettings?.[model] ?? {}
+                    const setModelSetting = (patch: Partial<ModelSettings>): void => {
+                      const next = { ...(editing.modelSettings ?? {}) }
+                      next[model] = { ...next[model], ...patch }
+                      setEditing({ ...editing, modelSettings: next })
+                    }
+                    const controlClass = 'h-7 shrink-0 rounded-md border border-line bg-panel px-1 text-xs'
+                    return (
+                      <div key={model} className="flex flex-wrap items-center gap-2 rounded-md bg-app px-2 py-1.5">
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={`${model}（${profile.label}）`}>
+                          {model}
+                        </span>
+                        <select
+                          value={current.reasoning ?? 'off'}
+                          onChange={(e) => setModelSetting({ reasoning: e.target.value as ReasoningLevel })}
+                          disabled={!profile.reasoning}
+                          title={profile.reasoning ? '推理等级' : '该模型档案不支持推理参数'}
+                          className={`${controlClass} disabled:opacity-40`}
+                        >
+                          <option value="off">推理 关</option>
+                          <option value="low">低</option>
+                          <option value="medium">中</option>
+                          <option value="high">高</option>
+                        </select>
+                        <select
+                          value={current.contextTokens ?? profile.contextTokens}
+                          onChange={(e) => setModelSetting({ contextTokens: Number(e.target.value) })}
+                          title="上下文窗口（仅记录与展示）"
+                          className={controlClass}
+                        >
+                          {modelParamOptions(CONTEXT_PRESETS, profile.contextTokens).map((value) => (
+                            <option key={value} value={value}>
+                              上下文 {formatTokens(value)}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={current.maxOutputTokens ?? profile.maxOutputTokens}
+                          onChange={(e) => setModelSetting({ maxOutputTokens: Number(e.target.value) })}
+                          title="单次回复输出上限"
+                          className={controlClass}
+                        >
+                          {modelParamOptions(OUTPUT_PRESETS, profile.maxOutputTokens).map((value) => (
+                            <option key={value} value={value}>
+                              输出 {formatTokens(value)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )
+                  })}
+                </div>
+              </Field>
+            )}
 
             {formError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{formError}</div>}
 
