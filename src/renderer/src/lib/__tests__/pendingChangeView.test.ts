@@ -9,11 +9,12 @@ function change(patch: Partial<PendingChange>): PendingChange {
 describe('pendingChangeView', () => {
   it('把删除便签渲染为移入回收站的结果说明，而不是内容 diff', () => {
     const view = pendingChangeView(change({ toolName: 'delete_note', beforeText: '# 便签\n内容', afterText: '移入回收站' }))
-    expect(view).toEqual({
+    expect(view).toStrictEqual({
       variant: 'remove',
       label: '便签',
       caption: '智能体请求删除便签 —— 确认后才会移入回收站',
-      outcome: '将移入回收站，可从回收站恢复'
+      outcome: '将移入回收站，可从回收站恢复',
+      confirmLabel: '移入回收站'
     })
   })
 
@@ -21,19 +22,30 @@ describe('pendingChangeView', () => {
     const view = pendingChangeView(
       change({ toolName: 'restore_from_trash', entityKind: 'chapter', beforeText: '{"id":"cha_1"}', afterText: '恢复到 chapters/draft/第一章.md' })
     )
-    expect(view).toEqual({
+    expect(view).toStrictEqual({
       variant: 'restore',
       label: '章节',
       caption: '智能体请求恢复章节 —— 确认后才会恢复到原位置',
-      outcome: '恢复到 chapters/draft/第一章.md'
+      outcome: '恢复到 chapters/draft/第一章.md',
+      confirmLabel: '确认恢复'
     })
   })
 
-  it('内容变更保持新建/更新语义', () => {
-    expect(pendingChangeView(change({ beforeText: '' })).variant).toBe('create')
-    expect(pendingChangeView(change({ beforeText: '' })).caption).toBe('智能体请求新建便签 —— 确认后才会写入工作区')
-    expect(pendingChangeView(change({ beforeText: '旧内容' })).variant).toBe('update')
-    expect(pendingChangeView(change({ beforeText: '旧内容' })).caption).toBe('智能体请求更新便签 —— 确认后才会写入工作区')
+  it('内容变更保持新建/更新语义且不带结果说明', () => {
+    expect(pendingChangeView(change({ beforeText: '' }))).toStrictEqual({
+      variant: 'create',
+      label: '便签',
+      caption: '智能体请求新建便签 —— 确认后才会写入工作区',
+      outcome: undefined,
+      confirmLabel: '应用写入'
+    })
+    expect(pendingChangeView(change({ beforeText: '旧内容' }))).toStrictEqual({
+      variant: 'update',
+      label: '便签',
+      caption: '智能体请求更新便签 —— 确认后才会写入工作区',
+      outcome: undefined,
+      confirmLabel: '应用写入'
+    })
   })
 
   it('未知实体类型回退为通用标签', () => {

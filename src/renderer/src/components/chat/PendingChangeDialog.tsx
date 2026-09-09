@@ -65,7 +65,7 @@ export function PendingChangeDialog({
           <X size={14} /> 拒绝
         </Button>
         <Button variant="primary" onClick={() => onConfirm(true)}>
-          <Check size={14} /> 应用写入
+          <Check size={14} /> {view.confirmLabel}
         </Button>
       </div>
     </Modal>
