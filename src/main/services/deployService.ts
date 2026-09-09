@@ -94,7 +94,10 @@ export class DeployService {
     }
   }
 
-  private contextOf(input: DeployTargetInput, saved?: { installDir: string; servicePort: number; baseImage: string }): DeployContext {
+  private contextOf(
+    input: Partial<DeployTargetInput>,
+    saved?: { installDir: string; servicePort: number; baseImage: string }
+  ): DeployContext {
     return {
       installDir: input.installDir || saved?.installDir || '/opt/storyfabric',
       servicePort: input.servicePort || saved?.servicePort || 8787,
