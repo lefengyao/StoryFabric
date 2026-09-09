@@ -174,11 +174,14 @@ describe('AgentService', () => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
     })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
-    agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, false)
+    const change = (changeEv.event as { change: { id: string; title: string } }).change
+    expect(change.title).toBe('删除便签：待删除便签')
+    agent.confirmChange(change.id, false)
 
     const { sessionId } = await runPromise
     const noteFiles = await fs.readdir(join(root, 'notes'))
     expect(noteFiles.some((file) => file.includes('待删除便签'))).toBe(true)
+    expect(await listTrash(root)).toHaveLength(0)
 
     const session = (await loadPersisted(sessionId))!
     const toolMsgs = session.messages.filter((m) => m.role === 'tool')
@@ -212,8 +215,10 @@ describe('AgentService', () => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
     })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
-    expect((changeEv.event as { change: { beforeText: string } }).change.beforeText).toBe(serializeNote(note))
-    agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
+    const change = (changeEv.event as { change: { id: string; title: string; beforeText: string } }).change
+    expect(change.beforeText).toBe(serializeNote(note))
+    expect(change.title).toBe('删除便签：批准删除便签')
+    agent.confirmChange(change.id, true)
 
     const { sessionId } = await runPromise
     const noteFiles = await fs.readdir(join(root, 'notes'))

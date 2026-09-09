@@ -285,7 +285,7 @@ export const TOOL_DEFS: ToolDefJson[] = [
   },
   {
     name: 'delete_note',
-    description: '仅在用户明确同意删除后调用；会进入待确认变更，确认后将便签移入回收站。',
+    description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。',
     parameters: { type: 'object', properties: { noteId: { type: 'string', description: '要删除的便签 id' } }, required: ['noteId'] }
   },
   {

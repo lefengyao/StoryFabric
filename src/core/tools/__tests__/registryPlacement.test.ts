@@ -89,8 +89,9 @@ describe('agent placement guardrails', () => {
   it('registers delete_note with a required string noteId schema', () => {
     const definition = TOOL_DEFS.find((tool) => tool.name === 'delete_note')
     expect(definition).toBeDefined()
-    expect(definition?.parameters.properties).toEqual(expect.objectContaining({ noteId: { type: 'string' } }))
+    expect(definition?.parameters.properties).toEqual(expect.objectContaining({ noteId: expect.objectContaining({ type: 'string' }) }))
     expect(definition?.parameters.required).toEqual(expect.arrayContaining(['noteId']))
+    expect(definition?.description).toBe('只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。')
   })
 
   it('creates a note pending change and only moves the note to trash when applied', async () => {
@@ -105,6 +106,7 @@ describe('agent placement guardrails', () => {
     expect(pending.change.toolName).toBe('delete_note')
     expect(pending.change.entityKind).toBe('note')
     expect(pending.change.entityId).toBe(note.id)
+    expect(pending.change.title).toBe('删除便签：待清理便签')
     expect(pending.change.beforeText).toBe(serializeNote(note))
     expect(pending.change.afterText).toContain('移入回收站')
     expect(await listNotes(store)).toHaveLength(1)

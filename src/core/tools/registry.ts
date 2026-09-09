@@ -42,7 +42,7 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'save_chapter', description: '新建或更新章节正文；必须显式指定 box：draft=草稿箱，main=正文箱；正文箱还必须指定 volumeId；需要用户确认。', parameters: { type: 'object', properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
   { name: 'save_setting', description: '新建或更新设定；需要用户确认。', parameters: { type: 'object', properties: { setting: { type: 'object' } }, required: ['setting'] } },
   { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', properties: { note: { type: 'object' } }, required: ['note'] } },
-  { name: 'delete_note', description: '将指定便签移入回收站；需要用户确认。', parameters: { type: 'object', properties: { noteId: { type: 'string' } }, required: ['noteId'] } }
+  { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', properties: { noteId: { type: 'string', description: '要删除的便签 id' } }, required: ['noteId'] } }
   ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷；需要用户确认。', parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；需要用户确认。', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }
 ]
@@ -101,7 +101,7 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     if (!noteId) throw new Error('delete_note 必须提供有效 noteId')
     const note = await getNote(store, noteId)
     if (!note) throw new Error(`未找到便签：${noteId}`)
-    sim = { entityId: note.id, title: `移入回收站：${note.title}`, beforeText: serializeNote(note), afterText: '移入回收站', commit: async () => { await deleteNote(store, note.id); return `已将便签「${note.title}」移入回收站` } }
+    sim = { entityId: note.id, title: `删除便签：${note.title}`, beforeText: serializeNote(note), afterText: '移入回收站', commit: async () => { await deleteNote(store, note.id); return `已将便签「${note.title}」移入回收站` } }
   } else if (name === 'move_chapter') {
     const chapterId = String(a.chapterId ?? ''); const box = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''; if (!chapterId || !box) throw new Error('chapterId 或 box 无效')
     validateAgentChapterMove({ box, volumeId: a.volumeId })
