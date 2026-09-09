@@ -49,9 +49,9 @@ export function accentTokens(hex: string, dark: boolean): AccentTokens
 export function accentStyle(settings: { accentColorLight?: string; accentColorDark?: string }, dark: boolean): Record<string, string>
 ```
 
-- `accentTokens`：由基色经 HSL 推导 `strong`（亮度 −0.08）、`soft`（浅色主题 l=0.94，深色主题 l=0.14）、`fg`（相对亮度 > 0.55 取 `#18181b`，否则 `#ffffff`）；非法输入回退到该模式的默认基色。
-- `accentStyle`：按 `dark` 选择对应基色，返回 `--accent` / `--accent-strong` / `--accent-soft` / `--accent-fg` 四个 CSS 变量。
-- `settingsStore` 在 `load` / `update` 后先 `applyTheme` 再应用 `accentStyle` 到 `document.documentElement.style`；非法值同样回落到默认。
+- `accentTokens`：由基色经 HSL 推导 `strong`（亮度 −0.08；基色亮度 < 0.12 时改为 +0.12，保证与 `accent` 可区分）、`soft`（低饱和底衬：饱和度 ×0.35，浅色主题 l=0.95、深色主题 l=0.16）、`fg`（在 `#ffffff` 与 `#18181b` 中取**对比度更高**者，而非亮度阈值——阈值写法会让默认深色基色 `#818cf8` 拿到白字，对比度仅 2.98:1）；非法输入回退到该模式的默认基色。
+- `accentStyle`：按 `dark` 选择对应基色。**默认基色或非法值返回空对象**，不写内联变量，交由 `styles/index.css` 的手工配色，保证未自定义时默认外观不变。
+- `settingsStore` 在 `load` / `update` 后先 `applyTheme` 再应用 `accentStyle`：有值则 `setProperty`，无值则 `removeProperty`（避免残留上一次的自定义值）。取色器拖动时只走 `previewAccent`（改 CSS 变量），停手 400ms 后才落盘。
 
 ### 设置页分类
 
@@ -76,7 +76,7 @@ export function createCompletionSound(createContext?: () => AudioContextLike | n
 export function playCompletionSound(): void
 ```
 
-- WebAudio 合成两音（A5 880 Hz → D6 1174.66 Hz），各带 0.0001 → 0.15 → 0.0001 的增益包络，**不打包音频资源**。
+- WebAudio 合成两音（A5 880 Hz → D6 1174.66 Hz），各带 0.0001 → 0.15 → 0.0001 的增益包络，**不打包音频资源**；播放前若上下文 `state === 'suspended'` 先 `resume()`（浏览器自动播放策略可能挂起上下文）。
 - `createCompletionSound` 接受可注入的 `AudioContext` 工厂，便于单测；默认实例懒建、异常静默。
 - 触发点：`chatStore` 的 `case 'done'`，条件为「开关打开 且 本次运行没有 error」（用户中止会经 error 路径，因此同样不响）。
 

@@ -643,3 +643,16 @@ Run: 启动 `release/win-unpacked/StoryFabric.exe`，确认：设置页出现四
 - [x] **Step 3: 更新 backlog 与文档**
 
 在 `docs/superpowers/backlog.md` 勾掉设置分类 / 提示音 / 主题色三项，写 checkpoint。
+
+---
+
+## 审查修正（2026-09-09，质量审查 FAIL 后）
+
+本计划 Task 1/Task 3 的代码块已被后续修正取代，以 `src/renderer/src/lib/accent.ts` 与 `completionSound.ts` 的现状为准：
+
+1. **`fg` 推导改为「取白/黑中对比度更高者」**。原计划里的亮度阈值写法（> 0.55 取深色）会让默认深色基色 `#818cf8` 拿到白字，对比度只有 2.98:1（低于 WCAG AA），而 `index.css` 原手工值是 5.9:1——这是真实回归。
+2. **`accentStyle` 在默认基色或非法值时返回空对象**，不写内联变量，交由 `styles/index.css` 的手工配色；否则未自定义的用户也会看到默认外观被推导值改变，且 CSS 的 8 个变量变成死代码。`settingsStore.applyAccent` 相应改为「有值 `setProperty` / 无值 `removeProperty`」。
+3. **`soft` 降饱和**（饱和度 ×0.35，深色 l=0.16），避免深色主题出现高饱和深蓝底衬。
+4. **`strong` 对极暗基色提亮**（l < 0.12 时 +0.12），保证与 `accent` 可区分。
+5. **取色器拖动改为「即时预览 + 停手 400ms 落盘」**（`previewAccent` + `commitAccent`），避免逐 input 事件触发 IPC 与落盘。
+6. **提示音播放前若上下文被挂起先 `resume()`**，并补「工厂抛异常」「挂起恢复」两个用例。
