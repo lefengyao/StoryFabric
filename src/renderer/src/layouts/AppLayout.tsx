@@ -1,4 +1,4 @@
-import { BookOpen, Download, FileText, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
+import { BarChart3, BookOpen, Download, FileText, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { AppLogo } from '../components/icons/AppLogo'
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { to: '/chapters', icon: BookOpen, label: '章节' },
   { to: '/settings-docs', icon: FileText, label: '设定' },
   { to: '/notes', icon: StickyNote, label: '便签' },
+  { to: '/usage', icon: BarChart3, label: '用量' },
   { to: '/chat', icon: Sparkles, label: '智能体' }
 ]
 
@@ -28,6 +29,7 @@ const TITLE_MAP: Record<string, string> = {
   settings: '设置'
   , 'settings-docs': '设定资料'
   , notes: '便签'
+  , usage: '模型用量'
 }
 
 export function AppLayout(): React.ReactElement {

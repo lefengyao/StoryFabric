@@ -19,6 +19,7 @@ const RelationsPage = lazy(() => import('./pages/relations/RelationsPage').then(
 const SettingsPage = lazy(() => import('./pages/settings/SettingsPage').then(({ SettingsPage: page }) => ({ default: page })))
 const SettingsDocsPage = lazy(() => import('./pages/settingsDocs/SettingsDocsPage').then(({ SettingsDocsPage: page }) => ({ default: page })))
 const NotesPage = lazy(() => import('./pages/notes/NotesPage').then(({ NotesPage: page }) => ({ default: page })))
+const UsagePage = lazy(() => import('./pages/usage/UsagePage').then(({ UsagePage: page }) => ({ default: page })))
 
 export default function App(): React.ReactElement {
   const web = isWebPlatform()
@@ -87,6 +88,7 @@ export default function App(): React.ReactElement {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings-docs" element={<SettingsDocsPage />} />
             <Route path="/notes" element={<NotesPage />} />
+            <Route path="/usage" element={<UsagePage />} />
             <Route path="*" element={<Navigate to="/chat" replace />} />
           </Route>
         </Routes>
