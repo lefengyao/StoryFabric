@@ -202,6 +202,38 @@ describe('AnthropicAdapter', () => {
     expect(capturedBody.thinking).toEqual({ type: 'enabled', budget_tokens: 7168 })
   })
 
+  it('关闭推理时请求体既不带 thinking，也不回放历史思考块', async () => {
+    let capturedBody: Record<string, unknown> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return sseResponse(['data: {"type":"message_stop"}\n\n'])
+      })
+    )
+
+    const adapter = new AnthropicAdapter('https://api.anthropic.com')
+    await adapter.stream(
+      'claude-sonnet-4-5',
+      {
+        system: '',
+        messages: [
+          { id: 'a', role: 'assistant', text: '好', thinkingBlocks: [{ type: 'thinking', thinking: '想', signature: 's' }] }
+        ],
+        tools: [],
+        signal: undefined,
+        params: { reasoning: 'off', contextTokens: 200000, maxOutputTokens: 8192 }
+      },
+      'k',
+      noopHandlers
+    )
+
+    expect(capturedBody.max_tokens).toBe(8192)
+    expect('thinking' in capturedBody).toBe(false)
+    const sent = capturedBody.messages as Array<{ content: Array<{ type: string }> }>
+    expect(sent[0].content.map((block) => block.type)).toEqual(['text'])
+  })
+
   it('捕获扩展思考块供下一轮回传', async () => {
     vi.stubGlobal(
       'fetch',

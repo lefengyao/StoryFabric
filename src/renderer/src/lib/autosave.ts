@@ -12,6 +12,8 @@ export interface Autosave {
   cancel: () => void
   /** 立即执行待处理的保存（例如离开页面时）；没有待处理则什么都不做。 */
   flush: () => void
+  /** 丢弃待处理保存（例如章节已被删除、或已无未保存改动）。 */
+  discard: () => void
 }
 
 export function createAutosave(delayMs: number): Autosave {
@@ -45,6 +47,10 @@ export function createAutosave(delayMs: number): Autosave {
       const pending = pendingRun
       pendingRun = null
       pending?.()
+    },
+    discard: () => {
+      clearTimer()
+      pendingRun = null
     }
   }
 }

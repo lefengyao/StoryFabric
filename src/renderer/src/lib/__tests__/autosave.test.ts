@@ -71,4 +71,17 @@ describe('createAutosave', () => {
     autosave.flush()
     expect(runs).toEqual([])
   })
+
+  it('discard 丢弃待处理保存', () => {
+    vi.useFakeTimers()
+    const runs: string[] = []
+    const autosave = createAutosave(15000)
+
+    autosave.schedule(() => runs.push('a'))
+    autosave.discard()
+    autosave.flush()
+    vi.advanceTimersByTime(30000)
+
+    expect(runs).toEqual([])
+  })
 })

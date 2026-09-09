@@ -134,7 +134,8 @@ export function ChaptersPage(): React.ReactElement {
 
   useEffect(() => {
     if (!dirty || !draft || autosaveSeconds <= 0) {
-      autosave.cancel()
+      // 没有未保存改动：丢弃待执行回调，避免干净状态卸载时多写一次磁盘
+      autosave.discard()
       return
     }
     autosave.schedule(() => void saveRef.current().catch(() => {}))
@@ -143,6 +144,8 @@ export function ChaptersPage(): React.ReactElement {
 
   const remove = async (): Promise<void> => {
     if (!selectedId) return
+    // 章节即将被删除：先丢弃待执行的自动保存，避免删完又被写回来
+    autosave.discard()
     await api.deleteChapter(selectedId)
     setConfirmDelete(false)
     setSelectedId(null)
