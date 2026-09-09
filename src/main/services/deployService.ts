@@ -20,6 +20,7 @@ import {
   parsePortInUse
 } from '../../core/deploy/parse'
 import { nextStep } from '../../core/deploy/state'
+import { isSafeImage, isSafeInstallDir, isSafeUsername, shQuote } from '../../core/deploy/shell'
 import type {
   DeployConnectionInput,
   DeployProbeResult,
@@ -169,6 +170,12 @@ export class DeployService {
     try {
       emit(step, 'running')
       if (!password) return await fail('缺少密码')
+      if (!isSafeUsername(input.username)) return await fail('用户名包含非法字符')
+      if (!isSafeInstallDir(input.installDir)) return await fail('安装目录必须是绝对路径且不含换行')
+      if (!isSafeImage(input.baseImage)) return await fail('基础镜像名包含非法字符')
+      if (!Number.isInteger(input.servicePort) || input.servicePort < 1 || input.servicePort > 65535) {
+        return await fail('服务端口无效')
+      }
       const { fingerprint } = await transport.connect({
         host: input.host,
         port: input.port,
@@ -204,7 +211,7 @@ export class DeployService {
       const bundleName = basename(this.options.bundlePath)
       const bundle = await stat(this.options.bundlePath).catch(() => null)
       if (!bundle) return await fail(`部署包不存在：${this.options.bundlePath}`)
-      const mkdirResult = await transport.exec(`mkdir -p ${ctx.stagingDir}`)
+      const mkdirResult = await transport.exec(`mkdir -p ${shQuote(ctx.stagingDir)}`)
       if (mkdirResult.code !== 0) return await fail(`创建上传目录失败：${mkdirResult.stderr.trim() || mkdirResult.code}`)
       await transport.upload(this.options.bundlePath, `${ctx.stagingDir}/${bundleName}`)
       const extract = await transport.exec(`cd ${ctx.stagingDir} && tar -xzf ${bundleName}`)

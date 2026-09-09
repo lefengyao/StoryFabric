@@ -157,6 +157,14 @@ describe('DeployService', () => {
     }, rules)
   })
 
+  it('用户名含非法字符时在连接前拒绝', async () => {
+    await withService(async (service) => {
+      const result = await service.install({ ...target, username: 'root; rm -rf /' }, () => {})
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('用户名')
+    })
+  })
+
   it('保存目标后读回不含明文密码，且指纹被 pin', async () => {
     await withService(async (service, store) => {
       await service.install(target, () => {})
