@@ -404,6 +404,8 @@ export interface DeployProbeResult {
   /** `sudo -n true` 成功（免密 sudo） */
   passwordlessSudo: boolean
   dockerVersion?: string
+  /** docker 探测失败时的 stderr，用于区分「未安装 / 无权限 / 守护进程未运行」 */
+  dockerError?: string
   portFree: boolean
   portOwner?: string
   /** 服务器上现有 storyfabric 容器的镜像 tag */
@@ -460,12 +462,18 @@ export interface DeployTargetStored {
   distro?: string
   dockerVersion?: string
   installedVersion?: string
+  /** 部署用户是否为 root（决定后续命令是否加 sudo） */
+  isRoot?: boolean
   lastDeployedAt?: number
   lastStatus?: 'ok' | 'failed'
   lastError?: string
 }
 
-export type DeployTargetPublic = Omit<DeployTargetStored, 'passwordEncrypted'> & { hasPassword: boolean }
+export type DeployTargetPublic = Omit<DeployTargetStored, 'passwordEncrypted'> & {
+  hasPassword: boolean
+  /** 密码是系统级加密还是降级明文（safeStorage 不可用时） */
+  passwordStorage: 'encrypted' | 'plain'
+}
 
 export interface DeployTargetInput {
   id?: string

@@ -6,9 +6,10 @@ export interface FakeRule {
   result: SshExecResult
 }
 
-/** 测试用传输层：按规则返回预设输出，并记录调用序列。 */
+/** 测试用传输层：按规则返回预设输出，并记录调用序列与 stdin。 */
 export class FakeTransport implements SshTransport {
   readonly calls: string[] = []
+  readonly stdins: Array<{ command: string; stdin?: string }> = []
   readonly uploads: Array<{ local: string; remote: string }> = []
 
   constructor(
@@ -26,8 +27,10 @@ export class FakeTransport implements SshTransport {
 
   async exec(command: string, options: SshExecOptions = {}): Promise<SshExecResult> {
     this.calls.push(command)
+    this.stdins.push({ command, stdin: options.stdin })
     const rule = this.rules.find((r) => command.includes(r.match))
-    const result = rule?.result ?? { code: 0, stdout: '', stderr: '' }
+    // 未声明的命令一律失败：避免新增步骤「默默成功」
+    const result = rule?.result ?? { code: 127, stdout: '', stderr: `unmatched: ${command}` }
     if (result.stdout) options.onData?.(result.stdout)
     if (result.stderr) options.onData?.(result.stderr)
     return result

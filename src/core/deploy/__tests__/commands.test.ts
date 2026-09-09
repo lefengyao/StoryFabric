@@ -59,10 +59,12 @@ describe('runCommands', () => {
     expect(start).toContain("'storyfabric:0.1.0'")
   })
 
-  it('生成密钥时 umask 与重定向都在 root shell 内执行', () => {
+  it('生成密钥时幂等：已存在则不覆盖', () => {
     const generate = runCommands(ctx).find((c) => c.id === 'key.generate')?.command ?? ''
     expect(generate.startsWith('sudo -S sh -c ')).toBe(true)
     expect(generate).toContain('umask 077')
+    expect(generate).toContain('[ -f ')
+    expect(generate).toContain('|| openssl rand -base64 32')
     expect(generate).toContain('/opt/storyfabric/secrets/storyfabric_key')
   })
 })
@@ -82,5 +84,7 @@ describe('healthCommand / logsCommand / uninstallCommands', () => {
     expect(commands).toContain("docker rmi 'storyfabric:0.1.0'")
     expect(commands).toContain("rm -rf '/home/me/.storyfabric-staging/0.1.0'")
     expect(commands).not.toContain('rm -rf /opt/storyfabric/data')
+    // 不再用 `|| true` 掩盖失败，由调用方按退出码判断
+    expect(commands).not.toContain('|| true')
   })
 })

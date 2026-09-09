@@ -66,6 +66,7 @@ export class Ssh2Transport implements SshTransport {
         let stdout = ''
         let stderr = ''
         let code = 0
+        let signalled = false
         const timer = options.timeoutMs
           ? setTimeout(() => {
               stream.close()
@@ -82,12 +83,18 @@ export class Ssh2Transport implements SshTransport {
           stderr += text
           options.onData?.(text)
         })
-        stream.on('exit', (exitCode: number | null) => {
-          code = exitCode ?? 0
+        stream.on('exit', (exitCode: number | null, signal?: string) => {
+          // 被信号杀掉（如 OOM）时 exitCode 为 null，不能当成功
+          if (exitCode === null) {
+            signalled = true
+            stderr += `${stderr ? '\n' : ''}命令被信号终止${signal ? `（${signal}）` : ''}`
+            return
+          }
+          code = exitCode
         })
         stream.on('close', () => {
           if (timer) clearTimeout(timer)
-          resolve({ code, stdout, stderr })
+          resolve({ code: signalled ? -1 : code, stdout, stderr })
         })
         if (options.stdin) stream.end(options.stdin)
       })

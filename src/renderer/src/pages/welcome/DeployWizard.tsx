@@ -3,7 +3,7 @@ import { ChevronLeft, Copy, Server } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Field, Input } from '../../components/ui/primitives'
 import { api } from '../../lib/api'
-import type { DeployProbeResult, DeployRunResult, DeployStep, DeployStepStatus } from '../../../../shared/types'
+import type { DeployProbeResult, DeployRunResult, DeployStep, DeployStepStatus, DeployTargetPublic } from '../../../../shared/types'
 
 const STEPS: Array<{ key: DeployStep; label: string }> = [
   { key: 'connect', label: '连接服务器' },
@@ -29,6 +29,7 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
   const [password, setPassword] = useState('')
   const [fingerprint, setFingerprint] = useState('')
   const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false)
+  const [known, setKnown] = useState<DeployTargetPublic | null>(null)
   const [probe, setProbe] = useState<DeployProbeResult | null>(null)
   const [installDir, setInstallDir] = useState('/opt/storyfabric')
   const [servicePort, setServicePort] = useState('8787')
@@ -52,19 +53,31 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
   const test = async (): Promise<void> => {
     setBusy(true)
     setError(null)
+    const sshPort = Number(port) || 22
     try {
+      // 已保存过同一台服务器就带上它的记录与已 pin 的指纹，避免重复记录、也保证指纹被校验
+      const existing = await api.deployListTargets().catch(() => [] as DeployTargetPublic[])
+      const match =
+        existing.find((t) => t.host === host.trim() && t.username === username.trim() && t.port === sshPort) ?? null
+      setKnown(match)
       const result = await api.deployTestConnection({
+        targetId: match?.id,
         host: host.trim(),
-        port: Number(port) || 22,
+        port: sshPort,
         username: username.trim(),
         password
       })
       setFingerprint(result.fingerprint)
       setProbe(result.probe)
-      setFingerprintConfirmed(Boolean(result.fingerprintChanged))
+      setFingerprintConfirmed(false)
       setPhase('verify')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setError(
+        /host denied|verification failed|主机指纹/i.test(message)
+          ? '服务器指纹与上次记录不一致：可能是服务器重装或遭到中间人攻击。确认无误后请先在列表里删除该服务器记录再重试。'
+          : message
+      )
     } finally {
       setBusy(false)
     }
@@ -79,12 +92,13 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
     setResult(null)
     try {
       const result = await api.deployInstall({
-        label: host.trim(),
+        id: known?.id,
+        label: known?.label || host.trim(),
         host: host.trim(),
         port: Number(port) || 22,
         username: username.trim(),
         password,
-        hostKeyFingerprint: fingerprint,
+        hostKeyFingerprint: known?.hostKeyFingerprint || fingerprint,
         installDir: installDir.trim(),
         servicePort: Number(servicePort) || 8787,
         baseImage: baseImage.trim()
@@ -150,6 +164,11 @@ export function DeployWizard({ onClose, onDone }: Props): React.ReactElement {
             <Field label="服务器指纹（请核对后再继续）">
               <code className="block break-all rounded-lg bg-app px-3 py-2 text-xs">{fingerprint}</code>
             </Field>
+            {known && (
+              <p className="text-[11px] text-muted">
+                该服务器已在列表中（{known.installedVersion ? `当前版本 ${known.installedVersion}` : '尚无版本记录'}），继续安装会更新它而不是新建记录。
+              </p>
+            )}
             <label className="flex items-center gap-2 text-xs">
               <input
                 type="checkbox"

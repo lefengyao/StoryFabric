@@ -81,6 +81,11 @@ export function WelcomePage(): React.ReactElement {
     setTargetNotice((prev) => ({ ...prev, [target.id]: '更新中…' }))
     try {
       const result = await api.deployUpdate(target.id)
+      if (result.ok) {
+        // 更新不会换密钥，但如果本地服务地址就是这台机器，顺手同步一下密钥
+        const expected = `http://${target.host}:${target.servicePort}`
+        if (result.accessKey && serviceUrl.trim().replace(/\/+$/, '') === expected) setServiceKey(result.accessKey)
+      }
       setTargetNotice((prev) => ({
         ...prev,
         [target.id]: result.ok ? `已更新到 ${result.version}` : result.error ?? '更新失败'
@@ -290,6 +295,12 @@ export function WelcomePage(): React.ReactElement {
                     <span className="shrink-0 text-xs text-faint">
                       {target.host}:{target.servicePort} · {target.installedVersion ?? '未知版本'}
                     </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
+                    {target.lastStatus === 'ok' && <span className="text-ok">上次部署成功</span>}
+                    {target.lastStatus === 'failed' && <span className="text-danger">上次部署失败</span>}
+                    {target.passwordStorage === 'plain' && <span className="text-danger">密码为降级明文存储</span>}
+                    {target.isRoot === false && <span>非 root（使用 sudo）</span>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <Button size="sm" variant="ghost" loading={targetBusy === target.id} onClick={() => void checkUpdate(target)}>

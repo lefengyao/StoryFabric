@@ -22,7 +22,9 @@ const linuxRules: FakeRule[] = [
   { match: 'openssl rand', result: { code: 0, stdout: '', stderr: '' } },
   { match: "cat '/opt/storyfabric/secrets", result: { code: 0, stdout: 'test-access-key\n', stderr: '' } },
   { match: 'docker rm -f', result: { code: 0, stdout: 'storyfabric\n', stderr: '' } },
-  { match: 'docker run -d', result: { code: 0, stdout: 'container-id\n', stderr: '' } }
+  { match: 'docker run -d', result: { code: 0, stdout: 'container-id\n', stderr: '' } },
+  { match: 'mkdir -p', result: { code: 0, stdout: '', stderr: '' } },
+  { match: 'tar -xzf', result: { code: 0, stdout: '', stderr: '' } }
 ]
 
 const target = {
@@ -163,6 +165,53 @@ describe('DeployService', () => {
       expect(result.ok).toBe(false)
       expect(result.error).toContain('用户名')
     })
+  })
+
+  it('密码只出现在 stdin，绝不进入命令字符串', async () => {
+    await withService(async (service, _store, transport) => {
+      const result = await service.install(target, () => {})
+      expect(result.ok).toBe(true)
+      expect(transport.calls.some((c) => c.includes('pw'))).toBe(false)
+      expect(transport.stdins.some((s) => s.stdin?.includes('pw'))).toBe(true)
+    })
+  })
+
+  it('更新时端口被自己上一版容器占用不算冲突', async () => {
+    const rules = [
+      ...linuxRules.map((r) =>
+        r.match === 'ss -ltn'
+          ? { ...r, result: { code: 0, stdout: 'LISTEN 0 128 0.0.0.0:8787 0.0.0.0:*\n', stderr: '' } }
+          : r.match === 'docker inspect --format'
+            ? { ...r, result: { code: 0, stdout: 'storyfabric:0.0.9\n', stderr: '' } }
+            : r
+      )
+    ]
+    await withService(async (service) => {
+      const result = await service.install(target, () => {})
+      expect(result.ok).toBe(true)
+    }, rules)
+  })
+
+  it('Docker 权限不足时给出「加入 docker 组」而不是「未安装」', async () => {
+    const rules = linuxRules.map((r) =>
+      r.match === 'docker version'
+        ? { ...r, result: { code: 1, stdout: '', stderr: 'permission denied while trying to connect to the Docker daemon socket' } }
+        : r
+    )
+    await withService(async (service) => {
+      const result = await service.install(target, () => {})
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('权限')
+    }, rules)
+  })
+
+  it('卸载失败时抛错，不静默成功', async () => {
+    const rules = [{ match: 'docker rm -f', result: { code: 1, stdout: '', stderr: 'Cannot connect to the Docker daemon' } }]
+    await withService(async (service, store) => {
+      await store.save(target)
+      const [saved] = await store.list()
+      await expect(service.uninstall(saved.id)).rejects.toThrow('删除容器失败')
+    }, rules)
   })
 
   it('保存目标后读回不含明文密码，且指纹被 pin', async () => {

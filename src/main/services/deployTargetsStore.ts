@@ -35,7 +35,11 @@ export class DeployTargetsStore {
 
   toPublic(target: DeployTargetStored): DeployTargetPublic {
     const { passwordEncrypted, ...rest } = target
-    return { ...rest, hasPassword: Boolean(passwordEncrypted) }
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordEncrypted),
+      passwordStorage: passwordEncrypted.startsWith('plain:') ? 'plain' : 'encrypted'
+    }
   }
 
   passwordOf(target: DeployTargetStored): string {
@@ -64,6 +68,7 @@ export class DeployTargetsStore {
         distro: old?.distro,
         dockerVersion: old?.dockerVersion,
         installedVersion: old?.installedVersion,
+        isRoot: old?.isRoot,
         lastDeployedAt: old?.lastDeployedAt,
         lastStatus: old?.lastStatus,
         lastError: old?.lastError
