@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs'
+import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -33,12 +34,10 @@ const openaiSse = (payload: Record<string, unknown>, finish: 'tool_calls' | 'sto
 let root: string
 let settings: SettingsService
 let events: AgentEventEnvelope[]
-let fetchQueue: Response[]
 
 beforeEach(async () => {
-  root = join(tmpdir(), `sf-agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
-  await fs.mkdir(root, { recursive: true })
-  settings = new SettingsService(join(root, '..', `sf-settings-${Math.random().toString(36).slice(2)}.json`))
+  root = await mkdtemp(join(tmpdir(), 'sf-agent-'))
+  settings = new SettingsService(join(root, 'settings.json'))
   await settings.saveProvider({ name: 'mock', protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', models: ['mock-model'] })
   const s = await settings.load()
   providerId = s.providers[0].id
@@ -58,9 +57,10 @@ function makeAgent(): AgentService {
   return new AgentService(settings, (_sid, ev: AgentEvent) => events.push({ sessionId: _sid, event: ev }))
 }
 
-function stubFetch(): void {
+function stubFetch(responses: Response[]): void {
+  const queue = [...responses]
   globalThis.fetch = vi.fn(async () => {
-    const res = fetchQueue.shift()
+    const res = queue.shift()
     if (!res) throw new Error('no queued response')
     return res
   })
@@ -74,13 +74,12 @@ describe('AgentService', () => {
   it('读工具自动执行并回注，最终生成回答', async () => {
     await saveCharacter(root, { name: '林晚', role: '主角' })
 
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'list_characters', arguments: '{}' } }] } }] }, 'tool_calls')
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '工作区里有 1 位人物：林晚。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const { sessionId } = await agent.run(root, { message: '有哪些人物？', providerId, model: 'mock-model' })
@@ -102,8 +101,7 @@ describe('AgentService', () => {
   })
 
   it('写工具生成待确认变更：拒绝则不落盘', async () => {
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -121,7 +119,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '好的，已按你的意见放弃。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const runPromise = agent.run(root, { message: '帮我建个人物', providerId, model: 'mock-model' })
@@ -151,8 +149,7 @@ describe('AgentService', () => {
 
   it('delete_note 拒绝后保留便签且回注拒绝消息', async () => {
     const note = await saveNote(root, { title: '待删除便签', content: '保留内容' })
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -168,7 +165,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '好的，已保留这条便签。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const runPromise = agent.run(root, { message: '删除这条便签', providerId, model: 'mock-model' })
@@ -190,8 +187,7 @@ describe('AgentService', () => {
 
   it('delete_note 批准后移入回收站且回注成功消息', async () => {
     const note = await saveNote(root, { title: '批准删除便签', content: '待移入回收站' })
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -207,7 +203,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '已完成删除。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const runPromise = agent.run(root, { message: '确认删除这条便签', providerId, model: 'mock-model' })
@@ -234,8 +230,7 @@ describe('AgentService', () => {
     ['空字符串', ''],
     ['空白字符串', '   ']
   ])('delete_note 对%s noteId 拒绝且不产生待确认变更', async (_label, noteId) => {
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -251,7 +246,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '参数无效。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const { sessionId } = await agent.run(root, { message: '删除便签', providerId, model: 'mock-model' })
@@ -263,8 +258,7 @@ describe('AgentService', () => {
   })
 
   it('写工具确认后写入工作区', async () => {
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -280,7 +274,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '已创建。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const runPromise = agent.run(root, { message: '建一个人物', providerId, model: 'mock-model' })
@@ -297,8 +291,7 @@ describe('AgentService', () => {
   })
 
   it('流式期间的重命名/归档在落盘时保留', async () => {
-    stubFetch()
-    fetchQueue = [
+    stubFetch([
       sseResponse(
         openaiSse(
           {
@@ -314,7 +307,7 @@ describe('AgentService', () => {
         )
       ),
       sseResponse(openaiSse({ choices: [{ delta: { content: '完成。' } }] }, 'stop'))
-    ]
+    ])
 
     const agent = makeAgent()
     const runPromise = agent.run(root, { message: '建一个人物', providerId, model: 'mock-model' })
