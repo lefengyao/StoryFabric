@@ -1,6 +1,6 @@
 /** 模型管理整页：拉取、勾选添加、手动添加、搜索、逐模型展开面板。 */
 import { ChevronDown, ChevronLeft, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, Card, Field, Input } from '../../components/ui/primitives'
 import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
@@ -42,7 +42,16 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
   const [expanded, setExpanded] = useState<string | null>(null)
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savedHint, setSavedHint] = useState(false)
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(
+    () => () => {
+      if (hintTimer.current) clearTimeout(hintTimer.current)
+    },
+    []
+  )
 
   const dirty = useMemo(
     () =>
@@ -94,7 +103,10 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
         modelSettings
       })
       await onSaved()
-      onClose()
+      // 保存后留在本页，继续改其他模型；只有「返回」才离开
+      setSavedHint(true)
+      if (hintTimer.current) clearTimeout(hintTimer.current)
+      hintTimer.current = setTimeout(() => setSavedHint(false), 2500)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -131,6 +143,7 @@ export function ModelManagerView({ provider, onClose, onSaved }: Props): React.R
         </Button>
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">管理模型 · {provider.name}</h2>
         <Badge tone="accent">{PROTOCOL_LABEL[provider.protocol]}</Badge>
+        {savedHint && !dirty && <span className="shrink-0 text-xs text-ok">已保存</span>}
         <Button size="sm" variant="primary" onClick={() => void save()} loading={saving} disabled={!dirty}>
           保存
         </Button>
