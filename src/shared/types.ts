@@ -313,4 +313,22 @@ export interface ToolDefJson {
   parameters: Record<string, unknown>
 }
 
+/* ---------------- 模型用量 ---------------- */
+
+/** 一次模型调用的用量记录（三家协议已归一）。 */
+export interface UsageRecord {
+  /** 调用完成时间（epoch ms） */
+  at: number
+  providerId: string
+  /** 供应商显示名快照：供应商被删除后仍可读 */
+  providerName: string
+  model: string
+  promptTokens: number
+  completionTokens: number
+  /** 命中提示词缓存的输入 token */
+  cachedTokens: number
+  /** 为建立缓存而写入的输入 token（仅 Anthropic） */
+  cacheWriteTokens: number
+}
+
 export const MAX_TOOL_ROUNDS = 10
