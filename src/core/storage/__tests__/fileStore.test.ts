@@ -87,4 +87,26 @@ describe('FileStore contract', () => {
       await rm(outside, { recursive: true, force: true })
     }
   })
+
+  it('rejects single-hop and chained dangling symlinks outside the workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-dangling-'))
+    const outside = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-dangling-outside-'))
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    try {
+      const store = new NodeFileStore(root)
+      const single = join(root, 'dangling-single')
+      const first = join(root, 'dangling-first')
+      const second = join(root, 'dangling-second')
+      await symlink(join(outside, 'missing-single'), single, linkType)
+      await symlink(second, first, linkType)
+      await symlink(join(outside, 'missing-chain'), second, linkType)
+
+      await expect(store.exists('dangling-single/secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.readText('dangling-first/secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.listDirs('dangling-first')).rejects.toThrow('工作区外')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
 })

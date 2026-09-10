@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, isAbsolute, join, normalize as normalizePath, relative, resolve, sep } from 'path'
+import { dirname, isAbsolute, join, normalize as normalizePath, parse, relative, resolve, sep } from 'path'
 import { normalizeRelativePath, type FileStore } from './fileStore'
 
 /** Node/Electron 工作区文件适配器。共享核心只看到 FileStore。 */
@@ -40,38 +40,29 @@ export class NodeFileStore implements FileStore {
 
   private async validatePath(target: string): Promise<void> {
     const boundary = this.canonicalPath(this.boundaryRoot)
-    try {
-      const actual = await fs.realpath(target)
-      if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
-      return
-    } catch (error) {
-      if (this.isBoundaryError(error)) throw error
-    }
+    let current = parse(target).root
+    const components = relative(current, target).split(sep).filter(Boolean)
 
-    let current = target
-    while (true) {
-      const entry = await fs.lstat(current).catch(() => null)
-      if (entry?.isSymbolicLink()) {
-        const linkTarget = resolve(dirname(current), await fs.readlink(current))
-        try {
-          const actual = await fs.realpath(current)
-          if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
-        } catch (error) {
-          if (!this.isWithinOrEqual(boundary, linkTarget)) throw this.boundaryError()
-          if (this.isBoundaryError(error)) throw error
-        }
-        return
-      }
-      if (entry) {
-        const actual = await fs.realpath(current)
+    for (const component of components) {
+      const candidate = join(current, component)
+      const entry = await fs.lstat(candidate).catch(() => null)
+      if (!entry) {
+        if (this.canonicalPath(candidate) === boundary) return
+        const actual = await fs.realpath(current).catch(() => { throw this.boundaryError() })
         if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
         return
       }
-      if (this.canonicalPath(current) === boundary) return
-      const parent = dirname(current)
-      if (parent === current) throw this.boundaryError()
-      current = parent
+      if (entry.isSymbolicLink()) {
+        const actual = await fs.realpath(candidate).catch(() => { throw this.boundaryError() })
+        current = actual
+      } else {
+        current = candidate
+      }
     }
+
+    if (this.canonicalPath(current) === boundary) return
+    const actual = await fs.realpath(current).catch(() => { throw this.boundaryError() })
+    if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
   }
 
   private async secureResolve(path: string, allowRoot = false): Promise<string> {
