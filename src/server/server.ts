@@ -395,6 +395,15 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       } catch (error) { sendError(res, 400, error) }
       return
     }
+    if (pathname === '/api/workspaces/open-path' && req.method === 'POST') {
+      try {
+        const body = JSON.parse(await readBody(req)) as { path?: string }
+        const summary = await registry.openPath(body.path ?? '')
+        authSessions.setWorkspace(context.token, summary.path)
+        sendJson(res, 200, summary)
+      } catch (error) { sendError(res, 400, error) }
+      return
+    }
     if (pathname === '/api/workspaces/import' && req.method === 'POST') {
       try {
         const bytes = await readBinaryBody(req, WORKSPACE_ARCHIVE_MAX_BYTES)

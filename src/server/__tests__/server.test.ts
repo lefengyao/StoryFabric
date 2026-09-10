@@ -190,4 +190,67 @@ describe('linux web server', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('opens a managed workspace by server path, rejects invalid paths, and binds the session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-open-path-'))
+    const managedRoot = join(root, 'workspaces')
+    const workspacePath = join(managedRoot, 'from-disk')
+    const outsidePath = join(root, 'outside')
+    await mkdir(workspacePath, { recursive: true })
+    await mkdir(outsidePath, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(workspacePath), '路径工作区')
+    await initializeWorkspace(new NodeFileStore(outsidePath), '越界工作区')
+    const server = createStoryFabricServer({ accessKey: 'open-path-test-key', dataDir: root })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      const base = `http://127.0.0.1:${address.port}`
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: 'open-path-test-key' })
+      })
+      const cookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
+
+      const opened = await fetch(`${base}/api/workspaces/open-path`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: `  ${workspacePath}  ` })
+      })
+      expect(opened.status).toBe(200)
+      const summary = await opened.json() as { path: string; name: string }
+      expect(summary).toMatchObject({ name: '路径工作区' })
+      expect(summary.path).not.toBe(workspacePath)
+      expect(summary.path).toMatch(/^ws_[a-z0-9]{12}$/)
+
+      const rpc = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ method: 'getCurrentWorkspace', args: [] })
+      })
+      expect(rpc.status).toBe(200)
+      expect((await rpc.json() as { result: { path: string; name: string } }).result).toMatchObject({ path: summary.path, name: '路径工作区' })
+
+      const outside = await fetch(`${base}/api/workspaces/open-path`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: outsidePath })
+      })
+      expect(outside.status).toBe(400)
+
+      const invalid = await fetch(`${base}/api/workspaces/open-path`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: '   ' })
+      })
+      expect(invalid.status).toBe(400)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
