@@ -205,6 +205,7 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const openTypedWorkspace = async (): Promise<void> => {
+    const generation = workspaceLoadId.current
     const path = workspacePath.trim()
     if (!path) return
     setWorkspaceActionBusy(true)
@@ -212,34 +213,43 @@ export function WelcomePage(): React.ReactElement {
     try {
       requireWorkspaceApi()
       const summary = await getPlatformApi().openWorkspaceByPath(path)
+      if (workspaceLoadId.current !== generation) return
       useWorkspace.setState({ status: 'ready', summary, error: null })
       closeWorkspacePicker()
     } catch (err) {
-      setWorkspacePickerFailure(err)
+      if (workspaceLoadId.current === generation) setWorkspacePickerFailure(err)
     } finally {
-      setWorkspaceActionBusy(false)
+      if (workspaceLoadId.current === generation) setWorkspaceActionBusy(false)
     }
   }
 
   const importSelectedArchive = async (file: File): Promise<void> => {
+    const generation = workspaceLoadId.current
     setWorkspaceActionBusy(true)
     setWorkspacePickerError(null)
     try {
       const bytes = await readWorkspaceArchiveFile(file)
+      if (workspaceLoadId.current !== generation) return
       requireWorkspaceApi()
       let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined }
       if (mode === 'local' && !isAndroid && !isWeb) {
+        if (workspaceLoadId.current !== generation) return
         const parentDir = await api.pickFolder()
+        if (workspaceLoadId.current !== generation) return
         if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
         target = { parentDir, name: archiveName.trim() || undefined }
       }
+      if (workspaceLoadId.current !== generation) return
       await useWorkspace.getState().importArchive(bytes, file.name, target)
+      if (workspaceLoadId.current !== generation) return
       closeWorkspacePicker()
     } catch (err) {
-      setWorkspacePickerFailure(err)
+      if (workspaceLoadId.current === generation) setWorkspacePickerFailure(err)
     } finally {
-      setWorkspaceActionBusy(false)
-      if (archiveInput.current) archiveInput.current.value = ''
+      if (workspaceLoadId.current === generation) {
+        setWorkspaceActionBusy(false)
+        if (archiveInput.current) archiveInput.current.value = ''
+      }
     }
   }
 
