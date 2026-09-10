@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="340" viewBox="0 0 340 340">
+  <!-- 扁平收敛版：适合 favicon / App 图标等小尺寸场景 -->
+  <rect x="30" y="30" width="280" height="280" rx="22" fill="#243359"/>
+  <rect x="58" y="58" width="224" height="224" rx="10" fill="none" stroke="#EFC97B" stroke-width="2.5" stroke-dasharray="8 7" opacity="0.7"/>
+  <g transform="translate(170,166) scale(0.8) translate(-121,-170)">
+    <path d="M186 100 C 152 70, 88 78, 82 126 C 77 168, 138 168, 156 198 C 176 232, 128 270, 80 248 C 68 242, 60 230, 56 218" fill="none" stroke="#141D3A" stroke-width="17" stroke-linecap="round"/>
+    <path d="M186 100 C 152 70, 88 78, 82 126 C 77 168, 138 168, 156 198 C 176 232, 128 270, 80 248 C 68 242, 60 230, 56 218" fill="none" stroke="#EFC97B" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <path d="M232 30 H256 V110 L244 97 L232 110 Z" fill="#D9A441"/>
+</svg>

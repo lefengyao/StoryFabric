@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="340" viewBox="0 0 340 340">
+  <!-- 单色线稿版：透明背景，用于浅色底 / 单色印刷 / 水印 -->
+  <rect x="30" y="30" width="280" height="280" rx="22" fill="none" stroke="#2B3A67" stroke-width="3"/>
+  <path d="M78 138 C 126 133, 166 142, 262 137" fill="none" stroke="#2B3A67" stroke-width="2.4" opacity="0.4"/>
+  <path d="M78 202 C 126 197, 166 206, 262 201" fill="none" stroke="#2B3A67" stroke-width="2.4" opacity="0.4"/>
+  <rect x="58" y="58" width="224" height="224" rx="10" fill="none" stroke="#2B3A67" stroke-width="2.5" stroke-dasharray="8 7" opacity="0.7"/>
+  <g transform="translate(170,166) scale(0.8) translate(-121,-170)">
+    <path d="M186 100 C 152 70, 88 78, 82 126 C 77 168, 138 168, 156 198 C 176 232, 128 270, 80 248 C 68 242, 60 230, 56 218" fill="none" stroke="#D9A441" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <circle cx="222" cy="87" r="4" fill="#D9A441"/>
+  <path d="M232 30 H256 V110 L244 97 L232 110 Z" fill="#D9A441"/>
+  <path d="M232 30 H256 V40 H232 Z" fill="#B8862E"/>
+</svg>
