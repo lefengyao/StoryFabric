@@ -7,6 +7,7 @@ export const IPC = {
   GetDefaultDir: 'workspace:default-dir',
   CreateWorkspace: 'workspace:create',
   OpenWorkspace: 'workspace:open',
+  OpenWorkspaceByPath: 'workspace:open-by-path',
   CloseWorkspace: 'workspace:close',
   GetCurrentWorkspace: 'workspace:current',
   RefreshWorkspace: 'workspace:refresh',

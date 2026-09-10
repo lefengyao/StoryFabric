@@ -19,6 +19,7 @@ const api: StoryFabricApi = {
   getDefaultWorkspaceDir: () => ipcRenderer.invoke(IPC.GetDefaultDir),
   createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
   openWorkspace: (path) => ipcRenderer.invoke(IPC.OpenWorkspace, path),
+  openWorkspaceByPath: (path) => ipcRenderer.invoke(IPC.OpenWorkspaceByPath, path),
   closeWorkspace: () => ipcRenderer.invoke(IPC.CloseWorkspace),
   getCurrentWorkspace: () => ipcRenderer.invoke(IPC.GetCurrentWorkspace),
   refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),

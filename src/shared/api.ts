@@ -75,6 +75,7 @@ export interface StoryFabricApi {
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
   openWorkspace(path: string): Promise<WorkspaceSummary>
+  openWorkspaceByPath(path: string): Promise<WorkspaceSummary>
   closeWorkspace(): Promise<void>
   getCurrentWorkspace(): Promise<WorkspaceSummary | null>
   refreshWorkspace(): Promise<WorkspaceSummary | null>

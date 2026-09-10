@@ -93,6 +93,15 @@ export function registerIpc(ctx: AppContext): void {
     await recentPush(ctx.settings, path)
     return loadSummary(path)
   })
+  ipcMain.handle(IPC.OpenWorkspaceByPath, async (_e, path: string) => {
+    const value = path.trim()
+    if (!value) throw new Error('请输入工作区路径')
+    const valid = await validateWorkspace(value)
+    if (!valid.ok) throw new Error(valid.reason)
+    currentRoot = value
+    await recentPush(ctx.settings, value)
+    return loadSummary(value)
+  })
 
   ipcMain.handle(IPC.CloseWorkspace, async () => {
     currentRoot = null
