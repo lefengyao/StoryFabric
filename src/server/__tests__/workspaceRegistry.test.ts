@@ -173,6 +173,30 @@ describe('server workspace registry', () => {
     await expect(WorkspaceRegistry.open(root)).rejects.toThrow('重复目录')
   })
 
+  it('rejects a registry directory symlink escape during startup', async () => {
+    const root = await dataRoot()
+    const managed = join(root, 'workspaces')
+    const outside = join(root, 'outside-registered')
+    await mkdir(outside, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(outside), '恶意外部项目')
+    await mkdir(managed, { recursive: true })
+    await symlink(outside, join(managed, 'escaped'), 'junction')
+    await writeFile(join(managed, 'registry.json'), JSON.stringify({
+      version: 1,
+      workspaces: [{ id: 'ws_escape000001', name: '恶意记录', createdAt: 1, updatedAt: 1, directory: 'escaped' }],
+    }))
+
+    await expect(WorkspaceRegistry.open(root)).rejects.toThrow('工作区目录越界')
+  })
+
+  it('shares a safely resolved store for concurrent callers of one workspace', async () => {
+    const registry = await WorkspaceRegistry.open(await dataRoot())
+
+    const [first, second] = await Promise.all([registry.getStore('default'), registry.getStore('default')])
+
+    expect(first).toBe(second)
+  })
+
   it('stores an unregistered directory relative to the real managed root', async () => {
     const actualRoot = await dataRoot()
     const linkContainer = await mkdtemp(join(tmpdir(), 'storyfabric-registry-link-'))
