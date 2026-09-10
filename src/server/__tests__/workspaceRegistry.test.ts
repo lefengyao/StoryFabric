@@ -203,12 +203,19 @@ describe('server workspace registry', () => {
     await expect(WorkspaceRegistry.open(root)).rejects.toThrow('工作区目录越界')
   })
 
-  it('shares a safely resolved store for concurrent callers of one workspace', async () => {
-    const registry = await WorkspaceRegistry.open(await dataRoot())
+  it('revalidates registered paths after the directory is replaced by an external junction', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const outside = join(root, 'outside-replaced')
+    const registered = join(root, 'workspaces', 'default')
+    await mkdir(outside, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(outside), '外部替换项目')
+    await rm(registered, { recursive: true, force: true })
+    await symlink(outside, registered, 'junction')
 
-    const [first, second] = await Promise.all([registry.getStore('default'), registry.getStore('default')])
-
-    expect(first).toBe(second)
+    await expect(registry.summary('default')).rejects.toThrow('工作区目录越界')
+    await expect(registry.getStore('default')).rejects.toThrow('工作区目录越界')
+    expect((await registry.list()).some((workspace) => workspace.name === '外部替换项目')).toBe(false)
   })
 
   it('stores an unregistered directory relative to the real managed root', async () => {

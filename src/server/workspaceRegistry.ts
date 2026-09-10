@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
@@ -83,8 +84,6 @@ export class WorkspaceRegistry {
   private readonly ready: Promise<void>
   private records: WorkspaceRecord[] = []
   private mutationQueue: Promise<void> = Promise.resolve()
-  private readonly storePromises = new Map<string, Promise<NodeFileStore>>()
-  private readonly resolvedDirectories = new Map<string, string>()
 
   constructor(private readonly dataRoot: string, private readonly legacyWorkspaceRoot = join(dataRoot, 'workspace')) {
     this.managedRoot = resolve(dataRoot, 'workspaces')
@@ -110,12 +109,11 @@ export class WorkspaceRegistry {
     await this.loadRecords()
     await this.migrateLegacyWorkspace()
     if (!this.records.length) {
-      const root = await this.directoryOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 }, true)
+      const root = this.directoryOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 }, true)
       await fs.mkdir(root, { recursive: true })
       await initializeWorkspace(new NodeFileStore(root), 'StoryFabric')
       const now = Date.now()
       this.records = [{ id: 'default', name: 'StoryFabric', createdAt: now, updatedAt: now }]
-      this.resolvedDirectories.set('default', root)
       await this.saveRecords()
     }
   }
@@ -145,11 +143,7 @@ export class WorkspaceRegistry {
       return isSafeId(record?.id) && typeof record.name === 'string' && typeof record.createdAt === 'number' && typeof record.updatedAt === 'number'
     })
     if (this.records.length !== parsed.workspaces.length || new Set(this.records.map((record) => record.id)).size !== this.records.length) throw new Error('服务器工作区注册表包含非法记录')
-    const directories = await Promise.all(this.records.map(async (record) => {
-      const root = await this.directoryOf(record, true)
-      this.resolvedDirectories.set(record.id, root)
-      return this.canonicalPath(root)
-    }))
+    const directories = this.records.map((record) => this.canonicalPath(this.directoryOf(record, true)))
     if (new Set(directories).size !== directories.length) throw new Error('服务器工作区注册表包含重复目录')
   }
 
@@ -173,29 +167,29 @@ export class WorkspaceRegistry {
     return root
   }
 
-  private async directoryOf(record: WorkspaceRecord, allowMissing = false): Promise<string> {
+  private directoryOf(record: WorkspaceRecord, allowMissing = false): string {
     const candidate = this.relativeDirectoryOf(record)
-    const managed = await fs.realpath(this.managedRoot)
-    let actual: string
+    const managed = realpathSync(this.managedRoot)
     try {
-      actual = await fs.realpath(candidate)
+      const actual = realpathSync(candidate)
+      if (!isWithin(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
+      return actual
     } catch {
-      await this.validateMissingPath(candidate, managed)
+      this.validateMissingPath(candidate, managed)
       if (!allowMissing) throw new Error('工作区目录不存在')
       return candidate
     }
-    if (!isWithin(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
-    return actual
   }
 
-  private async validateMissingPath(candidate: string, managed: string): Promise<void> {
+  private validateMissingPath(candidate: string, managed: string): void {
     let current = candidate
     while (true) {
-      const entry = await fs.lstat(current).catch(() => null)
+      let entry: ReturnType<typeof lstatSync> | null = null
+      try { entry = lstatSync(current) } catch { /* continue to the existing parent */ }
       if (entry?.isSymbolicLink()) {
-        const linkTarget = resolve(dirname(current), await fs.readlink(current))
+        const linkTarget = resolve(dirname(current), readlinkSync(current))
         try {
-          const actual = await fs.realpath(current)
+          const actual = realpathSync(current)
           if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
         } catch (error) {
           if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(linkTarget))) throw new Error('工作区目录越界')
@@ -205,7 +199,7 @@ export class WorkspaceRegistry {
         return
       }
       if (entry) {
-        const actual = await fs.realpath(current)
+        const actual = realpathSync(current)
         if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
         return
       }
@@ -215,9 +209,7 @@ export class WorkspaceRegistry {
     }
   }
 
-  private async rootOf(record: WorkspaceRecord, allowMissing = false): Promise<string> {
-    const resolved = this.resolvedDirectories.get(record.id)
-    if (resolved) return resolved
+  private rootOf(record: WorkspaceRecord, allowMissing = false): string {
     return this.directoryOf(record, allowMissing)
   }
 
@@ -228,7 +220,7 @@ export class WorkspaceRegistry {
 
   private async migrateLegacyWorkspace(): Promise<void> {
     const legacy = resolve(this.legacyWorkspaceRoot)
-    const target = await this.rootOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 }, true)
+    const target = this.rootOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 }, true)
     if (legacy === target || !(await exists(join(legacy, 'storyfabric.json')))) return
     if (this.records.some((record) => record.id === 'default')) return
     if (await exists(target)) throw new Error('检测到旧工作区，但默认受管工作区已存在；为避免覆盖，服务未启动')
@@ -237,7 +229,6 @@ export class WorkspaceRegistry {
     const summary = await loadSummary(new NodeFileStore(target), basename(target), 'default')
     const now = Date.now()
     this.records.push({ id: 'default', name: summary.name, createdAt: now, updatedAt: now })
-    this.resolvedDirectories.set('default', target)
     await this.saveRecords()
   }
 
@@ -253,7 +244,7 @@ export class WorkspaceRegistry {
     const results: WorkspaceListItem[] = []
     for (const record of [...this.records]) {
       try {
-        results.push(await loadWorkspaceListItem(new NodeFileStore(await this.rootOf(record)), record.name, record.id))
+        results.push(await loadWorkspaceListItem(new NodeFileStore(this.rootOf(record)), record.name, record.id))
       } catch {
         /* A damaged workspace remains in the registry but is not offered for opening. */
       }
@@ -264,22 +255,13 @@ export class WorkspaceRegistry {
   async getStore(id: string): Promise<NodeFileStore> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    const existing = this.storePromises.get(id)
-    if (existing) return existing
-    const pending = (this.resolvedDirectories.get(id) ? Promise.resolve(this.resolvedDirectories.get(id) as string) : this.rootOf(record)).then((root) => new NodeFileStore(root))
-    this.storePromises.set(id, pending)
-    try {
-      return await pending
-    } catch (error) {
-      this.storePromises.delete(id)
-      throw error
-    }
+    return new NodeFileStore(this.rootOf(record))
   }
 
   async summary(id: string): Promise<WorkspaceSummary> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return loadSummary(new NodeFileStore(await this.rootOf(record)), record.name, id)
+    return loadSummary(new NodeFileStore(this.rootOf(record)), record.name, id)
   }
 
   async create(name: string): Promise<WorkspaceSummary> {
@@ -289,8 +271,7 @@ export class WorkspaceRegistry {
       const now = Date.now()
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
       const record = { id, name: safe, createdAt: now, updatedAt: now } satisfies WorkspaceRecord
-      const root = await this.rootOf(record, true)
-      this.resolvedDirectories.set(id, root)
+      const root = this.rootOf(record, true)
       try {
         await fs.mkdir(root)
         await initializeWorkspace(new NodeFileStore(root), safe)
@@ -323,8 +304,7 @@ export class WorkspaceRegistry {
         await importWorkspaceArchive(stagingStore, bytes)
         const imported = await loadSummary(stagingStore, '导入工作区', 'pending')
         id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
-        root = await this.rootOf({ id, name: '导入工作区', createdAt: 0, updatedAt: 0 }, true)
-        this.resolvedDirectories.set(id, root)
+        root = this.rootOf({ id, name: '导入工作区', createdAt: 0, updatedAt: 0 }, true)
         const displayName = suggestedName?.trim() ? safeName(suggestedName) : imported.name
         await setWorkspaceName(stagingStore, displayName)
         await fs.rename(staging, root)
@@ -364,7 +344,7 @@ export class WorkspaceRegistry {
 
       const targetIdentity = this.canonicalPath(target)
       for (const record of this.records) {
-        if (this.canonicalPath(await this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(new NodeFileStore(target), record.name, record.id)
+        if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(new NodeFileStore(target), record.name, record.id)
       }
 
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
@@ -372,7 +352,6 @@ export class WorkspaceRegistry {
       const summary = await loadReadOnlySummary(new NodeFileStore(target), basename(target), id)
       const now = Date.now()
       this.records.push({ id, name: summary.name, directory, createdAt: now, updatedAt: now })
-      this.resolvedDirectories.set(id, target)
       try {
         await this.saveRecords()
       } catch (error) {
