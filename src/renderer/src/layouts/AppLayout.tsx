@@ -53,6 +53,7 @@ export function AppLayout(): React.ReactElement {
   const title = TITLE_MAP[seg] ?? ''
   const importInput = useRef<HTMLInputElement>(null)
   const [transferBusy, setTransferBusy] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const isRemote = getPlatformApi() instanceof HttpPlatformApi
@@ -76,7 +77,7 @@ export function AppLayout(): React.ReactElement {
   }
 
   const readArchive = async (file: File): Promise<void> => {
-    setTransferBusy(true); setTransferError(null)
+    setTransferBusy(true); setImportBusy(true); setTransferError(null)
     try {
       const bytes = await readWorkspaceArchiveFile(file)
       if (!isRemote && !isAndroid) {
@@ -87,7 +88,7 @@ export function AppLayout(): React.ReactElement {
         await importArchive(bytes, file.name)
       }
     } catch (err) { setTransferError(err instanceof Error ? err.message : String(err)) }
-    finally { setTransferBusy(false); if (importInput.current) importInput.current.value = '' }
+    finally { setTransferBusy(false); setImportBusy(false); if (importInput.current) importInput.current.value = '' }
   }
 
   const modelOptions = (settings?.providers ?? []).filter((p) => p.models.length > 0)
@@ -169,7 +170,7 @@ export function AppLayout(): React.ReactElement {
           )}
           <button
             onClick={() => void refresh()}
-            disabled={transferBusy}
+            disabled={importBusy}
             title="重新加载工作区"
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50"
           >
@@ -185,7 +186,7 @@ export function AppLayout(): React.ReactElement {
           <input ref={importInput} type="file" accept={WORKSPACE_ARCHIVE_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
           <button
             onClick={() => void close()}
-            disabled={transferBusy}
+            disabled={importBusy}
             title="关闭当前工作区"
             className="rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50"
           >

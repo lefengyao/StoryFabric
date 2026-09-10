@@ -78,15 +78,16 @@ async function withWorkspaceImportLock<T>(target: string, operation: () => Promi
   }
 }
 
-async function assertTargetMissing(target: string, name: string): Promise<void> {
-  const entry = await fs.lstat(target).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+async function reserveWorkspaceDirectory(target: string, name: string): Promise<void> {
+  try {
+    await fs.mkdir(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`文件夹已存在：${name}`)
     throw error
-  })
-  if (entry) throw new Error(`文件夹已存在：${name}`)
+  }
 }
 
-/** Import only into a fresh sibling directory, then atomically publish it. */
+/** Import into a freshly reserved sibling directory without replacing an existing path. */
 export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array): Promise<string> {
   const parent = resolve(parentDir)
   const safeName = safeWorkspaceName(name)
@@ -94,17 +95,15 @@ export async function importWorkspaceIntoNewFolder(parentDir: string, name: stri
   if (!isChildOf(parent, target)) throw new Error('目标工作区必须位于所选文件夹内')
 
   return withWorkspaceImportLock(target, async () => {
-    await assertTargetMissing(target, basename(target))
-    const staging = await fs.mkdtemp(join(parent, '.storyfabric-import-'))
+    // mkdir is the exclusive reservation; the parent boundary prevents archive paths escaping target.
+    await reserveWorkspaceDirectory(target, basename(target))
     try {
-      const stagingStore = new NodeFileStore(staging)
-      await importWorkspaceArchive(stagingStore, bytes)
-      await coreSetWorkspaceName(stagingStore, safeName)
-      await assertTargetMissing(target, basename(target))
-      await fs.rename(staging, target)
+      const targetStore = new NodeFileStore(target, parent)
+      await importWorkspaceArchive(targetStore, bytes)
+      await coreSetWorkspaceName(targetStore, safeName)
       return target
     } catch (error) {
-      await fs.rm(staging, { recursive: true, force: true })
+      await fs.rm(target, { recursive: true, force: true })
       throw error
     }
   })

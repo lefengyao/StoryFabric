@@ -1,7 +1,8 @@
+import { promises as fs } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryFileStore } from '../../../core/storage/fileStore'
 import { exportWorkspaceArchive } from '../../../core/workspace/archive'
 import { importWorkspaceIntoNewFolder } from '../workspaceService'
@@ -9,6 +10,7 @@ import { importWorkspaceIntoNewFolder } from '../workspaceService'
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -39,6 +41,18 @@ describe('Windows workspace import', () => {
     expect(await readFile(join(root, 'characters', '林晚.md'), 'utf8')).toBe('# 林晚')
     await expect(importWorkspaceIntoNewFolder(parent, '损坏导入', new Uint8Array([1]))).rejects.toThrow('无法读取工作区压缩包')
     expect((await (await import('node:fs/promises')).readdir(parent)).filter((name) => name.startsWith('.storyfabric-import-'))).toEqual([])
+    await expect(fs.access(join(parent, '损坏导入'))).rejects.toThrow()
+  })
+
+  it('reserves the target directory and imports without renaming over it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'storyfabric-import-'))
+    roots.push(parent)
+    const rename = vi.spyOn(fs, 'rename')
+
+    const root = await importWorkspaceIntoNewFolder(parent, '独占发布', (await makeArchive()).bytes)
+
+    expect(rename.mock.calls.filter(([, destination]) => destination === root)).toHaveLength(0)
+    expect(await readFile(join(root, 'characters', '林晚.md'), 'utf8')).toBe('# 林晚')
   })
 
   it('serializes same-name imports and never overwrites the first published workspace', async () => {

@@ -220,17 +220,20 @@ export class AndroidPlatformApi implements StoryFabricApi {
       let finalId = baseName
       let suffix = 2
       while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
-      const temporaryId = `.import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-      const temporaryStore = new CapacitorFileStore(`${WORKSPACE_PREFIX}/${temporaryId}`)
+      await root.ensureDir('')
+      const targetPath = normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${finalId}`)
+      let targetReserved = false
       try {
-        await importWorkspaceArchive(temporaryStore, bytes)
-        await setWorkspaceName(temporaryStore, baseName)
-        // The serialized queue prevents in-process suffix races; recheck immediately before publish.
-        if (await root.exists(finalId)) throw new Error(`文件夹已存在：${finalId}`)
-        await root.move(temporaryId, finalId)
-        return normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${finalId}`)
+        // recursive:false is Capacitor's exclusive directory reservation; the process lock
+        // covers suffix allocation in this process, while cross-process races depend on the OS/plugin.
+        await Filesystem.mkdir({ path: targetPath, directory: Directory.Data, recursive: false })
+        targetReserved = true
+        const targetStore = new CapacitorFileStore(targetPath)
+        await importWorkspaceArchive(targetStore, bytes)
+        await setWorkspaceName(targetStore, baseName)
+        return targetPath
       } catch (error) {
-        await root.remove(temporaryId)
+        if (targetReserved) await root.remove(finalId)
         throw error
       }
     })
