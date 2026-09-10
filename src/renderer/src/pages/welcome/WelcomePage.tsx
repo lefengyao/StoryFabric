@@ -11,6 +11,8 @@ import { getLocalPlatformApi, getPlatformApi, isWebPlatform } from '../../platfo
 import { HttpPlatformApi } from '../../platform/httpApi'
 import { installPlatformApi } from '../../platform/platformApi'
 import { loginRemote } from '../../platform/webAuth'
+import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../../lib/workspaceArchiveFile'
+import type { WorkspaceImportTarget } from '../../../../shared/api'
 import type { DeployTargetPublic } from '../../../../shared/types'
 
 export function WelcomePage(): React.ReactElement {
@@ -24,6 +26,11 @@ export function WelcomePage(): React.ReactElement {
   const [busy, setBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceListItem[]>([])
+  const [workspaceMode, setWorkspaceMode] = useState<'open' | 'import'>('open')
+  const [workspacePath, setWorkspacePath] = useState('')
+  const [archiveName, setArchiveName] = useState('')
+  const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
+  const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
   const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
   const [serviceUrl, setServiceUrl] = useState('')
@@ -144,14 +151,10 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
-  const doOpen = async (path?: string): Promise<void> => {
+  const doOpen = async (path: string): Promise<void> => {
     setBusy(true)
     try {
-      if (path) await open(path)
-      else {
-        const dir = await api.pickFolder()
-        if (dir) await open(dir)
-      }
+      await open(path)
     } catch {
       /* 错误已写入 store，由界面展示 */
     } finally {
@@ -159,14 +162,77 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
+  const resetWorkspacePicker = (): void => {
+    setWorkspaceMode('open')
+    setWorkspacePath('')
+    setArchiveName('')
+    setWorkspacePickerError(null)
+    useWorkspace.setState({ error: null })
+    if (archiveInput.current) archiveInput.current.value = ''
+  }
+
+  const closeWorkspacePicker = (): void => {
+    setWorkspaceOpen(false)
+    resetWorkspacePicker()
+  }
+
+  const setWorkspacePickerFailure = (err: unknown): void => {
+    const message = err instanceof Error ? err.message : String(err)
+    setWorkspacePickerError(message)
+    useWorkspace.setState({ error: message })
+  }
+
+  const browseWorkspaceFolder = async (): Promise<void> => {
+    const path = await api.pickFolder()
+    if (path) setWorkspacePath(path)
+  }
+
+  const openTypedWorkspace = async (): Promise<void> => {
+    const path = workspacePath.trim()
+    if (!path) return
+    setBusy(true)
+    setWorkspacePickerError(null)
+    try {
+      const summary = await getPlatformApi().openWorkspaceByPath(path)
+      useWorkspace.setState({ status: 'ready', summary, error: null })
+      closeWorkspacePicker()
+    } catch (err) {
+      setWorkspacePickerFailure(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const importSelectedArchive = async (file: File): Promise<void> => {
+    setBusy(true)
+    setWorkspacePickerError(null)
+    try {
+      const bytes = await readWorkspaceArchiveFile(file)
+      let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined }
+      if (mode === 'local' && !isAndroid && !isWeb) {
+        const parentDir = await api.pickFolder()
+        if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
+        target = { parentDir, name: archiveName.trim() || undefined }
+      }
+      await useWorkspace.getState().importArchive(bytes, file.name, target)
+      closeWorkspacePicker()
+    } catch (err) {
+      setWorkspacePickerFailure(err)
+    } finally {
+      setBusy(false)
+      if (archiveInput.current) archiveInput.current.value = ''
+    }
+  }
+
   const openWorkspacePicker = async (): Promise<void> => {
+    resetWorkspacePicker()
     if (isWeb) {
       setBusy(true)
       try {
         setWorkspaces(await api.listWorkspaces())
         setWorkspaceOpen(true)
       } catch (err) {
-        useWorkspace.setState({ error: err instanceof Error ? err.message : String(err) })
+        setWorkspacePickerFailure(err)
       } finally { setBusy(false) }
       return
     }
@@ -181,22 +247,20 @@ export function WelcomePage(): React.ReactElement {
         setWorkspaces(await remote.listWorkspaces())
         setWorkspaceOpen(true)
       } catch (err) {
-        setServiceError(err instanceof Error ? err.message : String(err))
+        const message = err instanceof Error ? err.message : String(err)
+        setServiceError(message)
+        setWorkspacePickerFailure(err)
       } finally { setBusy(false) }
-      return
-    }
-    if (!isAndroid) {
-      await doOpen()
       return
     }
     setBusy(true)
     try {
-      const list = await api.listWorkspaces?.() ?? []
+      if (localApiRef.current) installPlatformApi(localApiRef.current)
+      const list = await getPlatformApi().listWorkspaces()
       setWorkspaces(list)
       setWorkspaceOpen(true)
     } catch (err) {
-      /* 统一显示在欢迎页 */
-      useWorkspace.setState({ error: err instanceof Error ? err.message : String(err) })
+      setWorkspacePickerFailure(err)
     } finally {
       setBusy(false)
     }
@@ -274,7 +338,7 @@ export function WelcomePage(): React.ReactElement {
           )}
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy}>
-              <FolderOpen size={16} /> {isAndroid || isWeb ? '打开工作区' : '打开工作区文件夹'}
+              <FolderOpen size={16} /> 打开工作区
             </Button>
             <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
               <FolderPlus size={16} /> 创建新工作区
@@ -360,24 +424,60 @@ export function WelcomePage(): React.ReactElement {
         </p>
       </div>
 
-      <Modal open={workspaceOpen} onOpenChange={setWorkspaceOpen} title="打开工作区" description="选择应用内部已创建的工作区">
-        {workspaces.length === 0 ? (
-          <div className="py-6 text-center text-sm text-muted">还没有可打开的工作区，请先创建一个。</div>
+      <Modal open={workspaceOpen} onOpenChange={(open) => { if (open) setWorkspaceOpen(true); else closeWorkspacePicker() }} title="打开工作区" description="打开已有文件夹，或导入压缩包新建工作区">
+        <div className="grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
+          <button type="button" onClick={() => { setWorkspaceMode('open'); setWorkspacePickerError(null); useWorkspace.setState({ error: null }) }} className={`rounded-md px-3 py-2 ${workspaceMode === 'open' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>打开已有文件夹</button>
+          <button type="button" onClick={() => { setWorkspaceMode('import'); setWorkspacePickerError(null); useWorkspace.setState({ error: null }) }} className={`rounded-md px-3 py-2 ${workspaceMode === 'import' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>导入压缩包</button>
+        </div>
+
+        {workspaceMode === 'open' ? (
+          <div className="space-y-4">
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <Input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder={isAndroid ? '输入应用内部路径，例如 workspaces/星海拾遗' : '粘贴工作区路径…'} className="min-w-0 flex-1" />
+              {mode === 'local' && !isWeb && !isAndroid && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">浏览文件夹</Button>}
+            </div>
+            <Button variant="primary" onClick={() => void openTypedWorkspace()} disabled={!workspacePath.trim()} loading={busy} className="w-full justify-center">打开路径</Button>
+            <div>
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted"><History size={13} /> 可直接打开的工作区</div>
+              {workspaces.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-sm text-muted">还没有可打开的工作区，请粘贴路径或先创建一个。</div>
+              ) : (
+                <div className="space-y-2">
+                  {workspaces.map((item) => (
+                    <button
+                      key={item.path}
+                      disabled={busy}
+                      className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-line px-3 py-3 text-left hover:bg-elevated transition disabled:opacity-50"
+                      onClick={() => { closeWorkspacePicker(); void doOpen(item.path) }}
+                    >
+                      <BookOpen size={16} className="shrink-0 text-accent" />
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
+                      <span className="shrink-0 text-xs text-faint">{item.chapterCount} 章</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
-          <div className="space-y-2">
-            {workspaces.map((item) => (
-              <button
-                key={item.path}
-                className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-line px-3 py-3 text-left hover:bg-elevated transition"
-                onClick={() => { setWorkspaceOpen(false); void doOpen(item.path) }}
-              >
-                <BookOpen size={16} className="shrink-0 text-accent" />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.name}</span>
-                <span className="shrink-0 text-xs text-faint">{item.chapterCount} 章</span>
-              </button>
-            ))}
+          <div className="mt-4 space-y-3">
+            <Field label="新工作区名称（可选）" hint="留空时从归档文件名推导名称">
+              <Input value={archiveName} onChange={(event) => setArchiveName(event.target.value)} placeholder="例如：星海拾遗" />
+            </Field>
+            <input
+              ref={archiveInput}
+              type="file"
+              accept={WORKSPACE_ARCHIVE_ACCEPT}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                if (file) void importSelectedArchive(file)
+              }}
+            />
+            <Button variant="primary" onClick={() => archiveInput.current?.click()} loading={busy} className="w-full justify-center">浏览压缩包并导入</Button>
           </div>
         )}
+        {workspacePickerError && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspacePickerError}</div>}
       </Modal>
 
       <Modal open={Boolean(logs)} onOpenChange={() => setLogs(null)} title={logs?.title ?? '容器日志'}>

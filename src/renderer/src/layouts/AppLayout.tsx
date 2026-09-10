@@ -6,6 +6,9 @@ import { useSettings } from '../stores/settingsStore'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
 import { api } from '../lib/api'
+import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../lib/workspaceArchiveFile'
+import { getPlatformApi } from '../platform/platformApi'
+import { HttpPlatformApi } from '../platform/httpApi'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
@@ -51,6 +54,8 @@ export function AppLayout(): React.ReactElement {
   const importInput = useRef<HTMLInputElement>(null)
   const [transferBusy, setTransferBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+  const isRemote = getPlatformApi() instanceof HttpPlatformApi
 
   const downloadArchive = async (): Promise<void> => {
     setTransferBusy(true); setTransferError(null)
@@ -73,10 +78,14 @@ export function AppLayout(): React.ReactElement {
   const readArchive = async (file: File): Promise<void> => {
     setTransferBusy(true); setTransferError(null)
     try {
-      const buffer = await file.arrayBuffer()
-      const bytes = new Uint8Array(buffer)
-      const parentDir = await api.pickFolder()
-      await importArchive(bytes, file.name, parentDir ? { parentDir } : undefined)
+      const bytes = await readWorkspaceArchiveFile(file)
+      if (!isRemote && !isAndroid) {
+        const parentDir = await api.pickFolder()
+        if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
+        await importArchive(bytes, file.name, { parentDir })
+      } else {
+        await importArchive(bytes, file.name)
+      }
     } catch (err) { setTransferError(err instanceof Error ? err.message : String(err)) }
     finally { setTransferBusy(false); if (importInput.current) importInput.current.value = '' }
   }
@@ -172,7 +181,7 @@ export function AppLayout(): React.ReactElement {
           <button onClick={() => importInput.current?.click()} disabled={transferBusy} title="导入工作区" className="rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50">
             <Upload size={14} />
           </button>
-          <input ref={importInput} type="file" accept=".storyfabric.zip,application/zip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
+          <input ref={importInput} type="file" accept={WORKSPACE_ARCHIVE_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
           <button
             onClick={() => void close()}
             title="关闭当前工作区"
