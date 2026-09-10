@@ -7,7 +7,7 @@ import { normalizeRelativePath, type FileStore } from './fileStore'
 export class NodeFileStore implements FileStore {
   private readonly writeQueues = new Map<string, Promise<void>>()
 
-  constructor(private readonly root: string) {}
+  constructor(private readonly root: string, private readonly boundaryRoot = root) {}
 
   private resolveLexically(path: string, allowRoot = false): string {
     const safePath = normalizeRelativePath(path, allowRoot)
@@ -21,8 +21,13 @@ export class NodeFileStore implements FileStore {
   }
 
   private isWithinOrEqual(parent: string, child: string): boolean {
-    const rel = relative(parent, child)
+    const rel = relative(this.canonicalPath(parent), this.canonicalPath(child))
     return !rel || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  }
+
+  private canonicalPath(path: string): string {
+    const normalized = resolve(path)
+    return process.platform === 'win32' ? normalized.toLocaleLowerCase() : normalized
   }
 
   private boundaryError(): Error {
@@ -34,10 +39,10 @@ export class NodeFileStore implements FileStore {
   }
 
   private async validatePath(target: string): Promise<void> {
-    const managed = await fs.realpath(this.root)
+    const boundary = this.canonicalPath(this.boundaryRoot)
     try {
       const actual = await fs.realpath(target)
-      if (!this.isWithinOrEqual(managed, actual)) throw this.boundaryError()
+      if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
       return
     } catch (error) {
       if (this.isBoundaryError(error)) throw error
@@ -50,20 +55,21 @@ export class NodeFileStore implements FileStore {
         const linkTarget = resolve(dirname(current), await fs.readlink(current))
         try {
           const actual = await fs.realpath(current)
-          if (!this.isWithinOrEqual(managed, actual)) throw this.boundaryError()
+          if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
         } catch (error) {
-          if (!this.isWithinOrEqual(managed, linkTarget)) throw this.boundaryError()
+          if (!this.isWithinOrEqual(boundary, linkTarget)) throw this.boundaryError()
           if (this.isBoundaryError(error)) throw error
         }
         return
       }
       if (entry) {
         const actual = await fs.realpath(current)
-        if (!this.isWithinOrEqual(managed, actual)) throw this.boundaryError()
+        if (!this.isWithinOrEqual(boundary, actual)) throw this.boundaryError()
         return
       }
+      if (this.canonicalPath(current) === boundary) return
       const parent = dirname(current)
-      if (parent === current) return
+      if (parent === current) throw this.boundaryError()
       current = parent
     }
   }

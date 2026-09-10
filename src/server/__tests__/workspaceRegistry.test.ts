@@ -235,6 +235,23 @@ describe('server workspace registry', () => {
     await expect(store.ensureDir('new-dir')).rejects.toThrow('工作区目录越界')
   })
 
+  it('rejects all registered access after the managed root is replaced externally', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const outside = join(root, 'outside-managed-root')
+    const managed = join(root, 'workspaces')
+    await mkdir(outside, { recursive: true })
+    await mkdir(join(outside, 'default'), { recursive: true })
+    await initializeWorkspace(new NodeFileStore(join(outside, 'default')), '外部根项目')
+    await rm(managed, { recursive: true, force: true })
+    await symlink(outside, managed, process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(registry.summary('default')).rejects.toThrow('工作区目录越界')
+    const store = await registry.getStore('default')
+    await expect(store.listFiles('')).rejects.toThrow('工作区目录越界')
+    expect((await registry.list()).some((workspace) => workspace.name === '外部根项目')).toBe(false)
+  })
+
   it('stores an unregistered directory relative to the real managed root', async () => {
     const actualRoot = await dataRoot()
     const linkContainer = await mkdtemp(join(tmpdir(), 'storyfabric-registry-link-'))

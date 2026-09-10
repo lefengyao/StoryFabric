@@ -96,6 +96,7 @@ export class WorkspaceRegistry {
   private readonly managedRoot: string
   private readonly registryPath: string
   private readonly importsRoot: string
+  private managedRootBoundary = ''
   private readonly ready: Promise<void>
   private records: WorkspaceRecord[] = []
   private mutationQueue: Promise<void> = Promise.resolve()
@@ -119,6 +120,7 @@ export class WorkspaceRegistry {
 
   private async initialize(): Promise<void> {
     await fs.mkdir(this.managedRoot, { recursive: true })
+    this.managedRootBoundary = this.canonicalPath(await fs.realpath(this.managedRoot))
     await fs.mkdir(this.importsRoot, { recursive: true })
     await this.cleanupStaging()
     await this.loadRecords()
@@ -126,7 +128,7 @@ export class WorkspaceRegistry {
     if (!this.records.length) {
       const root = this.directoryOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 }, true)
       await fs.mkdir(root, { recursive: true })
-      await initializeWorkspace(new NodeFileStore(root), 'StoryFabric')
+      await initializeWorkspace(new NodeFileStore(root, this.managedRootBoundary), 'StoryFabric')
       const now = Date.now()
       this.records = [{ id: 'default', name: 'StoryFabric', createdAt: now, updatedAt: now }]
       await this.saveRecords()
@@ -184,7 +186,7 @@ export class WorkspaceRegistry {
 
   private directoryOf(record: WorkspaceRecord, allowMissing = false): string {
     const candidate = this.relativeDirectoryOf(record)
-    const managed = realpathSync(this.managedRoot)
+    const managed = this.managedRootBoundary
     try {
       const actual = realpathSync(candidate)
       if (!isWithin(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
@@ -230,10 +232,9 @@ export class WorkspaceRegistry {
 
   private storeForPath(path: string): FileStore {
     return new RevalidatedFileStore(async () => {
-      const managed = await fs.realpath(this.managedRoot)
       const target = await fs.realpath(path).catch(() => { throw new Error('工作区路径不存在') })
-      if (target === managed || !isWithin(this.canonicalPath(managed), this.canonicalPath(target))) throw new Error('工作区目录越界')
-      return new NodeFileStore(target)
+      if (this.canonicalPath(target) === this.managedRootBoundary || !isWithin(this.managedRootBoundary, this.canonicalPath(target))) throw new Error('工作区目录越界')
+      return new NodeFileStore(target, this.managedRootBoundary)
     })
   }
 
@@ -250,7 +251,7 @@ export class WorkspaceRegistry {
     if (await exists(target)) throw new Error('检测到旧工作区，但默认受管工作区已存在；为避免覆盖，服务未启动')
 
     await fs.rename(legacy, target)
-    const summary = await loadSummary(new NodeFileStore(target), basename(target), 'default')
+    const summary = await loadSummary(new NodeFileStore(target, this.managedRootBoundary), basename(target), 'default')
     const now = Date.now()
     this.records.push({ id: 'default', name: summary.name, createdAt: now, updatedAt: now })
     await this.saveRecords()
@@ -268,7 +269,7 @@ export class WorkspaceRegistry {
     const results: WorkspaceListItem[] = []
     for (const record of [...this.records]) {
       try {
-        results.push(await loadWorkspaceListItem(new NodeFileStore(this.rootOf(record)), record.name, record.id))
+        results.push(await loadWorkspaceListItem(new NodeFileStore(this.rootOf(record), this.managedRootBoundary), record.name, record.id))
       } catch {
         /* A damaged workspace remains in the registry but is not offered for opening. */
       }
@@ -279,13 +280,13 @@ export class WorkspaceRegistry {
   async getStore(id: string): Promise<FileStore> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return new RevalidatedFileStore(async () => new NodeFileStore(this.rootOf(record)))
+    return new RevalidatedFileStore(async () => new NodeFileStore(this.rootOf(record), this.managedRootBoundary))
   }
 
   async summary(id: string): Promise<WorkspaceSummary> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return loadSummary(new NodeFileStore(this.rootOf(record)), record.name, id)
+    return loadSummary(new NodeFileStore(this.rootOf(record), this.managedRootBoundary), record.name, id)
   }
 
   async create(name: string): Promise<WorkspaceSummary> {
@@ -298,8 +299,8 @@ export class WorkspaceRegistry {
       const root = this.rootOf(record, true)
       try {
         await fs.mkdir(root)
-        await initializeWorkspace(new NodeFileStore(root), safe)
-        const summary = await loadSummary(new NodeFileStore(root), safe, id)
+        await initializeWorkspace(new NodeFileStore(root, this.managedRootBoundary), safe)
+        const summary = await loadSummary(new NodeFileStore(root, this.managedRootBoundary), safe, id)
         this.records.push({ ...record, name: summary.name })
         try {
           await this.saveRecords()
@@ -324,7 +325,7 @@ export class WorkspaceRegistry {
       let published = false
       let recordAdded = false
       try {
-        const stagingStore = new NodeFileStore(staging)
+        const stagingStore = new NodeFileStore(staging, this.managedRootBoundary)
         await importWorkspaceArchive(stagingStore, bytes)
         const imported = await loadSummary(stagingStore, '导入工作区', 'pending')
         id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
@@ -342,7 +343,7 @@ export class WorkspaceRegistry {
           this.records = this.records.filter((record) => record.id !== id)
           throw error
         }
-        return loadSummary(new NodeFileStore(root), displayName, id)
+        return loadSummary(new NodeFileStore(root, this.managedRootBoundary), displayName, id)
       } catch (error) {
         if (recordAdded && id) this.records = this.records.filter((record) => record.id !== id)
         await fs.rm(published && root ? root : staging, { recursive: true, force: true }).catch(() => undefined)
@@ -357,13 +358,13 @@ export class WorkspaceRegistry {
       const value = typeof input === 'string' ? input.trim() : ''
       if (!value) throw new Error('工作区路径不能为空')
       const requested = resolve(value)
-      const managed = await fs.realpath(this.managedRoot)
+      const managed = this.managedRootBoundary
       const target = await fs.realpath(requested).catch(() => { throw new Error('工作区路径不存在') })
-      if (target === managed) throw new Error('不能打开服务器工作区根目录')
-      if (!isWithin(managed, target)) throw new Error('工作区路径必须位于服务器工作区目录内')
+      if (this.canonicalPath(target) === managed) throw new Error('不能打开服务器工作区根目录')
+      if (!isWithin(managed, this.canonicalPath(target))) throw new Error('工作区路径必须位于服务器工作区目录内')
       const info = await fs.stat(target)
       if (!info.isDirectory()) throw new Error('工作区路径必须是文件夹')
-      const valid = await validateWorkspace(new NodeFileStore(target))
+      const valid = await validateWorkspace(new NodeFileStore(target, this.managedRootBoundary))
       if (!valid.ok) throw new Error(valid.reason)
 
       const targetIdentity = this.canonicalPath(target)
