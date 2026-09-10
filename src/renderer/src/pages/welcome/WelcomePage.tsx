@@ -35,6 +35,7 @@ export function WelcomePage(): React.ReactElement {
   const [workspaceActionBusy, setWorkspaceActionBusy] = useState(false)
   const [workspaceApiReady, setWorkspaceApiReady] = useState(false)
   const workspaceLoadId = useRef(0)
+  const workspaceCloseAllowed = useRef(false)
   const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
   const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
@@ -183,8 +184,22 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const closeWorkspacePicker = (): void => {
+    workspaceCloseAllowed.current = true
     setWorkspaceOpen(false)
     resetWorkspacePicker()
+  }
+
+  const handleWorkspacePickerOpenChange = (open: boolean): void => {
+    if (open) {
+      workspaceCloseAllowed.current = false
+      setWorkspaceOpen(true)
+      return
+    }
+
+    // Keep the same picker generation alive until its list or open/import API action settles.
+    // This prevents an old import/open request from affecting a newly opened picker.
+    if (!workspaceCloseAllowed.current && (workspaceLoading || workspaceActionBusy)) return
+    closeWorkspacePicker()
   }
 
   const setWorkspacePickerFailure = (err: unknown): void => {
@@ -254,6 +269,7 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const openWorkspacePicker = async (): Promise<void> => {
+    workspaceCloseAllowed.current = false
     resetWorkspacePicker()
     const loadId = workspaceLoadId.current
     setWorkspaceOpen(true)
@@ -457,7 +473,7 @@ export function WelcomePage(): React.ReactElement {
         </p>
       </div>
 
-      <Modal open={workspaceOpen} onOpenChange={(open) => { if (open) setWorkspaceOpen(true); else closeWorkspacePicker() }} title="打开工作区" description="打开已有文件夹，或导入压缩包新建工作区">
+      <Modal open={workspaceOpen} onOpenChange={handleWorkspacePickerOpenChange} title="打开工作区" description="打开已有文件夹，或导入压缩包新建工作区">
         {workspaceLoadError && <div className="mb-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspaceLoadError}</div>}
         <div className="grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
           <button type="button" onClick={() => { setWorkspaceMode('open'); setWorkspacePickerError(null); useWorkspace.setState({ error: null }) }} className={`rounded-md px-3 py-2 ${workspaceMode === 'open' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>打开已有文件夹</button>
