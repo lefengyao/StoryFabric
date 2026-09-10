@@ -240,7 +240,7 @@ export function WelcomePage(): React.ReactElement {
         target = { parentDir, name: archiveName.trim() || undefined }
       }
       if (workspaceLoadId.current !== generation) return
-      await useWorkspace.getState().importArchive(bytes, file.name, target)
+      await useWorkspace.getState().importArchive(bytes, file.name, target, () => workspaceLoadId.current === generation)
       if (workspaceLoadId.current !== generation) return
       closeWorkspacePicker()
     } catch (err) {
