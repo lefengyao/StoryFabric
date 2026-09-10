@@ -189,6 +189,20 @@ describe('server workspace registry', () => {
     await expect(WorkspaceRegistry.open(root)).rejects.toThrow('工作区目录越界')
   })
 
+  it('rejects a dangling registry symlink whose target is outside the managed root', async () => {
+    const root = await dataRoot()
+    const managed = join(root, 'workspaces')
+    const missingOutside = join(root, 'missing-external-workspace')
+    await mkdir(managed, { recursive: true })
+    await symlink(missingOutside, join(managed, 'dangling-escaped'), 'junction')
+    await writeFile(join(managed, 'registry.json'), JSON.stringify({
+      version: 1,
+      workspaces: [{ id: 'ws_dangling0001', name: '悬空恶意记录', createdAt: 1, updatedAt: 1, directory: 'dangling-escaped' }],
+    }))
+
+    await expect(WorkspaceRegistry.open(root)).rejects.toThrow('工作区目录越界')
+  })
+
   it('shares a safely resolved store for concurrent callers of one workspace', async () => {
     const registry = await WorkspaceRegistry.open(await dataRoot())
 

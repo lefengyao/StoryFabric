@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { importWorkspaceArchive } from '../core/workspace/archive'
 import { listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships } from '../core/workspace/entityStore'
@@ -180,13 +180,39 @@ export class WorkspaceRegistry {
     try {
       actual = await fs.realpath(candidate)
     } catch {
+      await this.validateMissingPath(candidate, managed)
       if (!allowMissing) throw new Error('工作区目录不存在')
-      const parent = await fs.realpath(resolve(candidate, '..')).catch(() => { throw new Error('工作区目录不存在') })
-      if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(parent))) throw new Error('工作区目录越界')
       return candidate
     }
     if (!isWithin(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
     return actual
+  }
+
+  private async validateMissingPath(candidate: string, managed: string): Promise<void> {
+    let current = candidate
+    while (true) {
+      const entry = await fs.lstat(current).catch(() => null)
+      if (entry?.isSymbolicLink()) {
+        const linkTarget = resolve(dirname(current), await fs.readlink(current))
+        try {
+          const actual = await fs.realpath(current)
+          if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
+        } catch (error) {
+          if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(linkTarget))) throw new Error('工作区目录越界')
+          if (error instanceof Error && error.message === '工作区目录越界') throw error
+          throw new Error('工作区目录不存在')
+        }
+        return
+      }
+      if (entry) {
+        const actual = await fs.realpath(current)
+        if (!isWithinOrEqual(this.canonicalPath(managed), this.canonicalPath(actual))) throw new Error('工作区目录越界')
+        return
+      }
+      const parent = dirname(current)
+      if (parent === current) throw new Error('工作区目录不存在')
+      current = parent
+    }
   }
 
   private async rootOf(record: WorkspaceRecord, allowMissing = false): Promise<string> {
