@@ -29,7 +29,12 @@ export function WelcomePage(): React.ReactElement {
   const [workspaceMode, setWorkspaceMode] = useState<'open' | 'import'>('open')
   const [workspacePath, setWorkspacePath] = useState('')
   const [archiveName, setArchiveName] = useState('')
+  const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null)
   const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [workspaceActionBusy, setWorkspaceActionBusy] = useState(false)
+  const [workspaceApiReady, setWorkspaceApiReady] = useState(false)
+  const workspaceLoadId = useRef(0)
   const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
   const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
@@ -163,10 +168,15 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const resetWorkspacePicker = (): void => {
+    workspaceLoadId.current += 1
     setWorkspaceMode('open')
     setWorkspacePath('')
     setArchiveName('')
+    setWorkspaceLoadError(null)
     setWorkspacePickerError(null)
+    setWorkspaceLoading(false)
+    setWorkspaceActionBusy(false)
+    setWorkspaceApiReady(false)
     useWorkspace.setState({ error: null })
     if (archiveInput.current) archiveInput.current.value = ''
   }
@@ -182,6 +192,12 @@ export function WelcomePage(): React.ReactElement {
     useWorkspace.setState({ error: message })
   }
 
+  const requireWorkspaceApi = (): void => {
+    if (mode === 'remote' && !workspaceApiReady) {
+      throw new Error(workspaceLoadError ?? '服务尚未连接完成，请稍候再试')
+    }
+  }
+
   const browseWorkspaceFolder = async (): Promise<void> => {
     const path = await api.pickFolder()
     if (path) setWorkspacePath(path)
@@ -190,24 +206,26 @@ export function WelcomePage(): React.ReactElement {
   const openTypedWorkspace = async (): Promise<void> => {
     const path = workspacePath.trim()
     if (!path) return
-    setBusy(true)
+    setWorkspaceActionBusy(true)
     setWorkspacePickerError(null)
     try {
+      requireWorkspaceApi()
       const summary = await getPlatformApi().openWorkspaceByPath(path)
       useWorkspace.setState({ status: 'ready', summary, error: null })
       closeWorkspacePicker()
     } catch (err) {
       setWorkspacePickerFailure(err)
     } finally {
-      setBusy(false)
+      setWorkspaceActionBusy(false)
     }
   }
 
   const importSelectedArchive = async (file: File): Promise<void> => {
-    setBusy(true)
+    setWorkspaceActionBusy(true)
     setWorkspacePickerError(null)
     try {
       const bytes = await readWorkspaceArchiveFile(file)
+      requireWorkspaceApi()
       let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined }
       if (mode === 'local' && !isAndroid && !isWeb) {
         const parentDir = await api.pickFolder()
@@ -219,50 +237,53 @@ export function WelcomePage(): React.ReactElement {
     } catch (err) {
       setWorkspacePickerFailure(err)
     } finally {
-      setBusy(false)
+      setWorkspaceActionBusy(false)
       if (archiveInput.current) archiveInput.current.value = ''
     }
   }
 
   const openWorkspacePicker = async (): Promise<void> => {
     resetWorkspacePicker()
+    const loadId = workspaceLoadId.current
+    setWorkspaceOpen(true)
+    setWorkspaceLoading(true)
     if (isWeb) {
-      setBusy(true)
+      setWorkspaceApiReady(true)
       try {
-        setWorkspaces(await api.listWorkspaces())
-        setWorkspaceOpen(true)
+        const list = await api.listWorkspaces()
+        if (workspaceLoadId.current === loadId) setWorkspaces(list)
       } catch (err) {
-        setWorkspacePickerFailure(err)
-      } finally { setBusy(false) }
+        if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
+      }
       return
     }
     if (mode === 'remote') {
-      setBusy(true)
-      setServiceError(null)
       try {
         const root = serviceUrl.trim().replace(/\/+$/, '')
         const token = await loginRemote(root, serviceKey.trim())
         const remote = new HttpPlatformApi(fetch, root, { kind: 'bearer', token })
         installPlatformApi(remote)
-        setWorkspaces(await remote.listWorkspaces())
-        setWorkspaceOpen(true)
+        if (workspaceLoadId.current === loadId) setWorkspaceApiReady(true)
+        const list = await remote.listWorkspaces()
+        if (workspaceLoadId.current === loadId) setWorkspaces(list)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        setServiceError(message)
-        setWorkspacePickerFailure(err)
-      } finally { setBusy(false) }
+        if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
+      }
       return
     }
-    setBusy(true)
     try {
       if (localApiRef.current) installPlatformApi(localApiRef.current)
+      if (workspaceLoadId.current === loadId) setWorkspaceApiReady(true)
       const list = await getPlatformApi().listWorkspaces()
-      setWorkspaces(list)
-      setWorkspaceOpen(true)
+      if (workspaceLoadId.current === loadId) setWorkspaces(list)
     } catch (err) {
-      setWorkspacePickerFailure(err)
+      if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
     } finally {
-      setBusy(false)
+      if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
     }
   }
 
@@ -337,7 +358,7 @@ export function WelcomePage(): React.ReactElement {
             </div>
           )}
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy}>
+            <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy || workspaceLoading}>
               <FolderOpen size={16} /> 打开工作区
             </Button>
             <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
@@ -425,6 +446,7 @@ export function WelcomePage(): React.ReactElement {
       </div>
 
       <Modal open={workspaceOpen} onOpenChange={(open) => { if (open) setWorkspaceOpen(true); else closeWorkspacePicker() }} title="打开工作区" description="打开已有文件夹，或导入压缩包新建工作区">
+        {workspaceLoadError && <div className="mb-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspaceLoadError}</div>}
         <div className="grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
           <button type="button" onClick={() => { setWorkspaceMode('open'); setWorkspacePickerError(null); useWorkspace.setState({ error: null }) }} className={`rounded-md px-3 py-2 ${workspaceMode === 'open' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>打开已有文件夹</button>
           <button type="button" onClick={() => { setWorkspaceMode('import'); setWorkspacePickerError(null); useWorkspace.setState({ error: null }) }} className={`rounded-md px-3 py-2 ${workspaceMode === 'import' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>导入压缩包</button>
@@ -436,7 +458,7 @@ export function WelcomePage(): React.ReactElement {
               <Input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder={isAndroid ? '输入应用内部路径，例如 workspaces/星海拾遗' : '粘贴工作区路径…'} className="min-w-0 flex-1" />
               {mode === 'local' && !isWeb && !isAndroid && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">浏览文件夹</Button>}
             </div>
-            <Button variant="primary" onClick={() => void openTypedWorkspace()} disabled={!workspacePath.trim()} loading={busy} className="w-full justify-center">打开路径</Button>
+            <Button variant="primary" onClick={() => void openTypedWorkspace()} disabled={!workspacePath.trim()} loading={workspaceActionBusy} className="w-full justify-center">打开路径</Button>
             <div>
               <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted"><History size={13} /> 可直接打开的工作区</div>
               {workspaces.length === 0 ? (
@@ -446,7 +468,7 @@ export function WelcomePage(): React.ReactElement {
                   {workspaces.map((item) => (
                     <button
                       key={item.path}
-                      disabled={busy}
+                      disabled={busy || workspaceLoading || workspaceActionBusy}
                       className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-line px-3 py-3 text-left hover:bg-elevated transition disabled:opacity-50"
                       onClick={() => { closeWorkspacePicker(); void doOpen(item.path) }}
                     >
@@ -474,7 +496,7 @@ export function WelcomePage(): React.ReactElement {
                 if (file) void importSelectedArchive(file)
               }}
             />
-            <Button variant="primary" onClick={() => archiveInput.current?.click()} loading={busy} className="w-full justify-center">浏览压缩包并导入</Button>
+            <Button variant="primary" onClick={() => archiveInput.current?.click()} loading={workspaceActionBusy} className="w-full justify-center">浏览压缩包并导入</Button>
           </div>
         )}
         {workspacePickerError && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspacePickerError}</div>}
