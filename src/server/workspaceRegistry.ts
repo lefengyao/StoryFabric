@@ -8,6 +8,7 @@ import { listCharacters, listChapters, listEvents, listNotes, listOutline, listS
 import { CURRENT_WORKSPACE_VERSION } from '../core/workspace/migration'
 import { listTrash } from '../core/workspace/trash'
 import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName, validateWorkspace } from '../core/workspace/workspaceService'
+import type { FileStore } from '../core/storage/fileStore'
 import type { VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../shared/types'
 
 interface WorkspaceRecord {
@@ -74,6 +75,20 @@ async function loadReadOnlySummary(store: NodeFileStore, fallbackName: string, p
   const volumeOrder = new Map(volumes.map((volume) => [volume.id, volume.order]))
   chapters.sort((a, b) => Number(a.box === 'draft') - Number(b.box === 'draft') || (volumeOrder.get(a.volumeId ?? 'vol_default') ?? Number.MAX_SAFE_INTEGER) - (volumeOrder.get(b.volumeId ?? 'vol_default') ?? Number.MAX_SAFE_INTEGER) || a.order - b.order)
   return { name, path, version: CURRENT_WORKSPACE_VERSION, volumes, characters, relationships, outline, events, chapters, settings, notes, trashCount }
+}
+
+export class RevalidatedFileStore implements FileStore {
+  constructor(private readonly loadStore: () => Promise<NodeFileStore>) {}
+
+  async exists(path: string): Promise<boolean> { return (await this.loadStore()).exists(path) }
+  async ensureDir(path: string): Promise<void> { return (await this.loadStore()).ensureDir(path) }
+  async readText(path: string): Promise<string | null> { return (await this.loadStore()).readText(path) }
+  async writeText(path: string, text: string): Promise<void> { return (await this.loadStore()).writeText(path, text) }
+  async move(from: string, to: string): Promise<void> { return (await this.loadStore()).move(from, to) }
+  async remove(path: string): Promise<void> { return (await this.loadStore()).remove(path) }
+  async modifiedAt(path: string): Promise<number | null> { return (await this.loadStore()).modifiedAt(path) }
+  async listFiles(dir: string, extension?: string): Promise<string[]> { return (await this.loadStore()).listFiles(dir, extension) }
+  async listDirs(dir: string): Promise<string[]> { return (await this.loadStore()).listDirs(dir) }
 }
 
 /** Maps opaque server workspace IDs to directories beneath one managed root. */
@@ -252,10 +267,10 @@ export class WorkspaceRegistry {
     return results.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
   }
 
-  async getStore(id: string): Promise<NodeFileStore> {
+  async getStore(id: string): Promise<FileStore> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return new NodeFileStore(this.rootOf(record))
+    return new RevalidatedFileStore(async () => new NodeFileStore(this.rootOf(record)))
   }
 
   async summary(id: string): Promise<WorkspaceSummary> {

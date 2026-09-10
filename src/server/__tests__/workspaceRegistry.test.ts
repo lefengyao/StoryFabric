@@ -214,8 +214,25 @@ describe('server workspace registry', () => {
     await symlink(outside, registered, 'junction')
 
     await expect(registry.summary('default')).rejects.toThrow('工作区目录越界')
-    await expect(registry.getStore('default')).rejects.toThrow('工作区目录越界')
+    const store = await registry.getStore('default')
+    await expect(store.readText('storyfabric.json')).rejects.toThrow('工作区目录越界')
     expect((await registry.list()).some((workspace) => workspace.name === '外部替换项目')).toBe(false)
+  })
+
+  it('revalidates every facade operation after its workspace is replaced externally', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const store = await registry.getStore('default')
+    const outside = join(root, 'outside-facade')
+    const registered = join(root, 'workspaces', 'default')
+    await mkdir(outside, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(outside), '外部 facade 项目')
+    await rm(registered, { recursive: true, force: true })
+    await symlink(outside, registered, 'junction')
+
+    await expect(store.readText('storyfabric.json')).rejects.toThrow('工作区目录越界')
+    await expect(store.listFiles('')).rejects.toThrow('工作区目录越界')
+    await expect(store.ensureDir('new-dir')).rejects.toThrow('工作区目录越界')
   })
 
   it('stores an unregistered directory relative to the real managed root', async () => {

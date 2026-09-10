@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { extname, join, relative, resolve, sep } from 'node:path'
 import { URL } from 'node:url'
-import { NodeFileStore } from '../core/storage/nodeFileStore'
+import type { FileStore } from '../core/storage/fileStore'
 import { createAccessKeyVerifier, createSessionStore } from './auth'
 import { ServerSettingsStore } from './settingsStore'
 import { UsageService } from '../core/usage/usageService'
@@ -40,7 +40,7 @@ interface AuthContext {
 }
 
 interface Runtime {
-  store: NodeFileStore
+  store: FileStore
   sessions: CoreSessionStore
   agent: CoreAgentService
   operationQueue: Promise<void>
