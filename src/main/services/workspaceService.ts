@@ -58,33 +58,56 @@ function isChildOf(parent: string, target: string): boolean {
   return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)
 }
 
-async function pathExists(path: string): Promise<boolean> {
+const workspaceImportLocks = new Map<string, Promise<void>>()
+
+function importLockKey(path: string): string {
+  const value = resolve(path)
+  return process.platform === 'win32' ? value.toLocaleLowerCase() : value
+}
+
+async function withWorkspaceImportLock<T>(target: string, operation: () => Promise<T>): Promise<T> {
+  const key = importLockKey(target)
+  const previous = workspaceImportLocks.get(key) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(operation)
+  const tail = run.then(() => undefined, () => undefined)
+  workspaceImportLocks.set(key, tail)
   try {
-    await fs.access(path)
-    return true
-  } catch {
-    return false
+    return await run
+  } finally {
+    if (workspaceImportLocks.get(key) === tail) workspaceImportLocks.delete(key)
   }
+}
+
+async function assertTargetMissing(target: string, name: string): Promise<void> {
+  const entry = await fs.lstat(target).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  })
+  if (entry) throw new Error(`文件夹已存在：${name}`)
 }
 
 /** Import only into a fresh sibling directory, then atomically publish it. */
 export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array): Promise<string> {
   const parent = resolve(parentDir)
-  const target = resolve(parent, safeWorkspaceName(name))
+  const safeName = safeWorkspaceName(name)
+  const target = resolve(parent, safeName)
   if (!isChildOf(parent, target)) throw new Error('目标工作区必须位于所选文件夹内')
-  if (await pathExists(target)) throw new Error(`文件夹已存在：${basename(target)}`)
 
-  const staging = await fs.mkdtemp(join(parent, '.storyfabric-import-'))
-  try {
-    const stagingStore = new NodeFileStore(staging)
-    await importWorkspaceArchive(stagingStore, bytes)
-    await coreSetWorkspaceName(stagingStore, safeWorkspaceName(name))
-    await fs.rename(staging, target)
-    return target
-  } catch (error) {
-    await fs.rm(staging, { recursive: true, force: true })
-    throw error
-  }
+  return withWorkspaceImportLock(target, async () => {
+    await assertTargetMissing(target, basename(target))
+    const staging = await fs.mkdtemp(join(parent, '.storyfabric-import-'))
+    try {
+      const stagingStore = new NodeFileStore(staging)
+      await importWorkspaceArchive(stagingStore, bytes)
+      await coreSetWorkspaceName(stagingStore, safeName)
+      await assertTargetMissing(target, basename(target))
+      await fs.rename(staging, target)
+      return target
+    } catch (error) {
+      await fs.rm(staging, { recursive: true, force: true })
+      throw error
+    }
+  })
 }
 
 export function loadSummary(root: string): Promise<WorkspaceSummary> {

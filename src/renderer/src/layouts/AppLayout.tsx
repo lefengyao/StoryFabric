@@ -169,8 +169,9 @@ export function AppLayout(): React.ReactElement {
           )}
           <button
             onClick={() => void refresh()}
+            disabled={transferBusy}
             title="重新加载工作区"
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50"
           >
             <FolderSync size={14} />
             <span className="max-w-28 truncate sm:max-w-40">{summary?.name}</span>
@@ -184,8 +185,9 @@ export function AppLayout(): React.ReactElement {
           <input ref={importInput} type="file" accept={WORKSPACE_ARCHIVE_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
           <button
             onClick={() => void close()}
+            disabled={transferBusy}
             title="关闭当前工作区"
-            className="rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer"
+            className="rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-fg transition cursor-pointer disabled:opacity-50"
           >
             切换工作区
           </button>

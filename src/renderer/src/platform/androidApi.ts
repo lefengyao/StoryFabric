@@ -30,6 +30,14 @@ export function normalizeAndroidWorkspacePath(input: string): string {
   return value
 }
 
+let androidImportQueue: Promise<void> = Promise.resolve()
+
+function withAndroidImportLock<T>(operation: () => Promise<T>): Promise<T> {
+  const run = androidImportQueue.catch(() => undefined).then(operation)
+  androidImportQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
 const DEFAULT_PUBLIC: PublicAppSettings = {
   providers: [],
   theme: 'system',
@@ -105,7 +113,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const dirs = await root.listDirs('')
     const result: WorkspaceListItem[] = []
     for (const dir of dirs) {
-      const path = `${WORKSPACE_PREFIX}/${dir}`
+      const path = normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${dir}`)
       const store = new CapacitorFileStore(path)
       if (!(await validateWorkspace(store)).ok) continue
       try {
@@ -130,15 +138,16 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   async openWorkspace(path: string): Promise<WorkspaceSummary> {
-    const store = new CapacitorFileStore(path)
+    const normalizedPath = normalizeAndroidWorkspacePath(path)
+    const store = new CapacitorFileStore(normalizedPath)
     const valid = await validateWorkspace(store)
     if (!valid.ok) throw new Error(valid.reason)
-    await this.installWorkspace(path, store)
+    await this.installWorkspace(normalizedPath, store)
     await this.loadSettings()
-    this.settings = { ...this.settings, recentWorkspaces: [path, ...this.settings.recentWorkspaces.filter((p) => p !== path)].slice(0, 8) }
-    this.settings.lastWorkspacePath = path
+    this.settings = { ...this.settings, recentWorkspaces: [normalizedPath, ...this.settings.recentWorkspaces.filter((p) => p !== normalizedPath)].slice(0, 8) }
+    this.settings.lastWorkspacePath = normalizedPath
     await this.saveSettings()
-    return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
+    return loadSummary(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
   }
 
   async openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
@@ -152,10 +161,11 @@ export class AndroidPlatformApi implements StoryFabricApi {
       await this.loadSettings()
       const path = this.settings.lastWorkspacePath
       if (path) {
-        const store = new CapacitorFileStore(path)
+        const normalizedPath = normalizeAndroidWorkspacePath(path)
+        const store = new CapacitorFileStore(normalizedPath)
         const valid = await validateWorkspace(store)
         if (valid.ok) {
-          await this.installWorkspace(path, store)
+          await this.installWorkspace(normalizedPath, store)
         }
       }
     }
@@ -205,20 +215,25 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary> {
     const root = new CapacitorFileStore(WORKSPACE_PREFIX)
     const baseName = (target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')).replace(/[\\/:*?"<>|]/g, '').trim() || '导入工作区'
-    let finalId = baseName
-    let suffix = 2
-    while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
-    const temporaryId = `.import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-    const path = `${WORKSPACE_PREFIX}/${finalId}`
-    const temporaryStore = new CapacitorFileStore(`${WORKSPACE_PREFIX}/${temporaryId}`)
-    try {
-      await importWorkspaceArchive(temporaryStore, bytes)
-      await setWorkspaceName(temporaryStore, baseName)
-      await root.move(temporaryId, finalId)
-    } catch (error) {
-      await root.remove(temporaryId)
-      throw error
-    }
+    normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${baseName}`)
+    const path = await withAndroidImportLock(async () => {
+      let finalId = baseName
+      let suffix = 2
+      while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
+      const temporaryId = `.import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+      const temporaryStore = new CapacitorFileStore(`${WORKSPACE_PREFIX}/${temporaryId}`)
+      try {
+        await importWorkspaceArchive(temporaryStore, bytes)
+        await setWorkspaceName(temporaryStore, baseName)
+        // The serialized queue prevents in-process suffix races; recheck immediately before publish.
+        if (await root.exists(finalId)) throw new Error(`文件夹已存在：${finalId}`)
+        await root.move(temporaryId, finalId)
+        return normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${finalId}`)
+      } catch (error) {
+        await root.remove(temporaryId)
+        throw error
+      }
+    })
     const store = new CapacitorFileStore(path)
     await this.installWorkspace(path, store)
     await this.loadSettings()

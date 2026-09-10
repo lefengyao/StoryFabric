@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -39,5 +39,42 @@ describe('Windows workspace import', () => {
     expect(await readFile(join(root, 'characters', '林晚.md'), 'utf8')).toBe('# 林晚')
     await expect(importWorkspaceIntoNewFolder(parent, '损坏导入', new Uint8Array([1]))).rejects.toThrow('无法读取工作区压缩包')
     expect((await (await import('node:fs/promises')).readdir(parent)).filter((name) => name.startsWith('.storyfabric-import-'))).toEqual([])
+  })
+
+  it('serializes same-name imports and never overwrites the first published workspace', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'storyfabric-import-'))
+    roots.push(parent)
+    const archive = await makeArchive()
+
+    const results = await Promise.allSettled([
+      importWorkspaceIntoNewFolder(parent, '并发导入', archive.bytes),
+      importWorkspaceIntoNewFolder(parent, '并发导入', archive.bytes)
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected').map((result) => result.reason.message)).toEqual(['文件夹已存在：并发导入'])
+    expect(await readFile(join(parent, '并发导入', 'characters', '林晚.md'), 'utf8')).toBe('# 林晚')
+  })
+
+  it('rejects an existing file without replacing it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'storyfabric-import-'))
+    roots.push(parent)
+    const archive = await makeArchive()
+    const existingFile = join(parent, '同名文件')
+    await writeFile(existingFile, 'keep')
+
+    await expect(importWorkspaceIntoNewFolder(parent, '同名文件', archive.bytes)).rejects.toThrow('文件夹已存在：同名文件')
+    expect(await readFile(existingFile, 'utf8')).toBe('keep')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an existing link without replacing it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'storyfabric-import-'))
+    roots.push(parent)
+    const archive = await makeArchive()
+    const existingDirectory = join(parent, '目标目录')
+    const link = join(parent, '同名链接')
+    await mkdir(existingDirectory)
+    await symlink(existingDirectory, link)
+    await expect(importWorkspaceIntoNewFolder(parent, '同名链接', archive.bytes)).rejects.toThrow('文件夹已存在：同名链接')
   })
 })
