@@ -91,6 +91,15 @@ describe('server workspace registry', () => {
     await expect(registry.openPath(join(root, 'workspaces', created.path))).resolves.toMatchObject({ path: created.path, name: '已登记项目' })
   })
 
+  it('skips damaged registry records while opening a valid workspace path', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const records = (registry as unknown as { records: Array<{ id: string; name: string; createdAt: number; updatedAt: number; directory?: string }> }).records
+    records.unshift({ id: 'ws_badrecord01', name: '损坏记录', createdAt: 1, updatedAt: 1, directory: '../outside' })
+
+    await expect(registry.openPath(join(root, 'workspaces', 'default'))).resolves.toMatchObject({ path: 'default' })
+  })
+
   it('registers an existing managed workspace without moving or changing it', async () => {
     const root = await dataRoot()
     const diskPath = join(root, 'workspaces', 'from-disk')

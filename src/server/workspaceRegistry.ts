@@ -370,7 +370,11 @@ export class WorkspaceRegistry {
       const targetIdentity = this.canonicalPath(target)
       const store = this.storeForPath(target)
       for (const record of this.records) {
-        if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(store, record.name, record.id)
+        try {
+          if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(store, record.name, record.id)
+        } catch {
+          /* A damaged registry record must not block opening another valid workspace. */
+        }
       }
 
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`

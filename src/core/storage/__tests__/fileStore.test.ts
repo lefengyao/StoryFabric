@@ -109,4 +109,31 @@ describe('FileStore contract', () => {
       await rm(outside, { recursive: true, force: true })
     }
   })
+
+  it('revalidates every operation after the store root is replaced externally', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-replaced-'))
+    const outside = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-replaced-outside-'))
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    try {
+      const store = new NodeFileStore(root, root)
+      await store.writeText('inside.txt', 'inside')
+      await new NodeFileStore(outside).writeText('secret.txt', 'outside')
+      await rm(root, { recursive: true, force: true })
+      await symlink(outside, root, linkType)
+
+      await expect(store.exists('secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.readText('secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.ensureDir('new-dir')).rejects.toThrow('工作区外')
+      await expect(store.writeText('new.txt', 'blocked')).rejects.toThrow('工作区外')
+      await expect(store.move('secret.txt', 'moved.txt')).rejects.toThrow('工作区外')
+      await expect(store.remove('secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.modifiedAt('secret.txt')).rejects.toThrow('工作区外')
+      await expect(store.listFiles('')).rejects.toThrow('工作区外')
+      await expect(store.listDirs('')).rejects.toThrow('工作区外')
+      await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('outside')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
 })

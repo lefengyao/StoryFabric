@@ -71,6 +71,11 @@ export class NodeFileStore implements FileStore {
     return target
   }
 
+  private async revalidateAbsolute(target: string): Promise<string> {
+    await this.validatePath(target)
+    return target
+  }
+
   async exists(path: string): Promise<boolean> {
     try {
       await fs.access(await this.secureResolve(path))
@@ -99,13 +104,21 @@ export class NodeFileStore implements FileStore {
     const previous = this.writeQueues.get(target) ?? Promise.resolve()
     const operation = previous.catch(() => undefined).then(async () => {
       const checkedTarget = await this.secureResolve(path)
-      await fs.mkdir(dirname(checkedTarget), { recursive: true })
+      const checkedParent = await this.revalidateAbsolute(dirname(checkedTarget))
+      await fs.mkdir(checkedParent, { recursive: true })
       const temp = `${checkedTarget}.${randomUUID()}.tmp`
       try {
-        await fs.writeFile(temp, text, 'utf-8')
-        await fs.rename(temp, checkedTarget)
+        const checkedTemp = await this.revalidateAbsolute(temp)
+        await fs.writeFile(checkedTemp, text, 'utf-8')
+        const renameSource = await this.revalidateAbsolute(temp)
+        const renameTarget = await this.secureResolve(path)
+        await fs.rename(renameSource, renameTarget)
       } finally {
-        await fs.rm(temp, { force: true }).catch(() => undefined)
+        try {
+          await fs.rm(await this.revalidateAbsolute(temp), { force: true })
+        } catch (error) {
+          if (this.isBoundaryError(error)) throw error
+        }
       }
     })
     this.writeQueues.set(target, operation)
@@ -119,8 +132,8 @@ export class NodeFileStore implements FileStore {
   async move(from: string, to: string): Promise<void> {
     const source = await this.secureResolve(from)
     const target = await this.secureResolve(to)
-    await fs.mkdir(dirname(target), { recursive: true })
-    await fs.rename(source, target)
+    await fs.mkdir(await this.revalidateAbsolute(dirname(target)), { recursive: true })
+    await fs.rename(await this.revalidateAbsolute(source), await this.revalidateAbsolute(target))
   }
 
   async modifiedAt(path: string): Promise<number | null> {
