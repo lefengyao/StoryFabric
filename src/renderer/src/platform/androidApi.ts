@@ -21,6 +21,14 @@ import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
+const ANDROID_WORKSPACE_PATH_ERROR = 'Android 工作区路径必须位于应用内部 workspaces 目录下'
+
+export function normalizeAndroidWorkspacePath(input: string): string {
+  const value = input.trim()
+  const match = new RegExp(`^${WORKSPACE_PREFIX}/([^/\\\\]+)$`).exec(value)
+  if (!match || match[1] === '.' || match[1] === '..') throw new Error(ANDROID_WORKSPACE_PATH_ERROR)
+  return value
+}
 
 const DEFAULT_PUBLIC: PublicAppSettings = {
   providers: [],
@@ -133,11 +141,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
   }
 
-  openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
-    const value = path.trim()
-    const match = /^workspaces\/([^/\\]+)$/.exec(value)
-    if (!match || match[1] === '.' || match[1] === '..') throw new Error('Android 工作区路径必须位于应用内部 workspaces 目录下')
-    return this.openWorkspace(value)
+  async openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
+    return this.openWorkspace(normalizeAndroidWorkspacePath(path))
   }
 
   async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null }

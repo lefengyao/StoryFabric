@@ -33,6 +33,27 @@ describe('web platform api', () => {
     expect(requests[0].init?.body).toBeInstanceOf(ArrayBuffer)
   })
 
+  it('opens a workspace by path with a trimmed JSON POST body', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const api = new HttpPlatformApi(async (input, init) => {
+      requests.push({ url: String(input), init })
+      return new Response(JSON.stringify({ name: '路径工作区', path: 'ws_path' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+
+    await api.openWorkspaceByPath('  /srv/storyfabric/workspaces/demo  ')
+
+    expect(requests[0].url).toBe('https://server.example/api/workspaces/open-path')
+    expect(requests[0].init?.method).toBe('POST')
+    expect(requests[0].init?.headers).toMatchObject({ authorization: `Bearer ${'t'.repeat(32)}`, 'content-type': 'application/json' })
+    expect(JSON.parse(String(requests[0].init?.body))).toEqual({ path: '/srv/storyfabric/workspaces/demo' })
+  })
+
+  it('rejects an empty workspace path', async () => {
+    const api = new HttpPlatformApi()
+
+    await expect(api.openWorkspaceByPath('  ')).rejects.toThrow('请输入工作区路径')
+  })
+
   it('aborts a bearer SSE request when unsubscribing', async () => {
     let request: RequestInit | undefined
     const api = new HttpPlatformApi(async (_input, init) => {
