@@ -17,6 +17,7 @@ describe('BrandMark', () => {
     expect(markup).toContain('width="48"')
     expect(markup).toContain('height="48"')
     expect(markup).toContain('class="brand-mark"')
+    expect(markup).toContain('alt="织章 StoryFabric"')
     expect(markup).toContain('aria-label="织章 StoryFabric"')
   })
 

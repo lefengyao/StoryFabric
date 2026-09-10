@@ -29,6 +29,7 @@ export function BrandMark({
         className={className}
         style={style}
         role="img"
+        alt={ariaLabel}
         aria-label={ariaLabel}
       />
     )
