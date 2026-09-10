@@ -169,6 +169,7 @@ export function WelcomePage(): React.ReactElement {
 
   const resetWorkspacePicker = (): void => {
     workspaceLoadId.current += 1
+    setWorkspaces([])
     setWorkspaceMode('open')
     setWorkspacePath('')
     setArchiveName('')
@@ -264,8 +265,9 @@ export function WelcomePage(): React.ReactElement {
         const root = serviceUrl.trim().replace(/\/+$/, '')
         const token = await loginRemote(root, serviceKey.trim())
         const remote = new HttpPlatformApi(fetch, root, { kind: 'bearer', token })
+        if (workspaceLoadId.current !== loadId) return
         installPlatformApi(remote)
-        if (workspaceLoadId.current === loadId) setWorkspaceApiReady(true)
+        setWorkspaceApiReady(true)
         const list = await remote.listWorkspaces()
         if (workspaceLoadId.current === loadId) setWorkspaces(list)
       } catch (err) {
