@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { importWorkspaceArchive } from '../core/workspace/archive'
-import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName } from '../core/workspace/workspaceService'
+import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName, validateWorkspace } from '../core/workspace/workspaceService'
 import type { WorkspaceListItem, WorkspaceSummary } from '../shared/types'
 
 interface WorkspaceRecord {
@@ -11,6 +11,7 @@ interface WorkspaceRecord {
   name: string
   createdAt: number
   updatedAt: number
+  directory?: string
 }
 
 interface RegistryFile {
@@ -75,7 +76,7 @@ export class WorkspaceRegistry {
     await this.loadRecords()
     await this.migrateLegacyWorkspace()
     if (!this.records.length) {
-      const root = this.rootOfUnchecked('default')
+      const root = this.directoryOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 })
       await fs.mkdir(root, { recursive: true })
       await initializeWorkspace(new NodeFileStore(root), 'StoryFabric')
       const now = Date.now()
@@ -109,6 +110,8 @@ export class WorkspaceRegistry {
       return isSafeId(record?.id) && typeof record.name === 'string' && typeof record.createdAt === 'number' && typeof record.updatedAt === 'number'
     })
     if (this.records.length !== parsed.workspaces.length || new Set(this.records.map((record) => record.id)).size !== this.records.length) throw new Error('服务器工作区注册表包含非法记录')
+    const directories = this.records.map((record) => this.directoryOf(record))
+    if (new Set(directories).size !== directories.length) throw new Error('服务器工作区注册表包含重复目录')
   }
 
   private async saveRecords(): Promise<void> {
@@ -123,15 +126,21 @@ export class WorkspaceRegistry {
     return run
   }
 
-  private rootOfUnchecked(id: string): string {
-    const root = resolve(this.managedRoot, id)
-    if (!isWithin(this.managedRoot, root)) throw new Error('工作区不存在')
+  private directoryOf(record: WorkspaceRecord): string {
+    const directory = record.directory === undefined ? record.id : record.directory.trim()
+    if (!directory || isAbsolute(directory) || directory.split(/[\\/]/).includes('..')) throw new Error('工作区目录无效')
+    const root = resolve(this.managedRoot, directory)
+    if (!isWithin(this.managedRoot, root)) throw new Error('工作区目录越界')
     return root
+  }
+
+  private rootOf(record: WorkspaceRecord): string {
+    return this.directoryOf(record)
   }
 
   private async migrateLegacyWorkspace(): Promise<void> {
     const legacy = resolve(this.legacyWorkspaceRoot)
-    const target = this.rootOfUnchecked('default')
+    const target = this.rootOf({ id: 'default', name: 'StoryFabric', createdAt: 0, updatedAt: 0 })
     if (legacy === target || !(await exists(join(legacy, 'storyfabric.json')))) return
     if (this.records.some((record) => record.id === 'default')) return
     if (await exists(target)) throw new Error('检测到旧工作区，但默认受管工作区已存在；为避免覆盖，服务未启动')
@@ -155,7 +164,7 @@ export class WorkspaceRegistry {
     const results: WorkspaceListItem[] = []
     for (const record of [...this.records]) {
       try {
-        results.push(await loadWorkspaceListItem(new NodeFileStore(this.rootOfUnchecked(record.id)), record.name, record.id))
+        results.push(await loadWorkspaceListItem(new NodeFileStore(this.rootOf(record)), record.name, record.id))
       } catch {
         /* A damaged workspace remains in the registry but is not offered for opening. */
       }
@@ -165,14 +174,14 @@ export class WorkspaceRegistry {
 
   async getStore(id: string): Promise<NodeFileStore> {
     await this.ensureReady()
-    this.getRecord(id)
-    return new NodeFileStore(this.rootOfUnchecked(id))
+    const record = this.getRecord(id)
+    return new NodeFileStore(this.rootOf(record))
   }
 
   async summary(id: string): Promise<WorkspaceSummary> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return loadSummary(new NodeFileStore(this.rootOfUnchecked(id)), record.name, id)
+    return loadSummary(new NodeFileStore(this.rootOf(record)), record.name, id)
   }
 
   async create(name: string): Promise<WorkspaceSummary> {
@@ -181,12 +190,13 @@ export class WorkspaceRegistry {
       const safe = safeName(name)
       const now = Date.now()
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
-      const root = this.rootOfUnchecked(id)
+      const record = { id, name: safe, createdAt: now, updatedAt: now } satisfies WorkspaceRecord
+      const root = this.rootOf(record)
       try {
         await fs.mkdir(root)
         await initializeWorkspace(new NodeFileStore(root), safe)
         const summary = await loadSummary(new NodeFileStore(root), safe, id)
-        this.records.push({ id, name: summary.name, createdAt: now, updatedAt: now })
+        this.records.push({ ...record, name: summary.name })
         try {
           await this.saveRecords()
         } catch (error) {
@@ -214,7 +224,7 @@ export class WorkspaceRegistry {
         await importWorkspaceArchive(stagingStore, bytes)
         const imported = await loadSummary(stagingStore, '导入工作区', 'pending')
         id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
-        root = this.rootOfUnchecked(id)
+        root = this.rootOf({ id, name: '导入工作区', createdAt: 0, updatedAt: 0 })
         const displayName = suggestedName?.trim() ? safeName(suggestedName) : imported.name
         await setWorkspaceName(stagingStore, displayName)
         await fs.rename(staging, root)
@@ -234,6 +244,42 @@ export class WorkspaceRegistry {
         await fs.rm(published && root ? root : staging, { recursive: true, force: true }).catch(() => undefined)
         throw error
       }
+    })
+  }
+
+  async openPath(input: string): Promise<WorkspaceSummary> {
+    await this.ensureReady()
+    return this.mutate(async () => {
+      const value = typeof input === 'string' ? input.trim() : ''
+      if (!value) throw new Error('工作区路径不能为空')
+      const requested = resolve(value)
+      const managed = await fs.realpath(this.managedRoot)
+      const target = await fs.realpath(requested).catch(() => { throw new Error('工作区路径不存在') })
+      if (target === managed) throw new Error('不能打开服务器工作区根目录')
+      if (!isWithin(managed, target)) throw new Error('工作区路径必须位于服务器工作区目录内')
+      const info = await fs.stat(target)
+      if (!info.isDirectory()) throw new Error('工作区路径必须是文件夹')
+      const valid = await validateWorkspace(new NodeFileStore(target))
+      if (!valid.ok) throw new Error(valid.reason)
+
+      for (const record of this.records) {
+        try {
+          if (await fs.realpath(this.rootOf(record)) === target) return loadSummary(new NodeFileStore(target), record.name, record.id)
+        } catch { /* a missing registered directory cannot match this path */ }
+      }
+
+      const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+      const directory = relative(this.managedRoot, target)
+      const summary = await loadSummary(new NodeFileStore(target), basename(target), id)
+      const now = Date.now()
+      this.records.push({ id, name: summary.name, directory, createdAt: now, updatedAt: now })
+      try {
+        await this.saveRecords()
+      } catch (error) {
+        this.records = this.records.filter((record) => record.id !== id)
+        throw error
+      }
+      return { ...summary, path: id }
     })
   }
 }
