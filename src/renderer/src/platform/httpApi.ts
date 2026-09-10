@@ -51,6 +51,11 @@ export class HttpPlatformApi implements StoryFabricApi {
   listWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces') }
   async createWorkspace(_parentDir: string, name: string): Promise<string> { return (await this.rest<WorkspaceSummary>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }), headers: { 'content-type': 'application/json' } })).path }
   openWorkspace(path: string): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST' }) }
+  openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
+    const value = path.trim()
+    if (!value) return Promise.reject(new Error('请输入工作区路径'))
+    return this.rest('/api/workspaces/open-path', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: value }) })
+  }
   closeWorkspace(): Promise<void> { return this.rpc('closeWorkspace') }
   getCurrentWorkspace(): Promise<WorkspaceSummary | null> { return this.rpc('getCurrentWorkspace') }
   refreshWorkspace(): Promise<WorkspaceSummary | null> { return this.rpc('refreshWorkspace') }

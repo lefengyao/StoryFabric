@@ -133,6 +133,13 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
   }
 
+  openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
+    const value = path.trim()
+    const match = /^workspaces\/([^/\\]+)$/.exec(value)
+    if (!match || match[1] === '.' || match[1] === '..') throw new Error('Android 工作区路径必须位于应用内部 workspaces 目录下')
+    return this.openWorkspace(value)
+  }
+
   async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null }
 
   async getCurrentWorkspace(): Promise<WorkspaceSummary | null> {
