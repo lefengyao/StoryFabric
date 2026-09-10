@@ -52,7 +52,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function loadReadOnlySummary(store: NodeFileStore, fallbackName: string, path: string): Promise<WorkspaceSummary> {
+async function loadReadOnlySummary(store: FileStore, fallbackName: string, path: string): Promise<WorkspaceSummary> {
   const [characters, relationships, outline, events, chapters, settings, notes] = await Promise.all([listCharacters(store), loadRelationships(store), listOutline(store), listEvents(store), listChapters(store), listSettings(store), listNotes(store)])
   let name = fallbackName
   const raw = await store.readText('storyfabric.json')
@@ -228,6 +228,15 @@ export class WorkspaceRegistry {
     return this.directoryOf(record, allowMissing)
   }
 
+  private storeForPath(path: string): FileStore {
+    return new RevalidatedFileStore(async () => {
+      const managed = await fs.realpath(this.managedRoot)
+      const target = await fs.realpath(path).catch(() => { throw new Error('工作区路径不存在') })
+      if (target === managed || !isWithin(this.canonicalPath(managed), this.canonicalPath(target))) throw new Error('工作区目录越界')
+      return new NodeFileStore(target)
+    })
+  }
+
   private canonicalPath(path: string): string {
     const normalized = resolve(path)
     return process.platform === 'win32' ? normalized.toLocaleLowerCase() : normalized
@@ -358,13 +367,14 @@ export class WorkspaceRegistry {
       if (!valid.ok) throw new Error(valid.reason)
 
       const targetIdentity = this.canonicalPath(target)
+      const store = this.storeForPath(target)
       for (const record of this.records) {
-        if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(new NodeFileStore(target), record.name, record.id)
+        if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(store, record.name, record.id)
       }
 
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
       const directory = relative(managed, target)
-      const summary = await loadReadOnlySummary(new NodeFileStore(target), basename(target), id)
+      const summary = await loadReadOnlySummary(store, basename(target), id)
       const now = Date.now()
       this.records.push({ id, name: summary.name, directory, createdAt: now, updatedAt: now })
       try {
