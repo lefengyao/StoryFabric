@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { exportWorkspaceArchive } from '../../core/workspace/archive'
@@ -17,6 +17,19 @@ async function dataRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'storyfabric-registry-'))
   roots.push(root)
   return root
+}
+
+async function snapshotFiles(root: string): Promise<Array<{ path: string; content: string; mtimeMs: number }>> {
+  const result: Array<{ path: string; content: string; mtimeMs: number }> = []
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) await visit(path)
+      else if (entry.isFile()) result.push({ path: relative(root, path), content: await readFile(path, 'utf8'), mtimeMs: (await stat(path)).mtimeMs })
+    }
+  }
+  await visit(root)
+  return result.sort((left, right) => left.path.localeCompare(right.path))
 }
 
 describe('server workspace registry', () => {
@@ -96,6 +109,21 @@ describe('server workspace registry', () => {
     await expect(registry.openPath(diskPath)).resolves.toMatchObject({ path: opened.path })
   })
 
+  it('does not write, migrate, clean, or index an unregistered workspace while opening it', async () => {
+    const root = await dataRoot()
+    const diskPath = join(root, 'workspaces', 'from-disk')
+    await mkdir(diskPath, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(diskPath), '只读项目')
+    const before = await snapshotFiles(diskPath)
+    const registry = await WorkspaceRegistry.open(root)
+
+    const opened = await registry.openPath(diskPath)
+
+    expect(opened.name).toBe('只读项目')
+    await expect(snapshotFiles(diskPath)).resolves.toEqual(before)
+    expect((await snapshotFiles(diskPath)).some((file) => file.path.includes('project-index'))).toBe(false)
+  })
+
   it.each([
     ['managed root', (root: string) => join(root, 'workspaces')],
     ['outside managed root', (root: string) => join(root, 'outside')],
@@ -124,6 +152,44 @@ describe('server workspace registry', () => {
     const registry = await WorkspaceRegistry.open(root)
 
     await expect(registry.summary(legacyId)).resolves.toMatchObject({ path: legacyId, name: '旧注册记录' })
+  })
+
+  it('rejects registry records whose directories resolve to the same real path', async () => {
+    const root = await dataRoot()
+    const managed = join(root, 'workspaces')
+    const target = join(managed, 'target')
+    await mkdir(target, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(target), '重复目录')
+    await symlink(target, join(managed, 'alias-a'), 'junction')
+    await symlink(target, join(managed, 'alias-b'), 'junction')
+    await writeFile(join(managed, 'registry.json'), JSON.stringify({
+      version: 1,
+      workspaces: [
+        { id: 'ws_alias0000001', name: 'A', createdAt: 1, updatedAt: 1, directory: 'alias-a' },
+        { id: 'ws_alias0000002', name: 'B', createdAt: 1, updatedAt: 1, directory: 'alias-b' },
+      ],
+    }))
+
+    await expect(WorkspaceRegistry.open(root)).rejects.toThrow('重复目录')
+  })
+
+  it('stores an unregistered directory relative to the real managed root', async () => {
+    const actualRoot = await dataRoot()
+    const linkContainer = await mkdtemp(join(tmpdir(), 'storyfabric-registry-link-'))
+    roots.push(linkContainer)
+    const linkedRoot = join(linkContainer, 'data-link')
+    await symlink(actualRoot, linkedRoot, 'junction')
+    const diskPath = join(actualRoot, 'workspaces', 'from-disk')
+    await mkdir(diskPath, { recursive: true })
+    await initializeWorkspace(new NodeFileStore(diskPath), '真实根项目')
+    const registry = await WorkspaceRegistry.open(linkedRoot)
+
+    const opened = await registry.openPath(diskPath)
+    const persisted = JSON.parse(await readFile(join(actualRoot, 'workspaces', 'registry.json'), 'utf8')) as { workspaces: Array<{ id: string; directory?: string }> }
+    const record = persisted.workspaces.find((workspace) => workspace.id === opened.path)
+
+    expect(record?.directory).toBe('from-disk')
+    expect(record?.directory).not.toContain('..')
   })
 
   it('rejects a symlink that resolves outside the managed root', async () => {

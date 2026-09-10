@@ -3,8 +3,11 @@ import { promises as fs } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { importWorkspaceArchive } from '../core/workspace/archive'
+import { listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships } from '../core/workspace/entityStore'
+import { CURRENT_WORKSPACE_VERSION } from '../core/workspace/migration'
+import { listTrash } from '../core/workspace/trash'
 import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName, validateWorkspace } from '../core/workspace/workspaceService'
-import type { WorkspaceListItem, WorkspaceSummary } from '../shared/types'
+import type { VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../shared/types'
 
 interface WorkspaceRecord {
   id: string
@@ -41,6 +44,31 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+async function loadReadOnlySummary(store: NodeFileStore, fallbackName: string, path: string): Promise<WorkspaceSummary> {
+  const [characters, relationships, outline, events, chapters, settings, notes] = await Promise.all([listCharacters(store), loadRelationships(store), listOutline(store), listEvents(store), listChapters(store), listSettings(store), listNotes(store)])
+  let name = fallbackName
+  const raw = await store.readText('storyfabric.json')
+  if (raw) {
+    try {
+      const meta = JSON.parse(raw)
+      if (typeof meta?.name === 'string' && meta.name) name = meta.name
+    } catch { /* fallback */ }
+  }
+  let volumes: VolumeMeta[] = []
+  const volumesRaw = await store.readText('chapters/volumes.json')
+  if (volumesRaw) {
+    try {
+      const value = JSON.parse(volumesRaw)
+      if (Array.isArray(value)) volumes = value.filter((v): v is VolumeMeta => typeof v?.id === 'string' && typeof v?.title === 'string' && typeof v?.order === 'number')
+    } catch { volumes = [] }
+  }
+  let trashCount = 0
+  try { trashCount = (await listTrash(store)).length } catch { /* damaged trash index does not block reading */ }
+  const volumeOrder = new Map(volumes.map((volume) => [volume.id, volume.order]))
+  chapters.sort((a, b) => Number(a.box === 'draft') - Number(b.box === 'draft') || (volumeOrder.get(a.volumeId ?? 'vol_default') ?? Number.MAX_SAFE_INTEGER) - (volumeOrder.get(b.volumeId ?? 'vol_default') ?? Number.MAX_SAFE_INTEGER) || a.order - b.order)
+  return { name, path, version: CURRENT_WORKSPACE_VERSION, volumes, characters, relationships, outline, events, chapters, settings, notes, trashCount }
 }
 
 /** Maps opaque server workspace IDs to directories beneath one managed root. */
@@ -110,7 +138,7 @@ export class WorkspaceRegistry {
       return isSafeId(record?.id) && typeof record.name === 'string' && typeof record.createdAt === 'number' && typeof record.updatedAt === 'number'
     })
     if (this.records.length !== parsed.workspaces.length || new Set(this.records.map((record) => record.id)).size !== this.records.length) throw new Error('服务器工作区注册表包含非法记录')
-    const directories = this.records.map((record) => this.directoryOf(record))
+    const directories = await Promise.all(this.records.map((record) => this.identityOf(record)))
     if (new Set(directories).size !== directories.length) throw new Error('服务器工作区注册表包含重复目录')
   }
 
@@ -136,6 +164,20 @@ export class WorkspaceRegistry {
 
   private rootOf(record: WorkspaceRecord): string {
     return this.directoryOf(record)
+  }
+
+  private canonicalPath(path: string): string {
+    const normalized = resolve(path)
+    return process.platform === 'win32' ? normalized.toLocaleLowerCase() : normalized
+  }
+
+  private async identityOf(record: WorkspaceRecord): Promise<string> {
+    const root = this.rootOf(record)
+    try {
+      return this.canonicalPath(await fs.realpath(root))
+    } catch {
+      return this.canonicalPath(root)
+    }
   }
 
   private async migrateLegacyWorkspace(): Promise<void> {
@@ -262,15 +304,14 @@ export class WorkspaceRegistry {
       const valid = await validateWorkspace(new NodeFileStore(target))
       if (!valid.ok) throw new Error(valid.reason)
 
+      const targetIdentity = this.canonicalPath(target)
       for (const record of this.records) {
-        try {
-          if (await fs.realpath(this.rootOf(record)) === target) return loadSummary(new NodeFileStore(target), record.name, record.id)
-        } catch { /* a missing registered directory cannot match this path */ }
+        if (await this.identityOf(record) === targetIdentity) return loadReadOnlySummary(new NodeFileStore(target), record.name, record.id)
       }
 
       const id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
-      const directory = relative(this.managedRoot, target)
-      const summary = await loadSummary(new NodeFileStore(target), basename(target), id)
+      const directory = relative(managed, target)
+      const summary = await loadReadOnlySummary(new NodeFileStore(target), basename(target), id)
       const now = Date.now()
       this.records.push({ id, name: summary.name, directory, createdAt: now, updatedAt: now })
       try {
