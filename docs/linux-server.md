@@ -38,7 +38,7 @@ docker compose up -d --build
 - 「检查更新」会读取容器实际镜像 tag 与本地部署包版本比对；「更新」= 重新上传部署包 → 构建新镜像 → 换容器，**数据卷不动**。
 - 「卸载」只删容器、镜像与该次上传目录，**`<安装目录>/data` 一律保留**。
 
-**部署包**：`npm run server:bundle` 生成 `release/storyfabric-server-<version>.tar.gz`（含预构建 `dist-server/index.mjs`、`web/`、`Dockerfile.runtime`、entrypoint 与 `SHA256SUMS`），打包时经 `extraResources` 放进安装包，运行时路径为 `resources/server-bundle.tar.gz`。
+**部署包**：`npm run server:bundle` 生成 `release/<version>/storyfabric-server-<version>.tar.gz`（含预构建 `dist-server/index.mjs`、`web/`、`Dockerfile.runtime`、entrypoint 与 `SHA256SUMS`），打包时经 `extraResources` 放进安装包，运行时路径为 `resources/server-bundle.tar.gz`。每个版本的安装包、服务器包、更新清单和解包目录都放在对应的 `release/<version>/` 目录中。
 
 ## 生产部署
 

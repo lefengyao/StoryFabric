@@ -3,7 +3,7 @@ import type { AgentEvent, ChatSession, ModelSettings, UsageRecord } from '../../
 import type { LlmAdapter, LlmAdapterFactory, StreamRequest, StreamResult } from '../../llm/types'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
-import { listNotes, saveNote } from '../../workspace/entityStore'
+import { deleteNote, listNotes, saveNote } from '../../workspace/entityStore'
 import { listTrash } from '../../workspace/trash'
 import { CoreSessionStore } from '../../workspace/sessionStore'
 import { CoreAgentService } from '../agentLoop'
@@ -193,6 +193,27 @@ describe('CoreAgentService', () => {
     expect(session.messages.some((m) => m.role === 'tool' && m.text?.includes('已将便签「批准删除便签」移入回收站'))).toBe(true)
     expect(requests).toHaveLength(2)
     expect(requests[1].messages.some((m) => m.role === 'tool' && m.text?.includes('移入回收站'))).toBe(true)
+  })
+
+  it('写入确认失败时回注失败结果并继续下一轮对话', async () => {
+    const store = await createStore()
+    const note = await saveNote(store, { title: '会冲突的便签', content: '原文' })
+    await deleteNote(store, note.id)
+    const trashId = note.id
+    const events: AgentEvent[] = []
+    const serviceWithEvents = makeService(store, [call('c1', 'restore_from_trash', { id: trashId }), text('已处理写入失败。')], events).service
+
+    const runPromise = serviceWithEvents.run({ message: '恢复便签', providerId, model: 'mock-model' })
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'pending-change')).toBe(true))
+    await saveNote(store, { id: note.id, title: note.title, content: '占位文件' })
+    const pending = events.find((event) => event.type === 'pending-change')
+    if (!pending || pending.type !== 'pending-change') throw new Error('未收到待确认变更')
+    serviceWithEvents.confirmChange(pending.change.id, true)
+
+    const { sessionId } = await runPromise
+    const session = await loadSession(store, sessionId)
+    expect(session.messages.at(-1)?.text).toBe('已处理写入失败。')
+    expect(session.messages.some((message) => message.role === 'tool' && message.isError && message.text?.includes('写入失败'))).toBe(true)
   })
 
   it.each([

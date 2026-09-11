@@ -8,6 +8,7 @@ import {
   saveNote,
   saveOutlineDoc,
   saveRelationships,
+  loadRelationships,
   saveSetting,
   listChapters,
   listNotes
@@ -21,7 +22,7 @@ const asResult = (o: ToolOutcome): R => {
   return o
 }
 
-describe('audit: 27 个工具端到端可用性', () => {
+describe('audit: 29 个工具端到端可用性', () => {
   it('读取类工具返回结果、写入类工具产出待确认并可应用', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '审核工作区')
@@ -65,6 +66,9 @@ describe('audit: 27 个工具端到端可用性', () => {
     await read('get_event', { eventId: evt.id })
     await read('get_relations', {})
     await read('get_relations', { characterId: a.id })
+    const volumes = asResult(await executeTool(store, 'list_volumes', '{}'))
+    expect(volumes.ok).toBe(true)
+    expect(volumes.text).toContain(volume.id)
     await read('list_chapters', {})
     await read('get_chapter', { chapterId: draft.id })
     await read('get_chapter_context', { chapterId: draft.id, radius: 1 })
@@ -102,8 +106,17 @@ describe('audit: 27 个工具端到端可用性', () => {
     await write('save_setting', { setting: { title: '新设定', category: 'other', content: 'y' } })
     await write('save_note', { note: { title: '新便签', content: 'z' } })
     await write('delete_note', { noteId: note.id })
+    const trash = asResult(await executeTool(store, 'list_trash', '{}'))
+    expect(trash.ok).toBe(true)
+    expect(trash.text).toContain(note.id)
     await write('move_chapter', { chapterId: draft.id, box: 'main', volumeId: volume.id })
     await write('restore_from_trash', { id: (await listTrash(store))[0]?.id })
+
+    const pendingRelationship = await executeTool(store, 'save_relationship', JSON.stringify({ relationship: { fromCharacterId: a.id, toCharacterId: b.id, type: '并发前' } }))
+    if (pendingRelationship.kind !== 'pending') throw new Error('关系工具未产出待确认变更')
+    await saveRelationships(store, [{ id: 'rel_concurrent', fromId: a.id, toId: b.id, type: '并发新增', label: '', description: '', directed: false }])
+    await pendingRelationship.apply()
+    expect((await loadRelationships(store)).map((item) => item.type)).toEqual(expect.arrayContaining(['并发新增', '并发前']))
 
     // ---- 写入类错误路径 ----
     const badWrite = asResult(await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '没有 box' } })))

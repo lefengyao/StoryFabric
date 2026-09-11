@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 import type { AppSettings, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
 import { pruneModelSettings } from '../core/llm/modelCatalog'
+import { keyPreview } from '../shared/keyPreview'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
@@ -28,12 +29,6 @@ const DEFAULT_SETTINGS: ServerSettings = {
   autosaveSeconds: 0,
   sendShortcut: 'enter',
   chatDensity: 'comfortable'
-}
-
-function keyPreview(key: string): string {
-  if (!key) return ''
-  if (key.length <= 8) return `${key.slice(0, 2)}****`
-  return `${key.slice(0, 4)}****${key.slice(-4)}`
 }
 
 export class ServerSettingsStore {
@@ -181,8 +176,15 @@ export class ServerSettingsStore {
   }
 
   async providerInput(input: FetchModelsInput): Promise<{ protocol: FetchModelsInput['protocol']; baseUrl: string; apiKey: string }> {
-    const apiKey = input.apiKey ?? (input.providerId ? await this.apiKeyOf(input.providerId) : '')
-    return { protocol: input.protocol, baseUrl: input.baseUrl, apiKey }
+    if (!input.providerId) return { protocol: input.protocol, baseUrl: input.baseUrl, apiKey: input.apiKey ?? '' }
+    const settings = await this.loadRaw()
+    const provider = settings.providers.find((item) => item.id === input.providerId)
+    if (!provider) throw new Error('供应商不存在')
+    return {
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      apiKey: input.apiKey ?? provider.apiKey
+    }
   }
 
   private async persist(settings: ServerSettings): Promise<ServerSettings> {

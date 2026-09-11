@@ -85,6 +85,7 @@ async function loadCharacters(store: FileStore): Promise<Stored<CharacterDoc>[]>
     out.push({
       fileName: filePath.replace(/^characters\//, ''),
       doc: {
+        ...parsed.data,
         id: parsed.data.id,
         name: str(parsed.data.name, filePath.replace(/^.*\//, '').replace(/\.md$/i, '')),
         aliases: strArr(parsed.data.aliases),
@@ -107,7 +108,8 @@ export async function listCharacters(store: FileStore): Promise<CharacterDoc[]> 
 }
 
 function characterFrontmatter(c: CharacterDoc): Record<string, unknown> {
-  return { id: c.id, name: c.name, aliases: c.aliases, tier: c.tier ?? 'secondary', role: c.role, faction: c.faction, gender: c.gender, age: c.age, tags: c.tags, summary: c.summary }
+  const { content: _content, ...metadata } = c as CharacterDoc & Record<string, unknown>
+  return { ...metadata, id: c.id, name: c.name, aliases: c.aliases, tier: c.tier ?? 'secondary', role: c.role, faction: c.faction, gender: c.gender, age: c.age, tags: c.tags, summary: c.summary }
 }
 
 export function serializeCharacter(c: CharacterDoc): string {
@@ -120,7 +122,7 @@ export async function saveCharacter(store: FileStore, input: Partial<CharacterDo
   const existing = input.id ? all.find((x) => x.doc.id === input.id) : undefined
   const doc = existing
     ? ({ ...existing.doc, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)), id: existing.doc.id } as CharacterDoc)
-    : ({ id: input.id ?? genId('char'), name: input.name?.trim() || '未命名人物', aliases: input.aliases ?? [], role: input.role ?? '', faction: input.faction ?? '', gender: input.gender ?? '', age: input.age ?? '', tags: input.tags ?? [], summary: input.summary ?? '', content: input.content ?? '' } satisfies CharacterDoc)
+    : ({ id: input.id ?? genId('char'), name: input.name?.trim() || '未命名人物', aliases: input.aliases ?? [], tier: input.tier === 'primary' ? 'primary' : 'secondary', role: input.role ?? '', faction: input.faction ?? '', gender: input.gender ?? '', age: input.age ?? '', tags: input.tags ?? [], summary: input.summary ?? '', content: input.content ?? '' } satisfies CharacterDoc)
   const tier: CharacterTier = doc.tier === 'primary' ? 'primary' : 'secondary'
   const fileNameBase = `${sanitizeFileName(doc.name)}.md`
   const targetName = all.some((x) => x.fileName === `${tier}/${fileNameBase}` && x.doc.id !== doc.id) ? `${sanitizeFileName(doc.name)}_${doc.id.split('_')[1] ?? doc.id}.md` : fileNameBase
@@ -141,8 +143,9 @@ export async function findCharacter(store: FileStore, ref: { id?: string; name?:
 
 export async function deleteCharacter(store: FileStore, id: string): Promise<void> {
   const hit = (await loadCharacters(store)).find((x) => x.doc.id === id)
-  if (hit) await moveToTrash(store, makeTrashEntry({ id, kind: 'character', originalPath: `characters/${hit.fileName}`, title: hit.doc.name }))
-  await saveRelationships(store, (await loadRelationships(store)).filter((r) => r.fromId !== id && r.toId !== id))
+  const relationships = await loadRelationships(store)
+  if (hit) await moveToTrash(store, makeTrashEntry({ id, kind: 'character', originalPath: `characters/${hit.fileName}`, title: hit.doc.name, relatedRelationships: relationships.filter((r) => r.fromId === id || r.toId === id) }))
+  await saveRelationships(store, relationships.filter((r) => r.fromId !== id && r.toId !== id))
 }
 
 export async function loadRelationships(store: FileStore): Promise<Relationship[]> {
@@ -178,13 +181,13 @@ async function loadOutlines(store: FileStore): Promise<Stored<OutlineDoc>[]> {
   for (const filePath of await listMd(store, 'outline')) {
     const parsed = await readMd(store, filePath)
     if (!parsed || typeof parsed.data.id !== 'string') continue
-    out.push({ fileName: filePath.replace(/^outline\//, ''), doc: { id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), order: num(parsed.data.order), kind: parsed.data.kind === 'chapter' ? 'chapter' : 'total', chapterId: typeof parsed.data.chapterId === 'string' ? parsed.data.chapterId : undefined, content: parsed.content.replace(/^\n+/, '') } })
+    out.push({ fileName: filePath.replace(/^outline\//, ''), doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), order: num(parsed.data.order), kind: parsed.data.kind === 'chapter' ? 'chapter' : 'total', chapterId: typeof parsed.data.chapterId === 'string' ? parsed.data.chapterId : undefined, content: parsed.content.replace(/^\n+/, '') } as OutlineDoc })
   }
   return out.sort((a, b) => a.doc.order - b.doc.order)
 }
 
 export async function listOutline(store: FileStore): Promise<OutlineDoc[]> { return (await loadOutlines(store)).map((x) => x.doc) }
-export function serializeOutlineDoc(d: OutlineDoc): string { return stringifyFrontMatter(d.content ?? '', { id: d.id, title: d.title, order: d.order, kind: d.kind ?? 'total', ...(d.chapterId ? { chapterId: d.chapterId } : {}) }) }
+export function serializeOutlineDoc(d: OutlineDoc): string { const { content: _content, ...metadata } = d as OutlineDoc & Record<string, unknown>; return stringifyFrontMatter(d.content ?? '', { ...metadata, id: d.id, title: d.title, order: d.order, kind: d.kind ?? 'total', ...(d.chapterId ? { chapterId: d.chapterId } : {}) }) }
 
 export async function saveOutlineDoc(store: FileStore, input: Partial<OutlineDoc> & { id?: string }): Promise<OutlineDoc> {
   await store.ensureDir('outline')
@@ -216,13 +219,13 @@ async function loadEvents(store: FileStore): Promise<Stored<StoryEvent>[]> {
   for (const fileName of await listMd(store, 'events')) {
     const parsed = await readMd(store, fileName)
     if (!parsed || typeof parsed.data.id !== 'string') continue
-    out.push({ fileName: fileName.replace(/^events\//, ''), doc: { id: parsed.data.id, title: str(parsed.data.title, fileName.replace(/.*\//, '').replace(/\.md$/i, '')), storyTime: str(parsed.data.storyTime), order: num(parsed.data.order), location: str(parsed.data.location), tags: strArr(parsed.data.tags), characterIds: strArr(parsed.data.characterIds), prevIds: strArr(parsed.data.prevIds), nextIds: strArr(parsed.data.nextIds), content: parsed.content.replace(/^\n+/, '') } })
+    out.push({ fileName: fileName.replace(/^events\//, ''), doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, fileName.replace(/.*\//, '').replace(/\.md$/i, '')), storyTime: str(parsed.data.storyTime), order: num(parsed.data.order), location: str(parsed.data.location), tags: strArr(parsed.data.tags), characterIds: strArr(parsed.data.characterIds), prevIds: strArr(parsed.data.prevIds), nextIds: strArr(parsed.data.nextIds), content: parsed.content.replace(/^\n+/, '') } as StoryEvent })
   }
   return out.sort((a, b) => a.doc.order - b.doc.order)
 }
 
 export async function listEvents(store: FileStore): Promise<StoryEvent[]> { return (await loadEvents(store)).map((x) => x.doc) }
-export function serializeEvent(e: StoryEvent): string { return stringifyFrontMatter(e.content ?? '', { id: e.id, title: e.title, storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds }) }
+export function serializeEvent(e: StoryEvent): string { const { content: _content, ...metadata } = e as StoryEvent & Record<string, unknown>; return stringifyFrontMatter(e.content ?? '', { ...metadata, id: e.id, title: e.title, storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds }) }
 
 export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & { id?: string }): Promise<StoryEvent> {
   await store.ensureDir('events')
@@ -255,7 +258,7 @@ async function loadSettings(store: FileStore): Promise<StoredSetting[]> {
     const category: SettingCategory = parsed.data.category === 'other' || filePath.startsWith('settings/other/') ? 'other' : 'background'
     out.push({
       fileName: filePath.replace(/^settings\//, ''),
-      doc: { id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), category, tags: strArr(parsed.data.tags), content: parsed.content.replace(/^\n+/, '') }
+      doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), category, tags: strArr(parsed.data.tags), content: parsed.content.replace(/^\n+/, '') } as SettingDoc
     })
   }
   return out
@@ -270,7 +273,8 @@ export async function getSetting(store: FileStore, id: string): Promise<SettingD
 }
 
 export function serializeSetting(doc: SettingDoc): string {
-  return stringifyFrontMatter(doc.content ?? '', { id: doc.id, title: doc.title, category: doc.category, tags: doc.tags })
+  const { content: _content, ...metadata } = doc as SettingDoc & Record<string, unknown>
+  return stringifyFrontMatter(doc.content ?? '', { ...metadata, id: doc.id, title: doc.title, category: doc.category, tags: doc.tags })
 }
 
 export async function saveSetting(store: FileStore, input: Partial<SettingDoc> & { id?: string }): Promise<SettingDoc> {
@@ -305,6 +309,7 @@ async function loadNotes(store: FileStore): Promise<StoredNote[]> {
     out.push({
       fileName: filePath.replace(/^notes\//, ''),
       doc: {
+        ...parsed.data,
         id: parsed.data.id,
         title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')),
         tags: strArr(parsed.data.tags),
@@ -327,7 +332,8 @@ export async function getNote(store: FileStore, id: string): Promise<NoteDoc | n
 }
 
 export function serializeNote(doc: NoteDoc): string {
-  return stringifyFrontMatter(doc.content ?? '', { id: doc.id, title: doc.title, tags: doc.tags, pinned: doc.pinned, createdAt: doc.createdAt, updatedAt: doc.updatedAt })
+  const { content: _content, ...metadata } = doc as NoteDoc & Record<string, unknown>
+  return stringifyFrontMatter(doc.content ?? '', { ...metadata, id: doc.id, title: doc.title, tags: doc.tags, pinned: doc.pinned, createdAt: doc.createdAt, updatedAt: doc.updatedAt })
 }
 
 export async function saveNote(store: FileStore, input: Partial<NoteDoc> & { id?: string }): Promise<NoteDoc> {
@@ -365,14 +371,14 @@ async function loadChapters(store: FileStore): Promise<Stored<ChapterDoc>[]> {
     const box: ChapterBox = parts[0] === 'draft' ? 'draft' : 'main'
     const volumeId = typeof parsed.data.volumeId === 'string' ? parsed.data.volumeId : (box === 'main' ? (parts[1] && parts[1] !== 'main' ? parts[1] : 'vol_default') : 'vol_default')
     const terms: TermAnnotation[] = Array.isArray(parsed.data.terms) ? parsed.data.terms.filter((v): v is TermAnnotation => typeof v?.term === 'string') : []
-    out.push({ fileName: relative, doc: { id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), volume: str(parsed.data.volume, '第一卷'), volumeId, box, terms, order: num(parsed.data.order), status, wordCount: countWords(content), content } })
+    out.push({ fileName: relative, doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, filePath.replace(/.*\//, '').replace(/\.md$/i, '')), volume: str(parsed.data.volume, '第一卷'), volumeId, box, terms, order: num(parsed.data.order), status, wordCount: countWords(content), content } as ChapterDoc })
   }
   return out.sort((a, b) => a.doc.order - b.doc.order)
 }
 
 export async function listChapters(store: FileStore): Promise<ChapterMeta[]> { return (await loadChapters(store)).map(({ doc: { content: _content, ...meta } }) => meta) }
 export async function getChapterBody(store: FileStore, id: string): Promise<string | null> { return (await loadChapters(store)).find((x) => x.doc.id === id)?.doc.content ?? null }
-export function serializeChapter(c: ChapterDoc): string { return stringifyFrontMatter(normalizeChapterContent(c.content ?? ''), { id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
+export function serializeChapter(c: ChapterDoc): string { const { content: _content, ...metadata } = c as ChapterDoc & Record<string, unknown>; return stringifyFrontMatter(normalizeChapterContent(c.content ?? ''), { ...metadata, id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
 
 export async function saveChapter(store: FileStore, input: Partial<ChapterDoc> & { id?: string }): Promise<ChapterDoc> {
   await store.ensureDir('chapters')

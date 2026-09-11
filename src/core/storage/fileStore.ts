@@ -16,12 +16,14 @@ export interface FileStore {
   listDirs(dir: string): Promise<string[]>
 }
 
-export function normalizeRelativePath(path: string): string {
+export function normalizeRelativePath(path: string, allowRoot = false): string {
   const raw = String(path).replaceAll('\\', '/')
   if (raw.startsWith('/') || /^[A-Za-z]:\//.test(raw)) throw new Error('FileStore 只接受工作区内相对路径')
   const parts = raw.split('/').filter(Boolean)
   if (parts.some((part) => part === '..')) throw new Error('禁止访问工作区外的路径')
-  return parts.filter((part) => part !== '.').join('/')
+  const normalized = parts.filter((part) => part !== '.').join('/')
+  if (!normalized && !allowRoot) throw new Error('路径不能为空')
+  return normalized
 }
 
 /** 用于共享核心单测和 Android 首版适配验证的内存实现。 */
@@ -36,7 +38,7 @@ export class MemoryFileStore implements FileStore {
   }
 
   async ensureDir(path: string): Promise<void> {
-    const p = normalizeRelativePath(path)
+    const p = normalizeRelativePath(path, true)
     if (!p) return
     const parts = p.split('/')
     let current = ''
@@ -106,7 +108,7 @@ export class MemoryFileStore implements FileStore {
   }
 
   async listFiles(dir: string, extension?: string): Promise<string[]> {
-    const prefix = normalizeRelativePath(dir)
+    const prefix = normalizeRelativePath(dir, true)
     const start = prefix ? `${prefix}/` : ''
     return [...this.files.keys()]
       .filter((p) => p.startsWith(start) && !p.slice(start.length).includes('/'))
@@ -116,7 +118,7 @@ export class MemoryFileStore implements FileStore {
   }
 
   async listDirs(dir: string): Promise<string[]> {
-    const prefix = normalizeRelativePath(dir)
+    const prefix = normalizeRelativePath(dir, true)
     const start = prefix ? `${prefix}/` : ''
     const names = new Set<string>()
     for (const d of this.dirs) {

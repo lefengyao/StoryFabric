@@ -5,11 +5,15 @@ import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../../core/storage/fileStore'
 import { NodeFileStore } from '../../../core/storage/nodeFileStore'
 import { initializeWorkspace } from '../../../core/workspace/workspaceService'
-import { saveCharacter, saveNote } from '../../../core/workspace/entityStore'
+import { saveCharacter, saveChapter, saveNote } from '../../../core/workspace/entityStore'
 import { executeTool as executeCoreTool, TOOL_DEFS as CORE_TOOL_DEFS } from '../../../core/tools/registry'
 import { executeTool as executeMainTool, TOOL_DEFS as MAIN_TOOL_DEFS } from '../registry'
 
 describe('desktop tool registry parity', () => {
+  it('keeps every tool definition identical to core', () => {
+    expect(MAIN_TOOL_DEFS).toEqual(CORE_TOOL_DEFS)
+  })
+
   // 核心与桌面端共享同一份 delete_note 契约：名称、描述、参数 schema 必须逐字一致。
   it('keeps the delete_note definition identical to core', () => {
     const core = CORE_TOOL_DEFS.find((tool) => tool.name === 'delete_note')
@@ -144,6 +148,23 @@ describe('desktop tool registry parity', () => {
         JSON.stringify({ relationship: { fromCharacterId: 'char_missing', toCharacterId: mainTo.id, type: '朋友' } })
       )
       expect(mainErr).toEqual(coreErr)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects moving a chapter to an unknown volume before confirmation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sf-parity-'))
+    try {
+      const store = new NodeFileStore(root)
+      await initializeWorkspace(store, '测试')
+      const chapter = await saveChapter(store, { title: '待移动章节', box: 'draft', content: '内容' })
+      const outcome = await executeMainTool(root, 'move_chapter', JSON.stringify({ chapterId: chapter.id, box: 'main', volumeId: 'vol_missing' }))
+      expect(outcome.kind).toBe('result')
+      if (outcome.kind === 'result') {
+        expect(outcome.ok).toBe(false)
+        expect(outcome.text).toContain('未找到目标卷')
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }

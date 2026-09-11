@@ -1,5 +1,5 @@
 /**
- * 生成随安装包分发的服务端部署包：release/storyfabric-server-<version>.tar.gz
+ * 生成随安装包分发的服务端部署包：release/<version>/storyfabric-server-<version>.tar.gz
  * 内容见 src/core/deploy/bundle.ts 的 BUNDLE_ENTRIES。
  */
 import { createHash } from 'node:crypto'
@@ -14,8 +14,9 @@ const root = resolve(import.meta.dirname, '..')
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf-8'))
 const version = pkg.version
 const releaseDir = join(root, 'release')
-const stage = join(releaseDir, 'server-bundle')
-const outFile = join(releaseDir, `storyfabric-server-${version}.tar.gz`)
+const versionDir = join(releaseDir, version)
+const stage = join(versionDir, 'server-bundle')
+const outFile = join(versionDir, `storyfabric-server-${version}.tar.gz`)
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // npm 脚本里会设置 npm_execpath；用它直接调 node，避免 Windows 上 .cmd + shell 的 EINVAL 与弃用告警
 const npmCli = process.env.npm_execpath

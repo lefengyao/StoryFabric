@@ -4,7 +4,8 @@
  * 所有序列化和目录规则由共享核心维护；这里仅把旧的 root 路径签名
  * 转换为 NodeFileStore，确保 Windows 与 Android 使用同一份实现。
  */
-import { NodeFileStore } from '../../core/storage/nodeFileStore'
+import { workspaceStore } from './workspaceRuntime'
+import type { NodeFileStore } from '../../core/storage/nodeFileStore'
 import {
   countWords as coreCountWords,
   deleteChapter as coreDeleteChapter,
@@ -55,7 +56,7 @@ import type {
 } from '../../shared/types'
 
 function storeOf(root: string): NodeFileStore {
-  return new NodeFileStore(root)
+  return workspaceStore(root)
 }
 
 async function usesLegacyFlatLayout(root: string): Promise<boolean> {

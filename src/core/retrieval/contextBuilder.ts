@@ -23,9 +23,15 @@ export interface ChapterContext {
 
 function compact(text: string): string { return text.replace(/\s+/g, ' ').trim() }
 
+function boundedNumber(value: number | undefined, fallback: number, label: string, min: number, max?: number): number {
+  if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`${label} 必须是有限数字`)
+  const number = value ?? fallback
+  return Math.max(min, max === undefined ? number : Math.min(max, number))
+}
+
 export async function getChapterContext(store: FileStore, chapterId: string, options: { radius?: number; maxChars?: number } = {}): Promise<ChapterContext> {
-  const radius = Math.max(0, Math.min(2, options.radius ?? 2))
-  const maxChars = Math.max(1000, options.maxChars ?? 12000)
+  const radius = boundedNumber(options.radius, 2, 'radius', 0, 2)
+  const maxChars = boundedNumber(options.maxChars, 12000, 'maxChars', 1000)
   const chapters = (await listChapters(store)).filter((chapter) => chapter.box !== 'trash').sort((a, b) => a.order - b.order)
   const index = chapters.findIndex((chapter) => chapter.id === chapterId)
   if (index < 0) throw new Error(`未找到章节：${chapterId}`)

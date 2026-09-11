@@ -6,6 +6,15 @@ import { getChapterContext } from '../contextBuilder'
 import { lookupTerm, searchIndex } from '../projectIndex'
 
 describe('bounded project retrieval', () => {
+  it('rejects non-finite chapter context limits instead of returning NaN', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const chapter = await saveChapter(store, { title: '目标', box: 'draft', content: '正文' })
+
+    await expect(getChapterContext(store, chapter.id, { radius: 'abc' as unknown as number })).rejects.toThrow('radius')
+    await expect(getChapterContext(store, chapter.id, { maxChars: Number.NaN })).rejects.toThrow('maxChars')
+  })
+
   it('returns chapter neighbors within a character budget and finds lore terms', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '检索')

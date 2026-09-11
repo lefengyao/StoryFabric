@@ -1,11 +1,11 @@
 appId: com.storyfabric.app
 productName: StoryFabric
 directories:
-  output: release
+  output: release/${version}
 extraResources:
   - from: resources/icon.ico
     to: icon.ico
-  - from: release/storyfabric-server-${version}.tar.gz
+  - from: release/${version}/storyfabric-server-${version}.tar.gz
     to: server-bundle.tar.gz
 files:
   - out/**

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import { exportWorkspaceArchive, importWorkspaceArchive } from '../archive'
 import { MemoryFileStore } from '../../storage/fileStore'
+import { purgeTrashEntry } from '../trash'
 
 async function zipBytes(files: Record<string, string>): Promise<Uint8Array> {
   const zip = new JSZip()
@@ -23,7 +24,7 @@ describe('workspace archive', () => {
     expect(await target.readText('characters/林晚.md')).toBe('# 林晚')
   })
 
-  it('keeps portable runtime data but excludes a derived index', async () => {
+  it('keeps only the portable layout runtime file and excludes other runtime data', async () => {
     const source = new MemoryFileStore()
     await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '测试项目' }))
     await source.writeText('.storyfabric/layout.json', JSON.stringify({ char_1: { x: 1, y: 2 } }))
@@ -36,9 +37,31 @@ describe('workspace archive', () => {
     await importWorkspaceArchive(target, archive.bytes)
 
     expect(await target.readText('.storyfabric/layout.json')).not.toBeNull()
-    expect(await target.readText('.storyfabric/sessions/sess_1.json')).not.toBeNull()
-    expect(await target.readText('.storyfabric/trash/index.json')).not.toBeNull()
+    expect(await target.readText('.storyfabric/sessions/sess_1.json')).toBeNull()
+    expect(await target.readText('.storyfabric/trash/index.json')).toBeNull()
     expect(await target.readText('.storyfabric/index.json')).toBeNull()
+  })
+
+  it('rejects imported trash and arbitrary runtime files before writing', async () => {
+    const target = new MemoryFileStore()
+    const bytes = await zipBytes({
+      'storyfabric.json': JSON.stringify({ app: 'storyfabric', version: 2, name: '测试' }),
+      '.storyfabric/trash/index.json': '[]'
+    })
+
+    await expect(importWorkspaceArchive(target, bytes)).rejects.toThrow('.storyfabric/trash/index.json')
+    expect(await target.listFiles('')).toEqual([])
+  })
+
+  it('ignores a malformed trash entry whose empty path could otherwise target the workspace root', async () => {
+    const target = new MemoryFileStore()
+    await target.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '安全项目' }))
+    await target.writeText('.storyfabric/trash/index.json', JSON.stringify([{
+      id: 'bad', kind: 'note', originalPath: 'notes/bad.md', trashPath: '', deletedAt: 1, title: '恶意条目'
+    }]))
+
+    await purgeTrashEntry(target, 'bad')
+    expect(await target.readText('storyfabric.json')).toContain('安全项目')
   })
 
   it('refuses to import into an existing workspace without changing it', async () => {

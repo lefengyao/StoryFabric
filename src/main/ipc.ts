@@ -42,6 +42,7 @@ import { exportWorkspaceArchive } from '../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
 import { genId } from '../core/workspace/entityStore'
 import { IPC } from '../shared/ipc'
+import { serializeWorkspace } from './services/workspaceRuntime'
 
 export interface AppContext {
   win: () => BrowserWindow | null
@@ -126,38 +127,39 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))
   ipcMain.handle(IPC.SearchProject, async (_e, query: string) => searchProject(requireRoot(), query))
   ipcMain.handle(IPC.GetGraphLayout, async () => readGraphLayout(requireRoot()))
-  ipcMain.handle(IPC.SaveGraphLayout, async (_e, layout) => writeGraphLayout(requireRoot(), layout))
+  ipcMain.handle(IPC.SaveGraphLayout, async (_e, layout) => { const root = requireRoot(); return serializeWorkspace(root, () => writeGraphLayout(root, layout)) })
 
   /* ---------- 实体 ---------- */
-  ipcMain.handle(IPC.SaveCharacter, async (_e, doc) => saveCharacter(requireRoot(), doc))
-  ipcMain.handle(IPC.DeleteCharacter, async (_e, id: string) => deleteCharacter(requireRoot(), id))
-  ipcMain.handle(IPC.SaveRelationships, async (_e, list) => saveRelationships(requireRoot(), list))
-  ipcMain.handle(IPC.SaveOutlineDoc, async (_e, doc) => saveOutlineDoc(requireRoot(), doc))
-  ipcMain.handle(IPC.DeleteOutlineDoc, async (_e, id: string) => deleteOutlineDoc(requireRoot(), id))
-  ipcMain.handle(IPC.SaveEvent, async (_e, doc) => saveEvent(requireRoot(), doc))
-  ipcMain.handle(IPC.DeleteEvent, async (_e, id: string) => deleteEvent(requireRoot(), id))
+  ipcMain.handle(IPC.SaveCharacter, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveCharacter(root, doc)) })
+  ipcMain.handle(IPC.DeleteCharacter, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteCharacter(root, id)) })
+  ipcMain.handle(IPC.SaveRelationships, async (_e, list) => { const root = requireRoot(); return serializeWorkspace(root, () => saveRelationships(root, list)) })
+  ipcMain.handle(IPC.SaveOutlineDoc, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveOutlineDoc(root, doc)) })
+  ipcMain.handle(IPC.DeleteOutlineDoc, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteOutlineDoc(root, id)) })
+  ipcMain.handle(IPC.SaveEvent, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveEvent(root, doc)) })
+  ipcMain.handle(IPC.DeleteEvent, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteEvent(root, id)) })
   ipcMain.handle(IPC.SaveChapter, async (_e, doc) => {
-    const saved = await saveChapter(requireRoot(), doc)
+    const root = requireRoot()
+    const saved = await serializeWorkspace(root, () => saveChapter(root, doc))
     const { content: _c, ...meta } = saved
     void _c
     return meta
   })
-  ipcMain.handle(IPC.DeleteChapter, async (_e, id: string) => deleteChapter(requireRoot(), id))
+  ipcMain.handle(IPC.DeleteChapter, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteChapter(root, id)) })
   ipcMain.handle(IPC.ListVolumes, async () => listVolumes(requireRoot()))
-  ipcMain.handle(IPC.SaveVolume, async (_e, input) => saveVolume(requireRoot(), input))
-  ipcMain.handle(IPC.DeleteVolume, async (_e, id: string) => deleteVolume(requireRoot(), id))
-  ipcMain.handle(IPC.MoveChapter, async (_e, id: string, target) => moveChapter(requireRoot(), id, target))
+  ipcMain.handle(IPC.SaveVolume, async (_e, input) => { const root = requireRoot(); return serializeWorkspace(root, () => saveVolume(root, input)) })
+  ipcMain.handle(IPC.DeleteVolume, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteVolume(root, id)) })
+  ipcMain.handle(IPC.MoveChapter, async (_e, id: string, target) => { const root = requireRoot(); return serializeWorkspace(root, () => moveChapter(root, id, target)) })
   ipcMain.handle(IPC.ListTrash, async () => listTrash(requireRoot()))
-  ipcMain.handle(IPC.RestoreTrash, async (_e, id: string) => restoreTrash(requireRoot(), id))
-  ipcMain.handle(IPC.PurgeTrash, async (_e, id: string) => purgeTrash(requireRoot(), id))
+  ipcMain.handle(IPC.RestoreTrash, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => restoreTrash(root, id)) })
+  ipcMain.handle(IPC.PurgeTrash, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => purgeTrash(root, id)) })
   ipcMain.handle(IPC.ListSettingsDocs, async () => listSettings(requireRoot()))
   ipcMain.handle(IPC.GetSetting, async (_e, id: string) => getSetting(requireRoot(), id))
-  ipcMain.handle(IPC.SaveSetting, async (_e, input) => saveSetting(requireRoot(), input))
-  ipcMain.handle(IPC.DeleteSetting, async (_e, id: string) => deleteSetting(requireRoot(), id))
+  ipcMain.handle(IPC.SaveSetting, async (_e, input) => { const root = requireRoot(); return serializeWorkspace(root, () => saveSetting(root, input)) })
+  ipcMain.handle(IPC.DeleteSetting, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteSetting(root, id)) })
   ipcMain.handle(IPC.ListNotes, async () => listNotes(requireRoot()))
   ipcMain.handle(IPC.GetNote, async (_e, id: string) => getNote(requireRoot(), id))
-  ipcMain.handle(IPC.SaveNote, async (_e, input) => saveNote(requireRoot(), input))
-  ipcMain.handle(IPC.DeleteNote, async (_e, id: string) => deleteNote(requireRoot(), id))
+  ipcMain.handle(IPC.SaveNote, async (_e, input) => { const root = requireRoot(); return serializeWorkspace(root, () => saveNote(root, input)) })
+  ipcMain.handle(IPC.DeleteNote, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteNote(root, id)) })
 
   /* ---------- 设置与供应商 ---------- */
   ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.load()))
@@ -171,9 +173,8 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.DeleteProvider, async (_e, id: string): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.deleteProvider(id)))
 
   ipcMain.handle(IPC.FetchModels, async (_e, input: FetchModelsInput): Promise<string[]> => {
-    let apiKey = input.apiKey ?? ''
-    if (!apiKey && input.providerId) apiKey = await ctx.settings.apiKeyOf(input.providerId)
-    return fetchProviderModels(input.protocol, input.baseUrl, apiKey)
+    const provider = await ctx.settings.providerInput(input)
+    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   })
 
   /* ---------- 智能体 ---------- */

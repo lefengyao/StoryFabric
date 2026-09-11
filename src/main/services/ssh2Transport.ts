@@ -105,7 +105,22 @@ export class Ssh2Transport implements SshTransport {
     return new Promise((resolve, reject) => {
       this.client.sftp((err, sftp) => {
         if (err) return reject(err)
-        sftp.fastPut(localPath, remotePath, (putErr) => (putErr ? reject(putErr) : resolve()))
+        let closed = false
+        const closeSftp = (): void => {
+          if (closed) return
+          closed = true
+          sftp.end()
+        }
+        try {
+          sftp.fastPut(localPath, remotePath, (putErr) => {
+            closeSftp()
+            if (putErr) reject(putErr)
+            else resolve()
+          })
+        } catch (putErr) {
+          closeSftp()
+          reject(putErr)
+        }
       })
     })
   }

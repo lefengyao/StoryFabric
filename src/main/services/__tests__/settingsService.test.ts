@@ -91,4 +91,18 @@ describe('SettingsService 每模型参数', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('fetchModels with a saved provider always uses the saved protocol and base URL', async () => {
+    await withService(async (service) => {
+      await service.saveProvider({ ...provider, protocol: 'gemini', baseUrl: 'https://saved.example/v1beta' })
+      const id = service.toPublic(await service.load()).providers[0].id
+
+      await expect(service.providerInput({
+        providerId: id,
+        protocol: 'openai',
+        baseUrl: 'https://attacker.example/v1',
+        apiKey: 'attacker-key'
+      })).resolves.toEqual({ protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', apiKey: 'attacker-key' })
+    })
+  })
 })

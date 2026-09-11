@@ -1,5 +1,6 @@
 /** 部署目标持久化（deploy-targets.json，密码经 safeStorage 加密）。 */
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import type { DeployTargetInput, DeployTargetPublic, DeployTargetStored } from '../../shared/types'
 import { decryptApiKey, encryptApiKey } from './settingsService'
@@ -26,7 +27,15 @@ export class DeployTargetsStore {
 
   private async saveRaw(list: DeployTargetStored[]): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true })
-    await writeFile(this.file, JSON.stringify(list, null, 2), 'utf-8')
+    const temp = `${this.file}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temp, JSON.stringify(list, null, 2), { encoding: 'utf-8', mode: 0o600 })
+      await chmod(temp, 0o600).catch(() => undefined)
+      await rename(temp, this.file)
+      await chmod(this.file, 0o600).catch(() => undefined)
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined)
+    }
   }
 
   list(): Promise<DeployTargetStored[]> {

@@ -1,6 +1,7 @@
 /** Electron 工作区服务适配层：路径签名保留给 IPC，共享规则由 core 维护。 */
 import { promises as fs } from 'fs'
 import { basename, join, relative, resolve, sep } from 'path'
+import { workspaceStore } from './workspaceRuntime'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { importWorkspaceArchive } from '../../core/workspace/archive'
 import {
@@ -20,7 +21,7 @@ import type { ChapterBox, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from
 import { listTrash as coreListTrash, restoreFromTrash as coreRestoreTrash, purgeTrashEntry as corePurgeTrash } from '../../core/workspace/trash'
 
 function storeOf(root: string): NodeFileStore {
-  return new NodeFileStore(root)
+  return workspaceStore(root)
 }
 
 export function validateWorkspace(root: string): Promise<{ ok: boolean; reason?: string }> {

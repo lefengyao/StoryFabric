@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentOutlineWrite } from '../writeValidation'
+import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from '../writeValidation'
 
 describe('agent chapter placement validation', () => {
+  it.each([
+    ['character', validateAgentCharacterWrite],
+    ['event', validateAgentEventWrite],
+    ['relationship', validateAgentRelationshipWrite],
+    ['setting', validateAgentSettingWrite],
+    ['note', validateAgentNoteWrite]
+  ])('rejects non-object %s payloads', (_label, validate) => {
+    expect(() => validate('str')).toThrow('必须是对象')
+    expect(() => validate([])).toThrow('必须是对象')
+    expect(() => validate(null)).toThrow('必须是对象')
+  })
+
   it('rejects a chapter write without an explicit box', () => {
     expect(() => validateAgentChapterWrite({ title: '第二章', status: 'draft' })).toThrow('box')
   })

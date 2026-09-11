@@ -33,6 +33,7 @@ function safeEntry(path: string): string | null {
 
 function isPortablePath(path: string): boolean {
   if (ROOT_FILES.has(path)) return true
+  if (path.startsWith('.storyfabric/')) return path === '.storyfabric/layout.json'
   const [root] = path.split('/', 1)
   if (!root || !ROOT_DIRS.has(root)) return false
   if (DERIVED_PATHS.has(path) || path.startsWith('.storyfabric/tmp/')) return false

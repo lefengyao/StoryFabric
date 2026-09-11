@@ -162,6 +162,8 @@ export interface TrashEntry {
   title: string
   /** 回收站文件的实际位置。缺失时按 kind/id 推导。 */
   trashPath?: string
+  /** 删除人物时一并保存的关系边，恢复人物时回填。 */
+  relatedRelationships?: Relationship[]
 }
 
 /* ---------------- 应用设置 ---------------- */
@@ -255,6 +257,8 @@ export interface ProviderPublic {
   models: string[]
   hasKey: boolean
   keyPreview?: string
+  /** 系统密钥不可用时标记为明文降级，提示用户风险。 */
+  keyStorage?: 'encrypted' | 'plain' | 'none'
   modelSettings: Record<string, ModelSettings>
 }
 

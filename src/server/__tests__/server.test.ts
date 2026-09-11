@@ -133,7 +133,7 @@ describe('linux web server', () => {
       expect((await fetch(`${base}/api/workspaces`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
-      await rm(root, { recursive: true, force: true })
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     }
   })
 
@@ -167,6 +167,39 @@ describe('linux web server', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects encoded traversal attempts against the static root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-static-traversal-'))
+    const staticDir = join(root, 'web')
+    await mkdir(staticDir)
+    await writeFile(join(root, 'settings.json'), '{"apiKeyEncrypted":"must-not-leak"}')
+    await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>StoryFabric</title>')
+    const server = createStoryFabricServer({ accessKey: 'static-traversal-key', dataDir: join(root, 'data'), staticDir })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      const base = `http://127.0.0.1:${address.port}`
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: 'static-traversal-key' })
+      })
+      const cookie = login.headers.get('set-cookie')?.split(';', 1)[0] ?? ''
+      expect((await fetch(`${base}/api/workspaces`, { headers: { cookie } })).status).toBe(200)
+      for (const path of ['/%2e%2e%2fsettings.json', '/..%2fsettings.json']) {
+        const response = await fetch(`${base}${path}`)
+        expect(response.status).toBe(403)
+        expect(await response.text()).not.toContain('must-not-leak')
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     }
   })
 

@@ -1,6 +1,7 @@
 /** 主进程入口：窗口生命周期 + 服务装配 */
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'node:url'
 import { AgentService } from './agent/agentLoop'
 import { registerIpc, type AppContext } from './ipc'
 import { IPC } from '../shared/ipc'
@@ -10,6 +11,7 @@ import { UsageService } from '../core/usage/usageService'
 import { DeployService } from './services/deployService'
 import { DeployTargetsStore } from './services/deployTargetsStore'
 import { Ssh2Transport } from './services/ssh2Transport'
+import { isAllowedExternalUrl, isAllowedRendererNavigation } from './navigationPolicy'
 
 function resolveIconPath(): string {
   // 开发态取项目 resources/；打包后 extraResources 会把 icon.ico 放到 resources 根目录
@@ -17,13 +19,15 @@ function resolveIconPath(): string {
 }
 
 function resolveServerBundlePath(): string {
-  // 打包后由 extraResources 放到 resources 根目录；开发态用 release/ 里生成的包，便于本地联调
+  // 打包后由 extraResources 放到 resources 根目录；开发态用当前版本目录里的包，便于本地联调
   return app.isPackaged
     ? join(process.resourcesPath, 'server-bundle.tar.gz')
-    : join(app.getAppPath(), 'release', `storyfabric-server-${app.getVersion()}.tar.gz`)
+    : join(app.getAppPath(), 'release', app.getVersion(), `storyfabric-server-${app.getVersion()}.tar.gz`)
 }
 
 function createWindow(): BrowserWindow {
+  const rendererFile = join(__dirname, '../renderer/index.html')
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(rendererFile).toString()
   const win = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -43,15 +47,21 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => win.show())
 
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedRendererNavigation(url, rendererUrl)) return
+    event.preventDefault()
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url)
+  })
+
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
+    void win.loadFile(rendererFile)
   }
   return win
 }

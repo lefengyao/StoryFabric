@@ -9,19 +9,19 @@
 
 ### P0 阻塞（发布前必须修）
 
-- [ ] **P0-1 恶意/损坏的回收站索引可删除整个工作区**（已实测复现）
+- [x] **P0-1 恶意/损坏的回收站索引可删除整个工作区**（已修复并回归验证）
   - 位置：`core/storage/fileStore.ts:19-25`、`core/storage/nodeFileStore.ts:12-21,81-83`、`core/workspace/trash.ts:6-8,55-61`、`core/workspace/archive.ts:16-18,34-40`
   - 修复：①`normalizeRelativePath` 拒绝 `''`/`'.'`；②`NodeFileStore.remove` 拒绝工作区根；③读 trash 索引时校验（`trashPath` 必须以 `.storyfabric/trash/` 开头、`originalPath` 必须是可移植路径）；④归档导入拒绝 `.storyfabric/**`（仅放行 `layout.json`）。
   - 验收：新测试 —— 含 `trashPath:""` 的索引条目调用 `purgeTrashEntry` 后工作区文件仍在；含 `.storyfabric/trash/index.json` 的 ZIP 被拒绝导入。
-- [ ] **P0-2 窗口无导航守卫，Markdown 链接可把完整 IPC 桥交给远程页面**（渲染结果已实测）
+- [x] **P0-2 窗口无导航守卫，Markdown 链接可把完整 IPC 桥交给远程页面**（已修复并回归验证）
   - 位置：`main/index.ts:44-49`、`renderer/src/components/markdown/Markdown.tsx:8`、`preload/index.ts:16,96`
   - 修复：①`will-navigate` 只允许自身 origin，其余 `shell.openExternal`；②Markdown 链接加 `target="_blank" rel="noopener noreferrer"`；③`setWindowOpenHandler` 校验协议白名单。
   - 验收：测试断言渲染出的链接带 `target`/`rel`；手工点一个外链确认在系统浏览器打开而非窗口内跳转。
-- [ ] **P0-3 `fetchModels` 把已存密钥发往调用方指定的 baseUrl**（已实测：`Authorization: Bearer <密钥>` 发到攻击者 URL）
+- [x] **P0-3 `fetchModels` 把已存密钥发往调用方指定的 baseUrl**（已修复并回归验证）
   - 位置：`main/ipc.ts:164-168`、`server/server.ts:287-291`、`core/llm/openaiCompatible.ts:126-129`、`gemini.ts:136-139`、`anthropic.ts:195`
   - 修复：传了 `providerId` 时从存储读取 `protocol`/`baseUrl`，忽略入参；仅新建供应商（无 id）时才用自定义地址。
   - 验收：新测试 —— 传 `providerId` + 攻击者 `baseUrl` 时，请求实际发往存储里的地址。
-- [ ] **P0-4 智能体无法向正文箱写章节（`volumeId` 无处可查）**（已实测：全部读工具无 `vol_` 泄漏）
+- [x] **P0-4 智能体无法向正文箱写章节（`volumeId` 无处可查）**（已修复并回归验证）
   - 位置：`core/tools/registry.ts:20-48`、`core/tools/writeValidation.ts:23-25,33-35`、`core/agent/prompts.ts:10-11`
   - 修复：新增 `list_volumes` 读工具（两套注册表 + 提示词同步），或在 `list_chapters` 结果中始终附带卷列表。
   - 验收：`registrySmoke.test.ts` 增加「新工作区里模型能拿到 volumeId 并成功写入正文箱」用例。
@@ -30,29 +30,31 @@
 
 **智能体工具链**
 
-- [ ] **P1-1 两套注册表 25/27 个工具描述与 schema 漂移**：`core/tools/registry.ts:20-48` vs `main/tools/registry.ts:69-301`；`registryParity.test.ts:14` 只锁 `delete_note`。修复：以 core 为唯一源、main 薄封装，parity 测试遍历全部 27 个工具。
-- [ ] **P1-2 待确认变更 `apply()` 抛错会终止整轮对话**：`core/agent/agentLoop.ts:32`、`main/agent/agentLoop.ts:158-160`；`apply` 恒返回 `{ok:true}`。修复：包 try/catch，失败时回注「写入失败」并让模型重试。
-- [ ] **P1-3 桌面端 `move_chapter` 不校验目标卷**：`main/tools/registry.ts:655-665`（core 在 `:121` 校验）。修复：补同样的 `listVolumes` 检查。
-- [ ] **P1-4 core 写工具不校验 payload**：`core/tools/registry.ts:92-109`，`{"character":"str"}` 会生成「未命名人物」。修复：把 main 的必填校验下沉到共享 `writeValidation.ts` 并两端调用。
-- [ ] **P1-5 `restore_from_trash` 的 id 无法获得**：27 个工具无列回收站工具。修复：新增 `list_trash` 读工具。
-- [ ] **P1-6 `save_relationship` 丢失更新**：`core/tools/registry.ts:127` / `main/tools/registry.ts:587-608` 在预览时抓取整份列表。修复：apply 时重新读取并按 id 追加。
-- [ ] **P1-7 `get_chapter_context` 数值参数未校验**：`core/retrieval/contextBuilder.ts:27-28`，传 `"abc"` 时 `ok:true` 但正文为空、`returnedChars:NaN`。修复：`Number.isFinite` 校验/夹取。
+- [x] **P1-1 两套注册表工具描述与 schema 漂移**：已以 core 契约为唯一导出源，parity 测试遍历全部 29 个工具。
+- [x] **P1-2 待确认变更 `apply()` 抛错会终止整轮对话**：core/main 均捕获写入异常并回注「写入失败」，循环继续。
+- [x] **P1-3 桌面端 `move_chapter` 不校验目标卷**：已在确认前校验 `volumeId`，并补桌面回归测试。
+- [x] **P1-4 core 写工具不校验 payload**：必填 payload 校验已下沉到共享 `writeValidation.ts` 并由两端调用。
+- [x] **P1-5 `restore_from_trash` 的 id 无法获得**：已新增 `list_trash` 读工具并同步提示词/两端执行。
+- [x] **P1-6 `save_relationship` 丢失更新**：apply 时重新读取关系列表并按 id 追加。
+- [x] **P1-7 `get_chapter_context` 数值参数未校验**：已拒绝非有限值并限制参数范围。
 
 **数据完整性**
 
-- [ ] **P1-8 新建人物忽略 `tier`**（已实测）：`core/workspace/entityStore.ts:123-124` 新建分支漏了 `tier`，所有人默认落 `characters/secondary/`。修复：新文档分支补 `tier`。
-- [ ] **P1-9 未知字段被丢弃、无前向兼容**：`entityStore.ts:110,187,225,273,330,375`、`migration.ts:126-132`。修复：序列化时以原始 map 为底再覆盖已知键；`version > 当前` 时拒绝或警告。
-- [ ] **P1-10 `restoreFromTrash` 按索引搬运任意文件**：`trash.ts:6-8,44-61`（与 P0-1 同源）。修复随 P0-1 一并处理。
-- [ ] **P1-11 桌面端无按工作区的写队列**：`main/ipc.ts`、`main/services/entityStore.ts:57`、`core/storage/nodeFileStore.ts:8`；并发写会 EPERM / 丢更新 / 章节 `order` 重复。修复：在 `main/ipc.ts` 加与 `server.ts:213-217` 同构的串行队列，并复用单个 `NodeFileStore`。
-- [ ] **P1-12 删除人物会丢关系且恢复不还原**：`entityStore.ts:145`。修复：把被删边存入回收站条目，恢复时回填。
+- [x] **P1-8 新建人物忽略 `tier`**：新建分支已保留 `tier` 并按主/次角色目录落盘。
+- [x] **P1-9 未知字段被丢弃、无前向兼容**：实体序列化保留未知字段，未来工作区版本会拒绝加载。
+- [x] **P1-10 `restoreFromTrash` 按索引搬运任意文件**：已随回收站路径校验一并处理。
+- [x] **P1-11 桌面端无按工作区的写队列**：已加入按工作区串行队列并复用 `NodeFileStore`。
+- [x] **P1-12 删除人物会丢关系且恢复不还原**：回收站条目保存关系边，恢复时回填。
 
 **架构与安全**
 
-- [ ] **P1-13 两套 agent 循环漂移**：`@` 附件只在桌面端注入、流式期间改会话名被覆盖、中止在 web/Android 被标红、标题规则不同（`core/agent/agentLoop.ts:25,31,35` vs `main/agent/agentLoop.ts:88-91,94,123,180,184-189`）。修复：以 `CoreAgentService` 为唯一循环，main 只做适配。
-- [ ] **P1-14 Android `keyPreview` 泄漏短密钥**：`renderer/src/platform/androidApi.ts:263`，≤8 位密钥会整把写进明文 Preferences 并显示。修复：与桌面/服务端一致的掩码（短密钥只显示首 2 位 + `****`）。
-- [ ] **P1-15 渲染层类型检查能看到 `@types/node`**：`tsconfig.web.json` 无 `types`。修复：加 `"types": []` 或 `["vite/client"]`，并清理 `core/storage/index.ts:2` 对 Node 专属模块的再导出。
-- [ ] **P1-16 服务端静态文件路径守卫零测试覆盖**：`server/server.ts:142`（守卫在鉴权前执行；关掉后能读出 `apiKeyEncrypted`）。修复：`server.test.ts` 增加 `/%2e%2e%2fsettings.json`、`/..%2fsettings.json` → 403 用例。
-- [ ] **P1-17 密钥降级明文且文件无 0600**：`main/services/settingsService.ts:53-61,109-112`、`main/services/deployTargetsStore.ts:27-30`。修复：写入时 `mode: 0o600` + `chmod`，并在 UI 标出「明文降级」。
+- [x] **P1-13 两套 agent 循环漂移**：已以 `CoreAgentService` 为唯一循环，main 仅适配设置、存储和工具路径。
+- [x] **P1-14 Android `keyPreview` 泄漏短密钥**：已统一短密钥掩码为首 2 位 + `****`，并补共享单测。
+- [x] **P1-15 渲染层类型检查能看到 `@types/node`**：web tsconfig 已限制类型入口，storage index 不再导出 Node 专属实现。
+- [x] **P1-16 服务端静态文件路径守卫零测试覆盖**：已补两种编码遍历路径的 403 回归测试。
+- [x] **P1-17 密钥降级明文且文件无 0600**：设置/部署目标采用临时文件原子写入、0600 权限，并在 UI 标出明文降级。
+
+本轮验证：`npm test -- --run`（58 个测试文件、334 个测试）与 `npx tsc -b --pretty false` 均通过；P2/待排期项未纳入本轮范围。
 
 ### P2 轻微/建议
 

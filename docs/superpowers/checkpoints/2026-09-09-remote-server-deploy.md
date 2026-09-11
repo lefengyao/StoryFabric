@@ -79,3 +79,47 @@ files_modified:
 - 只支持密码登录；非 root 时要求 SSH 密码等于 sudo 密码。
 - 卸载只删容器/镜像/staging，`<安装目录>/data` 一律保留。
 - `hostVerifier` 的 pin 逻辑有纯函数单测与路径审查，但没有真实服务器级别的自动化测试。
+
+### 新增断点记录（2026-09-10）
+
+#### 用户反馈的远程推送现象
+
+- 远程推送服务看起来已经成功执行了一部分流程。
+- 用户在服务器上看到本地出现了名为 `storyfabric` 的容器/镜像，体积约 300MB 以上。
+- 但桌面端客户端似乎停留在「创建容器」附近，没有继续完成安装流程。
+- 用户怀疑客户端没有收到「容器已经上传完毕」或部署完成相关信号，因此界面一直停滞不动。
+
+#### 当前处理状态
+
+- 本次只记录现象，不在本次工作中确认具体根因或修改部署逻辑。
+- 该问题暂记为远程服务器部署的真实环境走查阻塞项，待下一次工作继续排查。
+
+#### 下次排查入口
+
+- 记录客户端实际停留的部署步骤、最后一条输出和是否出现错误信息。
+- 对照服务器上的 `storyfabric` 容器状态、退出码、健康检查状态及容器日志。
+- 核对客户端部署请求是否已经返回，以及远程 SSH/SFTP 命令是否正常结束。
+
+### 续接处理记录（2026-09-10）
+
+#### 根因
+
+- 只读检查真实服务器确认：SSH 可达，`storyfabric:0.1.0` 镜像已生成（约 330 MB），但没有 `storyfabric` 容器，8787 端口未监听，密钥文件也不存在。流水线并不是缺少“上传完成”信号，而是在上传后的 Docker 构建/SSH 会话阶段没有稳定进入启动步骤。
+- `Ssh2Transport.upload()` 创建 SFTP 通道并执行 `fastPut()` 后没有调用 `sftp.end()`，该通道会一直占用同一 SSH 连接的 session。远端 Docker BuildKit 日志同时出现 `session healthcheck failed fatally ... only one connection allowed`，与残留 SFTP session 导致 Docker 构建会话受限相吻合。
+
+#### 修复
+
+- `src/main/services/ssh2Transport.ts`：上传成功、上传失败和同步抛错三条路径都关闭 SFTP 通道，并用一次性保护避免重复关闭。
+- `src/main/services/__tests__/ssh2Transport.test.ts`：新增回归测试，先在旧代码上验证失败，再验证修复后上传完成会调用 `sftp.end()`。
+
+#### 验证
+
+- `npm test -- --run`：58 文件 / 335 用例通过。
+- `npx tsc -b --pretty false`：exit 0。
+- `npm run build`、`npm run server:build:all`、`npm run dist:win`：均 exit 0。
+- 发行包核验：`app.asar` 含 `sftp.end`、`fastPut`、`Ssh2Transport` 与 `deploy:install`；桌面安装包、便携包和 `server-bundle.tar.gz` 均已重新生成。
+
+#### 待用户复验
+
+- 需要使用新包重新执行一次真实部署，确认上传后 Docker 构建能返回、容器进入健康状态并写入 `installedVersion/lastStatus`。本次未执行重新部署、重启或清理远端资源。
+- 若仍失败，应保留客户端最后一条步骤输出与服务器 `docker ps -a` / `docker logs storyfabric`，再判断是否还有独立的 Docker BuildKit 环境问题。

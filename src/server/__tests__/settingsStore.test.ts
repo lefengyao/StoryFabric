@@ -24,4 +24,19 @@ describe('server settings store', () => {
     await expect(store.apiKeyOf((await store.load()).providers[0].id)).resolves.toBe('sk-secret-value')
     await expect(new ServerSettingsStore(path, 'different-key').apiKeyOf((await store.load()).providers[0].id)).resolves.toBe('')
   })
+
+  it('fetchModels with a saved provider ignores caller protocol and base URL', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-fetch-'))
+    roots.push(root)
+    const store = new ServerSettingsStore(join(root, 'settings.json'), 'server-access-key')
+    await store.saveProvider({ name: '已保存', protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', models: [], apiKey: 'sk-saved' })
+    const id = (await store.load()).providers[0].id
+
+    await expect(store.providerInput({
+      providerId: id,
+      protocol: 'openai',
+      baseUrl: 'https://attacker.example/v1',
+      apiKey: 'sk-attacker'
+    })).resolves.toEqual({ protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', apiKey: 'sk-attacker' })
+  })
 })

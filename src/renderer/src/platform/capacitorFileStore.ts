@@ -5,8 +5,8 @@ import { normalizeRelativePath, type FileStore } from '../../../core/storage/fil
 export class CapacitorFileStore implements FileStore {
   constructor(private readonly root = '') {}
 
-  private path(path: string): string {
-    const clean = normalizeRelativePath(path)
+  private path(path: string, allowRoot = false): string {
+    const clean = normalizeRelativePath(path, allowRoot)
     return this.root ? (clean ? `${this.root}/${clean}` : this.root) : clean
   }
 
@@ -20,7 +20,7 @@ export class CapacitorFileStore implements FileStore {
   }
 
   async ensureDir(path: string): Promise<void> {
-    await Filesystem.mkdir({ path: this.path(path), directory: Directory.Data, recursive: true })
+    await Filesystem.mkdir({ path: this.path(path, true), directory: Directory.Data, recursive: true })
   }
 
   async readText(path: string): Promise<string | null> {
@@ -73,7 +73,7 @@ export class CapacitorFileStore implements FileStore {
 
   async listFiles(dir: string, extension?: string): Promise<string[]> {
     try {
-      const result = await Filesystem.readdir({ path: this.path(dir), directory: Directory.Data })
+      const result = await Filesystem.readdir({ path: this.path(dir, true), directory: Directory.Data })
       return result.files
         .filter((entry) => entry.type === 'file' || !entry.type)
         .map((entry) => entry.name)
@@ -86,7 +86,7 @@ export class CapacitorFileStore implements FileStore {
 
   async listDirs(dir: string): Promise<string[]> {
     try {
-      const result = await Filesystem.readdir({ path: this.path(dir), directory: Directory.Data })
+      const result = await Filesystem.readdir({ path: this.path(dir, true), directory: Directory.Data })
       return result.files
         .filter((entry) => entry.type === 'directory')
         .map((entry) => entry.name)

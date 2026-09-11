@@ -148,7 +148,7 @@ export function SettingsPage(): React.ReactElement {
                 <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h2 className="text-sm font-semibold">模型供应商</h2>
-                    <p className="mt-0.5 text-xs leading-5 text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥经系统级加密存储在本机</p>
+                    <p className="mt-0.5 text-xs leading-5 text-muted">支持 OpenAI 兼容、Anthropic、Gemini 三种协议；密钥优先使用系统级加密存储</p>
                   </div>
                   <Button size="sm" variant="primary" onClick={openCreate} className="shrink-0 whitespace-nowrap px-2.5 sm:px-3">
                     <Plus size={13} /> <span className="hidden sm:inline">添加供应商</span><span className="sm:hidden">添加</span>
@@ -168,7 +168,8 @@ export function SettingsPage(): React.ReactElement {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.name}</span>
                           <Badge tone="accent">{PROTOCOL_LABEL[p.protocol]}</Badge>
-                          {p.hasKey ? <Badge tone="ok">Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
+                          {p.hasKey ? <Badge tone={p.keyStorage === 'plain' ? 'danger' : 'ok'}>Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
+                          {p.keyStorage === 'plain' && <Badge tone="danger">明文降级</Badge>}
                         </div>
                         <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
                       </div>

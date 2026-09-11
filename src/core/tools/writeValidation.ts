@@ -35,6 +35,29 @@ export function validateAgentChapterMove(value: unknown): void {
   }
 }
 
+export function validateAgentCharacterWrite(value: unknown): void {
+  asRecord(value, 'character')
+}
+
+export function validateAgentEventWrite(value: unknown): void {
+  asRecord(value, 'event')
+}
+
+export function validateAgentRelationshipWrite(value: unknown): void {
+  const relationship = asRecord(value, 'relationship')
+  if (!nonEmptyString(relationship.fromCharacterId) || !nonEmptyString(relationship.toCharacterId)) {
+    throw new Error('relationship 必须提供 fromCharacterId 和 toCharacterId')
+  }
+}
+
+export function validateAgentSettingWrite(value: unknown): void {
+  asRecord(value, 'setting')
+}
+
+export function validateAgentNoteWrite(value: unknown): void {
+  asRecord(value, 'note')
+}
+
 /**
  * Agent-only outline contract. `kind` is the physical/document destination
  * selector; a chapter outline is always tied to one concrete chapter.

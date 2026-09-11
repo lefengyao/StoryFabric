@@ -114,6 +114,7 @@ async function ensureDefaultVolumes(store: FileStore): Promise<void> {
 export async function migrateWorkspace(store: FileStore): Promise<void> {
   for (const dir of V2_DIRS) await store.ensureDir(dir)
   const meta = readVersion(await store.readText('storyfabric.json'))
+  if (meta.version > CURRENT_WORKSPACE_VERSION) throw new Error(`工作区版本 ${meta.version} 高于当前支持版本 ${CURRENT_WORKSPACE_VERSION}`)
   if (meta.version < 2) {
     await migrateFlatCharacters(store)
     await migrateFlatOutlines(store)

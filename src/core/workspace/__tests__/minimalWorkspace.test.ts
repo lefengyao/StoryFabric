@@ -79,4 +79,12 @@ describe('minimal workspace example', () => {
     expect(summary.settings?.map((item) => item.id).sort()).toEqual(['set_gate', 'set_weather'])
     expect(summary.notes?.[0].id).toBe('note_next')
   })
+
+  it('refuses to silently downgrade a workspace from a newer version', async () => {
+    const store = new MemoryFileStore()
+    await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 999, name: '未来项目', futureField: true }))
+
+    await expect(loadSummary(store, '未来项目', 'fixture://future')).rejects.toThrow('版本')
+    expect(await store.readText('storyfabric.json')).toContain('"version":999')
+  })
 })

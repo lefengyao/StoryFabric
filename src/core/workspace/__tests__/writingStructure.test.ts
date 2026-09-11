@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
-import { deleteChapter, getNote, getSetting, listChapters, listNotes, listSettings, saveChapter, saveNote, saveSetting } from '../entityStore'
+import { deleteChapter, deleteCharacter, getNote, getSetting, listCharacters, listChapters, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveNote, saveRelationships, saveSetting } from '../entityStore'
 import { initializeWorkspace, listVolumes, moveChapter, saveVolume } from '../workspaceService'
 import { listTrash, restoreFromTrash } from '../trash'
 import { stringifyFrontMatter } from '../frontMatter'
@@ -50,5 +50,41 @@ describe('writing structure', () => {
     const chapter = (await listChapters(store))[0]
     expect(chapter.box).toBe('main')
     expect(chapter.volumeId).toBe('vol_default')
+  })
+
+  it('persists a new primary character under the primary tier', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const character = await saveCharacter(store, { name: '主角', tier: 'primary' })
+
+    expect(character.tier).toBe('primary')
+    expect(await store.readText('characters/primary/主角.md')).not.toBeNull()
+    expect(await store.readText('characters/secondary/主角.md')).toBeNull()
+  })
+
+  it('preserves unknown front matter fields when loading and saving an entity', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    await store.writeText('characters/secondary/带扩展字段.md', stringifyFrontMatter('正文', {
+      id: 'char_future', name: '带扩展字段', futureField: { enabled: true }, tier: 'secondary'
+    }))
+
+    await saveCharacter(store, { id: 'char_future', summary: '已更新' })
+    const raw = await store.readText('characters/secondary/带扩展字段.md')
+    expect(raw).toContain('futureField:')
+    expect((await listCharacters(store)).find((item) => item.id === 'char_future')?.name).toBe('带扩展字段')
+  })
+
+  it('restores relationships together with a deleted character', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const from = await saveCharacter(store, { name: '甲' })
+    const to = await saveCharacter(store, { name: '乙' })
+    await saveRelationships(store, [{ id: 'rel_1', fromId: from.id, toId: to.id, type: '同伴', label: '', description: '', directed: false }])
+
+    await deleteCharacter(store, from.id)
+    expect(await loadRelationships(store)).toEqual([])
+    await restoreFromTrash(store, from.id)
+    expect((await loadRelationships(store)).map((item) => item.id)).toContain('rel_1')
   })
 })

@@ -36,8 +36,9 @@ import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { serializeNote } from '../../core/workspace/entityStore'
 import { getChapterContext, lookupTerm } from '../../core/retrieval'
 import { listTrash, listVolumes, moveChapter, restoreTrash } from '../services/workspaceService'
-import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentOutlineWrite } from '../../core/tools/writeValidation'
+import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from '../../core/tools/writeValidation'
 import { AGENT_CHAPTER_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA } from '../../core/tools/writeSchemas'
+import { TOOL_DEFS as CORE_TOOL_DEFS, WRITE_TOOLS as CORE_WRITE_TOOLS } from '../../core/tools/registry'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -66,7 +67,7 @@ function clip(text: string, max = 120): string {
 
 /* ---------------- 工具 Schema ---------------- */
 
-export const TOOL_DEFS: ToolDefJson[] = [
+const LEGACY_TOOL_DEFS: ToolDefJson[] = [
   {
     name: 'list_characters',
     description: '列出工作区全部人物的摘要（id/姓名/别名/身份/标签/简介）。需要某人的完整设定时再用 get_character。',
@@ -124,6 +125,16 @@ export const TOOL_DEFS: ToolDefJson[] = [
   {
     name: 'list_chapters',
     description: '列出章节目录（id/标题/卷/状态/字数），不含正文。',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_volumes',
+    description: '列出正文箱卷列表及其 volumeId；写入正文箱章节前必须先调用。',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_trash',
+    description: '列出回收站资料及其恢复所需 id。',
     parameters: { type: 'object', properties: {} }
   },
   {
@@ -300,7 +311,11 @@ export const TOOL_DEFS: ToolDefJson[] = [
   }
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'move_chapter', 'restore_from_trash'])
+const LEGACY_WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'move_chapter', 'restore_from_trash'])
+
+/** 工具契约唯一由 core 维护；桌面端只保留路径适配的执行实现。 */
+export const TOOL_DEFS = CORE_TOOL_DEFS
+export const WRITE_TOOLS = new Set(CORE_WRITE_TOOLS)
 
 /* ---------------- 读取工具执行 ---------------- */
 
@@ -350,6 +365,12 @@ async function runReadTool(root: string, name: string, a: Record<string, any>): 
     case 'list_chapters': {
       return ok(J(await listChapters(root)))
     }
+     case 'list_volumes': {
+       return ok(J(await listVolumes(root)))
+     }
+     case 'list_trash': {
+       return ok(J(await listTrash(root)))
+     }
     case 'get_chapter': {
       const metas = await listChapters(root)
       const meta =
@@ -585,18 +606,16 @@ async function simulateRelationship(
   const to = chars.find((c) => c.id === input.toCharacterId)
   if (!from || !to) throw new Error(`人物不存在：${!from ? input.fromCharacterId : input.toCharacterId}。请先用 list_characters 获取有效 id。`)
   const oldList = await loadRelationships(root)
-  const newList = [
-    ...oldList,
-    {
-      id: genId('rel'),
-      fromId: input.fromCharacterId,
-      toId: input.toCharacterId,
-      type: input.type ?? '',
-      label: input.label ?? '',
-      description: input.description ?? '',
-      directed: Boolean(input.directed)
-    }
-  ]
+  const relationship = {
+    id: genId('rel'),
+    fromId: input.fromCharacterId,
+    toId: input.toCharacterId,
+    type: input.type ?? '',
+    label: input.label ?? '',
+    description: input.description ?? '',
+    directed: Boolean(input.directed)
+  }
+  const newList = [...oldList, relationship]
   const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id
   return {
     entityId: 'relationships',
@@ -604,7 +623,8 @@ async function simulateRelationship(
     afterText: serializeRelationships(newList, nameOf),
     title: `新增关系：${from.name} → ${to.name}${input.type ? `【${input.type}】` : ''}`,
     commit: async () => {
-      await saveRelationships(root, newList)
+      const latest = await loadRelationships(root)
+      await saveRelationships(root, latest.some((item) => item.id === relationship.id) ? latest : [...latest, relationship])
       return `已保存关系：${from.name} ⇄ ${to.name}`
     }
   }
@@ -620,14 +640,17 @@ export async function executeTool(root: string, name: string, argsJson: string):
     let sim: SimulatedChange
     switch (name) {
       case 'save_character':
+        validateAgentCharacterWrite(a.character)
         if (!a.character?.name && !a.character?.id) throw new Error('character 必须包含 name 或 id')
         sim = await simulateCharacter(root, a.character)
         break
       case 'save_relationship':
+        validateAgentRelationshipWrite(a.relationship)
         if (!a.relationship?.fromCharacterId || !a.relationship?.toCharacterId) throw new Error('relationship 缺少 fromCharacterId / toCharacterId')
         sim = await simulateRelationship(root, a.relationship)
         break
       case 'save_event':
+        validateAgentEventWrite(a.event)
         if (!a.event?.title && !a.event?.id) throw new Error('event 必须包含 title 或 id')
         sim = await simulateEvent(root, a.event)
         break
@@ -642,10 +665,12 @@ export async function executeTool(root: string, name: string, argsJson: string):
         sim = await simulateChapter(root, a.chapter)
         break
       case 'save_setting':
+        validateAgentSettingWrite(a.setting)
         if (!a.setting?.title && !a.setting?.id) throw new Error('setting 必须包含 title 或 id')
         sim = await simulateSetting(root, a.setting)
         break
       case 'save_note':
+        validateAgentNoteWrite(a.note)
         if (!a.note?.title && !a.note?.id) throw new Error('note 必须包含 title 或 id')
         sim = await simulateNote(root, a.note)
         break
@@ -655,9 +680,10 @@ export async function executeTool(root: string, name: string, argsJson: string):
       case 'move_chapter': {
         const chapterId = String(a.chapterId ?? '')
         const targetBox = a.box === 'draft' ? 'draft' : a.box === 'main' ? 'main' : ''
-        if (!chapterId || !targetBox) throw new Error('chapterId 或 box 无效')
-        validateAgentChapterMove({ box: targetBox, volumeId: a.volumeId })
-        const current = (await listChapters(root)).find((chapter) => chapter.id === chapterId)
+         if (!chapterId || !targetBox) throw new Error('chapterId 或 box 无效')
+         validateAgentChapterMove({ box: targetBox, volumeId: a.volumeId })
+         if (targetBox === 'main' && a.volumeId && !(await listVolumes(root)).some((volume) => volume.id === String(a.volumeId))) throw new Error(`未找到目标卷：${a.volumeId}。请先用 list_volumes 获取有效 volumeId`)
+         const current = (await listChapters(root)).find((chapter) => chapter.id === chapterId)
         if (!current) throw new Error(`未找到章节：${chapterId}`)
         const target = { box: targetBox, ...(a.volumeId ? { volumeId: String(a.volumeId) } : {}) } as { box: 'draft' | 'main'; volumeId?: string }
         sim = { entityId: chapterId, title: `移动章节：${current.title}`, beforeText: JSON.stringify(current, null, 2), afterText: JSON.stringify({ ...current, ...target }, null, 2), commit: async () => { await moveChapter(root, chapterId, target); return `已移动章节「${current.title}」` } }

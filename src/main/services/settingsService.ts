@@ -4,6 +4,7 @@
  * 通过注入目录路径保持可测试性；electron 模块在 vitest 环境下安全降级。
  */
 import { promises as fs } from 'fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'path'
 import type {
   AppSettings,
@@ -12,7 +13,9 @@ import type {
   ProviderStored,
   PublicAppSettings
 } from '../../shared/types'
+import type { FetchModelsInput } from '../../shared/api'
 import { pruneModelSettings } from '../../core/llm/modelCatalog'
+import { keyPreview } from '../../shared/keyPreview'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -75,12 +78,6 @@ export function decryptApiKey(stored: string): string {
   }
 }
 
-export function keyPreview(plain: string): string {
-  if (!plain) return ''
-  if (plain.length <= 8) return plain.slice(0, 2) + '****'
-  return `${plain.slice(0, 4)}****${plain.slice(-4)}`
-}
-
 export class SettingsService {
   private queue: Promise<unknown> = Promise.resolve()
 
@@ -108,7 +105,15 @@ export class SettingsService {
 
   private async saveRaw(settings: AppSettings): Promise<void> {
     await fs.mkdir(join(this.filePath, '..'), { recursive: true })
-    await fs.writeFile(this.filePath, JSON.stringify(settings, null, 2), 'utf-8')
+    const temp = `${this.filePath}.${randomUUID()}.tmp`
+    try {
+      await fs.writeFile(temp, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 })
+      await fs.chmod(temp, 0o600).catch(() => undefined)
+      await fs.rename(temp, this.filePath)
+      await fs.chmod(this.filePath, 0o600).catch(() => undefined)
+    } finally {
+      await fs.rm(temp, { force: true }).catch(() => undefined)
+    }
   }
 
   update(patch: Partial<AppSettings>): Promise<AppSettings> {
@@ -180,8 +185,9 @@ export class SettingsService {
             protocol: p.protocol,
             baseUrl: p.baseUrl,
             models: p.models,
-            hasKey: Boolean(plain),
-            keyPreview: keyPreview(plain),
+              hasKey: Boolean(plain),
+              keyPreview: keyPreview(plain),
+              keyStorage: !p.apiKeyEncrypted ? 'none' : p.apiKeyEncrypted.startsWith('plain:') ? 'plain' : 'encrypted',
             modelSettings: p.modelSettings ?? {}
           }
         }
@@ -194,5 +200,17 @@ export class SettingsService {
     const s = await this.load()
     const p = s.providers.find((x) => x.id === providerId)
     return p ? decryptApiKey(p.apiKeyEncrypted) : ''
+  }
+
+  async providerInput(input: FetchModelsInput): Promise<{ protocol: FetchModelsInput['protocol']; baseUrl: string; apiKey: string }> {
+    if (!input.providerId) return { protocol: input.protocol, baseUrl: input.baseUrl, apiKey: input.apiKey ?? '' }
+    const settings = await this.load()
+    const provider = settings.providers.find((item) => item.id === input.providerId)
+    if (!provider) throw new Error('供应商不存在')
+    return {
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      apiKey: input.apiKey ?? decryptApiKey(provider.apiKeyEncrypted)
+    }
   }
 }
