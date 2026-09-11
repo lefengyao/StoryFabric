@@ -34,8 +34,6 @@ secrets/
 .codex/
 .worktrees/
 .zcode/
-.github/
-docs/
 .idea/
 .vscode/*.local.*
 *.code-workspace
