@@ -1,6 +1,6 @@
 import { KeyRound, LockKeyhole } from 'lucide-react'
 import { useState } from 'react'
-import { AppLogo } from '../../components/icons/AppLogo'
+import { BrandMark } from '../../components/icons/BrandMark'
 import { Button, Card, Input } from '../../components/ui/primitives'
 import { loginWeb } from '../../platform/webAuth'
 
@@ -27,7 +27,7 @@ export function WebLoginPage({ onAuthenticated }: { onAuthenticated: () => void 
     <div className="flex h-full items-center justify-center bg-app p-4 sm:p-8">
       <Card className="w-full max-w-sm p-6 shadow-sm">
         <div className="mb-6 text-center">
-          <AppLogo size={52} className="mx-auto mb-4 rounded-[12px]" />
+          <BrandMark variant="flat" size={52} className="mx-auto mb-4 rounded-[12px]" />
           <h1 className="text-xl font-semibold">织章服务器</h1>
           <p className="mt-2 text-sm text-muted">输入访问密钥继续</p>
         </div>

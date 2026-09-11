@@ -1,7 +1,7 @@
 import { BarChart3, BookOpen, Download, FileText, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { AppLogo } from '../components/icons/AppLogo'
+import { BrandMark } from '../components/icons/BrandMark'
 import { useSettings } from '../stores/settingsStore'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
@@ -105,7 +105,7 @@ export function AppLayout(): React.ReactElement {
       {/* 左侧导航栏 */}
       <aside className="mobile-bottom-nav order-2 flex min-h-[76px] w-full shrink-0 items-center justify-start gap-1 overflow-x-auto border-t-2 border-line bg-panel px-1 pb-[max(env(safe-area-inset-bottom),24px)] shadow-[0_-3px_10px_rgba(0,0,0,0.08)] sm:order-none sm:min-h-0 sm:h-full sm:w-16 sm:flex-col sm:justify-start sm:gap-1.5 sm:overflow-visible sm:border-t-0 sm:border-r sm:px-0 sm:py-4 sm:pb-0 sm:shadow-none">
         <NavLink to="/chat" title="织章 · StoryFabric" className="hidden mb-3 h-9 w-9 items-center justify-center rounded-xl shadow-sm sm:flex">
-          <AppLogo size={36} className="rounded-[9px]" />
+          <BrandMark variant="flat" size={36} className="rounded-[9px]" />
         </NavLink>
         {NAV_ITEMS.map(({ to, icon: Icon, label, load }) => (
           <NavLink

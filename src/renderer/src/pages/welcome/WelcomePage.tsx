@@ -1,6 +1,6 @@
 import { BookOpen, FolderOpen, FolderPlus, History, Server } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { AppLogo } from '../../components/icons/AppLogo'
+import { BrandMark } from '../../components/icons/BrandMark'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { DeployWizard } from './DeployWizard'
@@ -359,7 +359,7 @@ export function WelcomePage(): React.ReactElement {
       <div className="w-full max-w-xl">
         <div className="mb-6 text-center sm:mb-10">
           <div className="mx-auto mb-5 flex justify-center">
-            <AppLogo size={64} className="drop-shadow-lg shadow-accent/25 rounded-[14px]" />
+            <BrandMark variant="flat" size={64} className="drop-shadow-lg shadow-accent/25 rounded-[14px]" />
           </div>
           <h1 className="text-2xl font-bold tracking-wide sm:text-3xl">织章</h1>
           <p className="mt-1 text-xs font-medium tracking-[0.16em] text-muted sm:text-sm sm:tracking-[0.2em]">STORYFABRIC</p>
