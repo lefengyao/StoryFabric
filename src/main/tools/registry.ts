@@ -39,6 +39,8 @@ import { listTrash, listVolumes, moveChapter, restoreTrash } from '../services/w
 import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from '../../core/tools/writeValidation'
 import { AGENT_CHAPTER_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA } from '../../core/tools/writeSchemas'
 import { TOOL_DEFS as CORE_TOOL_DEFS, WRITE_TOOLS as CORE_WRITE_TOOLS } from '../../core/tools/registry'
+import { executeProjectDocTool } from '../../core/tools/projectDocTools'
+import { executeDeleteEntityTool } from '../../core/tools/deleteEntityTool'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -635,6 +637,10 @@ async function simulateRelationship(
 export async function executeTool(root: string, name: string, argsJson: string): Promise<ToolOutcome> {
   const a = argsOf(argsJson)
   try {
+    if (name === 'delete_entity') return await executeDeleteEntityTool(new NodeFileStore(root), a)
+    if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc') {
+      return await executeProjectDocTool(new NodeFileStore(root), name, a)
+    }
     if (!WRITE_TOOLS.has(name)) return await runReadTool(root, name, a)
 
     let sim: SimulatedChange

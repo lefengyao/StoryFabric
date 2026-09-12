@@ -5,6 +5,7 @@ import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { splitDelimitedText } from '../../lib/delimitedInput'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { factionColor } from '../../lib/utils'
 import type { CharacterDoc } from '../../../../shared/types'
@@ -14,19 +15,14 @@ function emptyCharacter(): CharacterDoc {
   return { id: '', name: '', aliases: [], role: '', faction: '', gender: '', age: '', tags: [], summary: '', content: '' }
 }
 
-function parseTags(text: string): string[] {
-  return text
-    .split(/[,，、\s]+/)
-    .map((t) => t.trim())
-    .filter(Boolean)
-}
-
 export function CharactersPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
   const refresh = useWorkspace((s) => s.refresh)
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<CharacterDoc | null>(null)
+  const [aliasesText, setAliasesText] = useState('')
+  const [tagsText, setTagsText] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -95,8 +91,11 @@ export function CharactersPage(): React.ReactElement {
 
   const openEditor = (c: CharacterDoc | null): void => {
     if (draft && dirty && (c?.id ?? '') !== (draft.id ?? '') && !window.confirm('当前人物有未保存的修改，放弃并切换？')) return
+    const next = c ? { ...c } : emptyCharacter()
     setSelectedId(c?.id ?? null)
-    setDraft(c ? { ...c } : emptyCharacter())
+    setDraft(next)
+    setAliasesText(next.aliases.join('，'))
+    setTagsText(next.tags.join('，'))
     setDirty(false)
   }
 
@@ -104,15 +103,23 @@ export function CharactersPage(): React.ReactElement {
     if (!draft) return
     setSaving(true)
     try {
-      await api.saveCharacter({ ...draft, id: draft.id || undefined })
+      const next = {
+        ...draft,
+        aliases: splitDelimitedText(aliasesText),
+        tags: splitDelimitedText(tagsText),
+        id: draft.id || undefined
+      }
+      await api.saveCharacter(next)
       await refresh()
       // 刷新后重新选中（新建场景 id 由后端生成，按名称匹配）
       const fresh = useWorkspace.getState().summary
       const target =
-        (draft.id ? fresh?.characters.find((c) => c.id === draft.id) : undefined) ??
-        fresh?.characters.find((c) => c.name === draft.name)
+        (next.id ? fresh?.characters.find((c) => c.id === next.id) : undefined) ??
+        fresh?.characters.find((c) => c.name === next.name)
       setSelectedId(target?.id ?? null)
       setDraft(target ? { ...target } : null)
+      setAliasesText(target?.aliases.join('，') ?? '')
+      setTagsText(target?.tags.join('，') ?? '')
       setDirty(false)
     } finally {
       setSaving(false)
@@ -217,6 +224,10 @@ export function CharactersPage(): React.ReactElement {
           dirty={dirty}
           saving={saving}
           factionPresets={factionPresets}
+          aliasesText={aliasesText}
+          tagsText={tagsText}
+          onAliasesTextChange={(text) => { setAliasesText(text); setDirty(true) }}
+          onTagsTextChange={(text) => { setTagsText(text); setDirty(true) }}
           onChange={(patch) => {
             setDraft({ ...draft, ...patch })
             setDirty(true)
@@ -282,6 +293,10 @@ function CharacterForm({
   dirty,
   saving,
   factionPresets,
+  aliasesText,
+  tagsText,
+  onAliasesTextChange,
+  onTagsTextChange,
   onChange,
   onSave,
   onDelete,
@@ -292,6 +307,10 @@ function CharacterForm({
   dirty: boolean
   saving: boolean
   factionPresets: string[]
+  aliasesText: string
+  tagsText: string
+  onAliasesTextChange: (text: string) => void
+  onTagsTextChange: (text: string) => void
   onChange: (patch: Partial<CharacterDoc>) => void
   onSave: () => void
   onDelete: () => void
@@ -323,7 +342,7 @@ function CharacterForm({
             <Input value={draft.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="林晚" />
           </Field>
           <Field label="别名 / 称呼（逗号分隔）">
-            <Input value={draft.aliases.join('，')} onChange={(e) => onChange({ aliases: parseTags(e.target.value) })} placeholder="晚晚" />
+            <Input value={aliasesText} onChange={(e) => onAliasesTextChange(e.target.value)} placeholder="晚晚" />
           </Field>
           <Field label="阵营 / 组织（可从已有选择）">
             <Input
@@ -351,7 +370,7 @@ function CharacterForm({
               <Input value={draft.age} onChange={(e) => onChange({ age: e.target.value })} />
             </Field>
             <Field label="标签（逗号分隔）">
-              <Input value={draft.tags.join('，')} onChange={(e) => onChange({ tags: parseTags(e.target.value) })} placeholder="法师, 学生" />
+              <Input value={tagsText} onChange={(e) => onTagsTextChange(e.target.value)} placeholder="法师, 学生" />
             </Field>
           </div>
           <Field label="一句话简介">

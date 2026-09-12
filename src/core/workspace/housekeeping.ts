@@ -5,7 +5,9 @@ const DEFAULT_MAX_AGE = 24 * 60 * 60 * 1000
 async function filesRecursively(store: FileStore, dir: string): Promise<string[]> {
   const files = (await store.listFiles(dir)).map((file) => (dir ? `${dir}/${file}` : file))
   for (const child of await store.listDirs(dir)) {
-    files.push(...(await filesRecursively(store, dir ? `${dir}/${child}` : child)))
+    const childPath = dir ? `${dir}/${child}` : child
+    if (childPath === 'docs' || childPath.startsWith('docs/')) continue
+    files.push(...(await filesRecursively(store, childPath)))
   }
   return files
 }

@@ -14,6 +14,7 @@ const V2_DIRS = [
   'chapters/main',
   'events',
   'notes',
+  'docs',
   '.storyfabric/sessions',
   '.storyfabric/trash'
 ]
@@ -112,9 +113,9 @@ async function ensureDefaultVolumes(store: FileStore): Promise<void> {
  * StoryFabric paths and leaves user documents intact when run repeatedly.
  */
 export async function migrateWorkspace(store: FileStore): Promise<void> {
-  for (const dir of V2_DIRS) await store.ensureDir(dir)
   const meta = readVersion(await store.readText('storyfabric.json'))
   if (meta.version > CURRENT_WORKSPACE_VERSION) throw new Error(`工作区版本 ${meta.version} 高于当前支持版本 ${CURRENT_WORKSPACE_VERSION}`)
+  for (const dir of V2_DIRS) await store.ensureDir(dir)
   if (meta.version < 2) {
     await migrateFlatCharacters(store)
     await migrateFlatOutlines(store)

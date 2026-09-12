@@ -4,50 +4,68 @@ import type {
   Attachment,
   ChatMessage,
   ChatSession,
+  MessageFile,
   PendingChange,
   RunAgentRequest,
-  SessionMeta
+  SessionMeta,
+  SessionModelPreference
 } from '../../../shared/types'
 import { useWorkspace } from './workspaceStore'
 import type { ToolCallData } from '../../../shared/types'
 import { getPlatformApi } from '../platform/platformApi'
-import { sessionEventPatch } from './chatEvents'
+import { hasAssistantAfterLatestUser, sessionEventPatch } from './chatEvents'
 import { playCompletionSound, shouldPlayCompletionSound } from '../lib/completionSound'
 import { createRafBatcher } from '../lib/rafBatcher'
 import { useSettings } from './settingsStore'
+import { sessionScopePatch, shouldKeepStreamingAfterAcceptance, workspaceScopePatch } from './chatScope'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
   callId: string
   name: string
   argsJson: string
-  status: 'running' | 'ok' | 'error'
+  status: 'running' | 'pending' | 'ok' | 'error'
   preview?: string
 }
+
+export type LiveTurnItem =
+  | { kind: 'text'; id: string; text: string }
+  | { kind: 'tool'; callId: string; name: string; argsJson: string; status: LiveToolRun['status']; preview?: string }
 
 interface ChatState {
   sessions: SessionMeta[]
   activeId: string | null
   messages: ChatMessage[]
+  modelPreferences: SessionModelPreference[]
   /** 正在流式生成的助手草稿 */
   streamingText: string
   streaming: boolean
+  liveTimeline: LiveTurnItem[]
   liveTools: LiveToolRun[]
+  contextSummary?: string
+  contextSummaryThrough?: string
+  contextSummaryUpdatedAt?: number
+  contextCompressing: boolean
+  contextCompression: { beforeTokens: number; afterTokens: number; summarizedMessages: number; at: number } | null
   pendingChange: PendingChange | null
   /** 最近一次推送给用户确认的变更（change-applied 时据此识别） */
   lastPendingChange: PendingChange | null
   /** 最近一次被用户确认写入的变更（供编辑页联动重载） */
   lastAppliedChange: PendingChange | null
   attachments: Attachment[]
+  messageFiles: MessageFile[]
   error: string | null
 
   initSessions: () => Promise<void>
   openSession: (id: string) => Promise<void>
-  newSession: () => void
+  newSession: () => Promise<void>
   removeSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   setArchived: (id: string, archived: boolean) => Promise<void>
   setAttachments: (a: Attachment[]) => void
+  setMessageFiles: (files: MessageFile[]) => void
+  updateModelPreference: (value: SessionModelPreference) => Promise<void>
+  resetWorkspace: () => void
 
   send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'>) => Promise<void>
   confirmChange: (approved: boolean) => Promise<void>
@@ -60,6 +78,8 @@ interface ChatState {
 type SetFn = (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
 
 let runningSessionId: string | null = null
+let finishingSessionId: string | null = null
+let completedSessionId: string | null = null
 
 async function reloadSessions(set: (p: Partial<ChatState>) => void): Promise<SessionMeta[]> {
   try {
@@ -75,13 +95,18 @@ export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeId: null,
   messages: [],
+  modelPreferences: [],
   streamingText: '',
   streaming: false,
+  liveTimeline: [],
   liveTools: [],
+  contextCompressing: false,
+  contextCompression: null,
   pendingChange: null,
   lastPendingChange: null,
   lastAppliedChange: null,
   attachments: [],
+  messageFiles: [],
   error: null,
 
   initSessions: async () => {
@@ -95,19 +120,18 @@ export const useChat = create<ChatState>((set, get) => ({
     const s = await getPlatformApi().loadSession(id)
     if (!s) return
     applySession(set, s)
+    set({ contextCompression: null })
   },
 
-  newSession: () => {
+  newSession: async () => {
     if (get().streaming) return
-    void (async () => {
-      try {
-        const session = await getPlatformApi().createSession()
-        set({ activeId: session.id, messages: session.messages, streamingText: '', liveTools: [], pendingChange: null, error: null, attachments: [] })
-        await reloadSessions(set)
-      } catch (err) {
-        set({ error: err instanceof Error ? err.message : String(err) })
-      }
-    })()
+    try {
+      const session = await getPlatformApi().createSession()
+      set({ ...sessionScopePatch(session), contextCompression: null, error: null })
+      await reloadSessions(set)
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+    }
   },
 
   removeSession: async (id) => {
@@ -130,33 +154,47 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setAttachments: (attachments) => set({ attachments }),
+  setMessageFiles: (messageFiles) => set({ messageFiles }),
+
+  updateModelPreference: async (value) => {
+    const id = get().activeId
+    if (!id) throw new Error('请先创建或打开会话')
+    await getPlatformApi().updateSessionModelPreference(id, value)
+    set((state) => ({ modelPreferences: [...state.modelPreferences.filter((item) => !(item.providerId === value.providerId && item.model === value.model)), value] }))
+  },
+
+  resetWorkspace: () => {
+    runningSessionId = null
+    finishingSessionId = null
+    completedSessionId = null
+    set(workspaceScopePatch())
+  },
 
   send: async (text, reqBase) => {
-    if (get().streaming || !text.trim()) return
-    set({ streaming: true, streamingText: '', liveTools: [], error: null })
+    if (get().streaming || (!text.trim() && !get().messageFiles.length && !get().attachments.length)) return
+    set({ streaming: true, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false, contextCompression: null, error: null })
+    completedSessionId = null
     const req: RunAgentRequest = {
       sessionId: get().activeId ?? undefined,
-      message: text,
+      message: text.trim() || (get().messageFiles.length ? '请分析所附资料。' : ''),
       attachments: get().attachments.length ? get().attachments : undefined,
+      files: get().messageFiles.length ? get().messageFiles : undefined,
       ...reqBase
     }
     runningSessionId = req.sessionId ?? null
     try {
       const { sessionId } = await getPlatformApi().agentRun(req)
-      // run 完成后以磁盘上的会话为准刷新
-      const s = await getPlatformApi().loadSession(sessionId)
-      if (s && sessionId === get().activeId) applySession(set, s)
-      else if (s && !get().activeId) {
-        set({ activeId: sessionId })
-        applySession(set, s)
+      runningSessionId = sessionId
+      if (!get().activeId) set({ activeId: sessionId })
+      if (!shouldKeepStreamingAfterAcceptance({ accepted: true, done: false })) {
+        runningSessionId = null
+        set({ streaming: false })
       }
-      runningSessionId = null
-      await reloadSessions(set)
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
-    } finally {
       flushStreamingDelta()
-      set({ streaming: false, streamingText: '', liveTools: [] })
+      set({ streaming: false, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false })
+      runningSessionId = null
     }
   },
 
@@ -183,7 +221,7 @@ function applySession(
   set: (p: Partial<ChatState>) => void,
   s: ChatSession
 ): void {
-  set({ activeId: s.id, messages: s.messages, streamingText: '', liveTools: [], pendingChange: null })
+  set(sessionScopePatch(s))
 }
 
 function useWorkspaceRefresh(): Promise<void> {
@@ -194,13 +232,27 @@ function useWorkspaceRefresh(): Promise<void> {
  * 流式文本按帧合并：token 可能比帧率快得多，逐条 set 会让整段 Markdown 反复重解析。
  * set 在 zustand store 内是稳定引用，因此延迟创建一次即可。
  */
-let streamingBatcher: ReturnType<typeof createRafBatcher<string>> | null = null
+let streamingBatcher: ReturnType<typeof createRafBatcher<{ messageId: string; delta: string }>> | null = null
 
-function pushStreamingDelta(set: SetFn, delta: string): void {
+function pushStreamingDelta(set: SetFn, messageId: string, delta: string): void {
   if (!streamingBatcher) {
-    streamingBatcher = createRafBatcher<string>((deltas) => set((p) => ({ streamingText: (p.streamingText ?? '') + deltas.join('') })))
+    streamingBatcher = createRafBatcher<{ messageId: string; delta: string }>((chunks) => set((p) => {
+      const timeline = [...p.liveTimeline]
+      let streamingText = p.streamingText ?? ''
+      for (const chunk of chunks) {
+        const id = `live_${chunk.messageId}`
+        const last = timeline.at(-1)
+        if (last?.kind === 'text' && last.id === id) {
+          timeline[timeline.length - 1] = { ...last, text: last.text + chunk.delta }
+        } else {
+          timeline.push({ kind: 'text', id, text: chunk.delta })
+        }
+        streamingText += chunk.delta
+      }
+      return { streamingText, liveTimeline: timeline }
+    }))
   }
-  streamingBatcher.push(delta)
+  streamingBatcher.push({ messageId, delta })
 }
 
 function flushStreamingDelta(): void {
@@ -220,26 +272,46 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
   switch (ev.type) {
     case 'session': {
       const patch = sessionEventPatch(get().activeId, envelope)
-      if (patch) set(patch)
+      if (patch) set({ ...patch, attachments: [], messageFiles: [] })
       break
     }
     case 'text-delta':
-      pushStreamingDelta(set, ev.delta)
+      pushStreamingDelta(set, ev.messageId, ev.delta)
       break
     case 'tool-start':
+      flushStreamingDelta()
       set((p) => ({
+        liveTimeline: [...p.liveTimeline, { kind: 'tool', callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }],
         liveTools: [...p.liveTools, { callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }]
       }))
       break
     case 'tool-done':
       set((p) => ({
+        liveTimeline: p.liveTimeline.map((item) =>
+          item.kind === 'tool' && item.callId === ev.callId
+            ? { ...item, status: ev.ok ? ('ok' as const) : ('error' as const), preview: ev.resultPreview }
+            : item
+        ),
         liveTools: p.liveTools.map((t) =>
           t.callId === ev.callId ? { ...t, status: ev.ok ? ('ok' as const) : ('error' as const), preview: ev.resultPreview } : t
         )
       }))
       break
     case 'pending-change':
-      set({ pendingChange: ev.change, lastPendingChange: ev.change })
+      set((p) => {
+        const lastToolIndex = p.liveTimeline.findLastIndex((item) => item.kind === 'tool')
+        return {
+          pendingChange: ev.change,
+          lastPendingChange: ev.change,
+          liveTimeline: lastToolIndex < 0
+            ? p.liveTimeline
+            : p.liveTimeline.map((item, index) =>
+                index === lastToolIndex && item.kind === 'tool'
+                  ? { ...item, status: 'pending' as const, preview: '等待你确认写回' }
+                  : item
+              )
+        }
+      })
       break
     case 'change-applied':
       if (get().pendingChange?.id === ev.changeId) set({ pendingChange: null })
@@ -247,16 +319,63 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
         set({ lastAppliedChange: get().lastPendingChange })
       }
       break
+    case 'context-compression-start':
+      set({ contextCompressing: true })
+      break
+    case 'context-compressed':
+      set({
+        contextCompressing: false,
+        contextSummaryThrough: ev.throughMessageId,
+        contextSummaryUpdatedAt: ev.summaryUpdatedAt,
+        contextCompression: {
+          beforeTokens: ev.beforeTokens,
+          afterTokens: ev.afterTokens,
+          summarizedMessages: ev.summarizedMessages,
+          at: ev.summaryUpdatedAt
+        }
+      })
+      break
     case 'error':
       flushStreamingDelta()
-      set({ error: ev.message })
+      set({ error: ev.message, contextCompressing: false })
       break
     case 'done': {
+      if (finishingSessionId === envelope.sessionId || completedSessionId === envelope.sessionId) break
+      finishingSessionId = envelope.sessionId
       flushStreamingDelta()
       const enabled = useSettings.getState().settings?.completionSound ?? false
       if (shouldPlayCompletionSound({ enabled, error: get().error !== null })) playCompletionSound()
+      void finishRun(envelope.sessionId, ev.session, set, get)
       break
     }
+  }
+}
+
+async function finishRun(
+  sessionId: string,
+  completedSession: ChatSession | undefined,
+  set: SetFn,
+  get: () => ChatState
+): Promise<void> {
+  let applied = false
+  try {
+    const session = completedSession ?? await getPlatformApi().loadSession(sessionId)
+    if (session && (!get().activeId || get().activeId === sessionId) && hasAssistantAfterLatestUser(session)) {
+      applySession(set, session)
+      applied = true
+    }
+    await reloadSessions(set)
+  } catch (err) {
+    set({ error: err instanceof Error ? err.message : String(err) })
+  } finally {
+    if (runningSessionId === sessionId || get().activeId === sessionId) runningSessionId = null
+    if (get().activeId === sessionId || get().streaming) {
+      set(applied
+        ? { streaming: false, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false }
+        : { streaming: false, liveTimeline: [], liveTools: [], contextCompressing: false })
+    }
+    completedSessionId = sessionId
+    finishingSessionId = null
   }
 }
 

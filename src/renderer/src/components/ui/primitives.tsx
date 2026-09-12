@@ -9,7 +9,7 @@ type Variant = 'primary' | 'ghost' | 'outline' | 'danger' | 'soft'
 type Size = 'sm' | 'md' | 'icon'
 
 const variantCls: Record<Variant, string> = {
-  primary: 'bg-accent text-accent-fg hover:bg-accent-strong shadow-sm',
+  primary: 'bg-coral text-white hover:bg-coral-strong shadow-[0_8px_20px_rgba(216,93,73,0.2)]',
   ghost: 'text-muted hover:text-fg hover:bg-elevated',
   outline: 'border border-line bg-panel text-fg hover:bg-elevated',
   danger: 'bg-danger text-white hover:opacity-90',
@@ -60,7 +60,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
 }
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn('rounded-xl border border-line bg-panel', className)}>{children}</div>
+  return <div className={cn('rounded-xl border border-line bg-panel shadow-[0_10px_30px_rgba(16,26,56,0.05)]', className)}>{children}</div>
 }
 
 export function Badge({

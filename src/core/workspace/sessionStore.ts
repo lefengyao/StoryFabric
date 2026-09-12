@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatSession, SessionMeta } from '../../shared/types'
 import type { FileStore } from '../storage/fileStore'
 import { genId } from './entityStore'
+import { setSessionModelPreference } from './sessionPreferences'
 
 export function titleFromMessage(text: string): string {
   const t = text.replace(/\s+/g, ' ').trim()
@@ -36,6 +37,13 @@ export class CoreSessionStore {
     if (patch.title !== undefined) session.title = patch.title.trim() || session.title
     if (patch.archived !== undefined) session.archived = patch.archived
     await this.save(session)
+    return true
+  }
+
+  async updateModelPreference(id: string, preference: import('../../shared/types').SessionModelPreference): Promise<boolean> {
+    const session = await this.load(id)
+    if (!session) return false
+    await this.save(setSessionModelPreference(session, preference))
     return true
   }
 

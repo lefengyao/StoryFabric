@@ -1,4 +1,5 @@
 import type { ChatSession } from '../../shared/types'
+import { validateMessageFiles } from '../attachments/validation'
 
 export interface SessionArchive {
   fileName: string
@@ -27,11 +28,27 @@ export function exportSessionArchive(session: ChatSession): SessionArchive {
 }
 
 export function decodeSessionArchive(base64: string): ChatSession {
-  const text = new TextDecoder().decode(base64ToBytes(base64))
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(base64ToBytes(base64)) } catch { throw new Error('会话文件编码无效') }
   const value = JSON.parse(text) as Partial<ChatSession>
   if (!value || typeof value !== 'object' || !Array.isArray(value.messages)) throw new Error('文件不是有效的 StoryFabric 会话')
   if (typeof value.title !== 'string' || typeof value.createdAt !== 'number' || typeof value.updatedAt !== 'number') {
     throw new Error('会话文件缺少必要字段')
+  }
+  let imageBytes = 0
+  const messages = value.messages.map((message) => {
+    if (!message || typeof message !== 'object') throw new Error('会话消息格式无效')
+    const files = (message as { files?: unknown }).files
+    if (files !== undefined) {
+      const normalized = validateMessageFiles(files, { sessionImageBytes: imageBytes })
+      imageBytes += normalized.filter((file) => file.kind === 'image').reduce((sum, file) => sum + file.size, 0)
+      return { ...message, files: normalized }
+    }
+    return message
+  })
+  const modelPreferences = value.modelPreferences
+  if (modelPreferences !== undefined && (!Array.isArray(modelPreferences) || modelPreferences.some((item) => !item || typeof item !== 'object' || typeof (item as any).providerId !== 'string' || typeof (item as any).model !== 'string' || !['inherit', 'off', 'low', 'medium', 'high'].includes((item as any).reasoning)))) {
+    throw new Error('会话思考设置无效')
   }
   return {
     id: typeof value.id === 'string' ? value.id : '',
@@ -39,6 +56,10 @@ export function decodeSessionArchive(base64: string): ChatSession {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     archived: Boolean(value.archived),
-    messages: value.messages
+    messages,
+    ...(modelPreferences === undefined ? {} : { modelPreferences }),
+    ...(typeof value.contextSummary === 'string' ? { contextSummary: value.contextSummary } : {}),
+    ...(typeof value.contextSummaryThrough === 'string' ? { contextSummaryThrough: value.contextSummaryThrough } : {}),
+    ...(typeof value.contextSummaryUpdatedAt === 'number' ? { contextSummaryUpdatedAt: value.contextSummaryUpdatedAt } : {})
   } as ChatSession
 }

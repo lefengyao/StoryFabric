@@ -2,10 +2,11 @@ import { Preferences } from '@capacitor/preferences'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { Share } from '@capacitor/share'
 import { Directory, Filesystem } from '@capacitor/filesystem'
-import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
+import { throwIfWorkspaceRequestAborted } from '../../../shared/api'
+import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
-import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
@@ -19,10 +20,42 @@ import { CoreAgentService } from '../../../core/agent/agentLoop'
 import { fetchProviderModels, getAdapter } from '../../../core/llm'
 import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 import { keyPreview } from '../../../shared/keyPreview'
+import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
 
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
 const ANDROID_WORKSPACE_PATH_ERROR = 'Android 工作区路径必须位于应用内部 workspaces 目录下'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isProviderProtocol(value: unknown): value is ProviderPublic['protocol'] {
+  return value === 'openai' || value === 'anthropic' || value === 'gemini'
+}
+
+function isKeyStorage(value: unknown): value is NonNullable<ProviderPublic['keyStorage']> {
+  return value === 'encrypted' || value === 'plain' || value === 'none'
+}
+
+function normalizeProvider(value: unknown): ProviderPublic | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0 || typeof value.name !== 'string' || !isProviderProtocol(value.protocol) || typeof value.baseUrl !== 'string') return null
+  const models = Array.isArray(value.models) ? value.models.filter((model): model is string => typeof model === 'string') : []
+  const modelSettings = isRecord(value.modelSettings)
+    ? Object.fromEntries(Object.entries(value.modelSettings).filter((entry) => isRecord(entry[1]))) as ProviderPublic['modelSettings']
+    : {}
+  return {
+    id: value.id,
+    name: value.name,
+    protocol: value.protocol,
+    baseUrl: value.baseUrl,
+    models,
+    hasKey: typeof value.hasKey === 'boolean' ? value.hasKey : false,
+    ...(typeof value.keyPreview === 'string' ? { keyPreview: value.keyPreview } : {}),
+    ...(isKeyStorage(value.keyStorage) ? { keyStorage: value.keyStorage } : {}),
+    modelSettings
+  }
+}
 
 export function normalizeAndroidWorkspacePath(input: string): string {
   const value = input.trim()
@@ -39,10 +72,19 @@ function withAndroidImportLock<T>(operation: () => Promise<T>): Promise<T> {
   return run
 }
 
+let androidSettingsQueue: Promise<void> = Promise.resolve()
+
+function withAndroidSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
+  const run = androidSettingsQueue.catch(() => undefined).then(operation)
+  androidSettingsQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
 const DEFAULT_PUBLIC: PublicAppSettings = {
   providers: [],
   theme: 'system',
   recentWorkspaces: [],
+  recentWorkspaceOpenedAt: {},
   customPrompt: '',
   showSessionLength: false,
   completionSound: false,
@@ -69,15 +111,40 @@ export class AndroidPlatformApi implements StoryFabricApi {
     try { return (await SecureStorage.getItem(this.keyName(providerId))) ?? '' } catch { return '' }
   }
 
-  private async loadSettings(): Promise<PublicAppSettings> {
+  private async loadSettingsFromPreferences(): Promise<PublicAppSettings> {
     const raw = await Preferences.get({ key: SETTINGS_KEY })
-    if (!raw.value) return this.settings
+    if (!raw.value) {
+      this.settings = this.normalizeSettings(this.settings)
+      return this.settings
+    }
     try {
-      this.settings = { ...DEFAULT_PUBLIC, ...(JSON.parse(raw.value) as Partial<PublicAppSettings>) }
+      this.settings = this.normalizeSettings(JSON.parse(raw.value))
     } catch {
       this.settings = { ...DEFAULT_PUBLIC }
     }
     return this.settings
+  }
+
+  private loadSettings(): Promise<PublicAppSettings> {
+    return withAndroidSettingsLock(() => this.loadSettingsFromPreferences())
+  }
+
+  private normalizeSettings(value: unknown): PublicAppSettings {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Partial<PublicAppSettings>
+      : {}
+    const recentWorkspaces = Array.isArray(parsed.recentWorkspaces)
+      ? parsed.recentWorkspaces.filter((path): path is string => typeof path === 'string')
+      : []
+    const openedAt = parsed.recentWorkspaceOpenedAt
+    const recentWorkspaceOpenedAt = openedAt && typeof openedAt === 'object' && !Array.isArray(openedAt)
+      ? Object.fromEntries(Object.entries(openedAt).filter(([, timestamp]) => typeof timestamp === 'string'))
+      : {}
+    const providers = Array.isArray(parsed.providers)
+      ? parsed.providers.map(normalizeProvider).filter((provider): provider is ProviderPublic => provider !== null)
+      : []
+    const lastWorkspacePath = typeof parsed.lastWorkspacePath === 'string' ? parsed.lastWorkspacePath : undefined
+    return { ...DEFAULT_PUBLIC, ...parsed, providers, recentWorkspaces, recentWorkspaceOpenedAt, lastWorkspacePath }
   }
 
   private async saveSettings(): Promise<void> {
@@ -126,6 +193,26 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return result.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
   }
 
+  async listRecentWorkspaces(): Promise<WorkspaceListItem[]> {
+    const settings = await this.loadSettings()
+    const paths = orderRecentWorkspacePaths(settings.recentWorkspaces, settings.recentWorkspaceOpenedAt)
+    const result: WorkspaceListItem[] = []
+    for (const path of paths) {
+      try {
+        const normalizedPath = normalizeAndroidWorkspacePath(path)
+        const store = new CapacitorFileStore(normalizedPath)
+        if (!(await validateWorkspace(store)).ok) continue
+        const item = await loadWorkspaceListItem(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
+        const lastOpenedAt = settings.recentWorkspaceOpenedAt[normalizedPath]
+        result.push(lastOpenedAt ? { ...item, lastOpenedAt } : item)
+        if (result.length >= 5) break
+      } catch {
+        /* 跳过非法、已删除、损坏或正在写入中的工作区。 */
+      }
+    }
+    return result
+  }
+
   getDefaultWorkspaceDir(): Promise<string> { return Promise.resolve(WORKSPACE_PREFIX) }
 
   async createWorkspace(_parentDir: string, name: string): Promise<string> {
@@ -138,21 +225,54 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return path
   }
 
-  async openWorkspace(path: string): Promise<WorkspaceSummary> {
+  async openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const normalizedPath = normalizeAndroidWorkspacePath(path)
     const store = new CapacitorFileStore(normalizedPath)
+    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent }
+    throwIfWorkspaceRequestAborted(options?.signal)
     const valid = await validateWorkspace(store)
     if (!valid.ok) throw new Error(valid.reason)
-    await this.installWorkspace(normalizedPath, store)
-    await this.loadSettings()
-    this.settings = { ...this.settings, recentWorkspaces: [normalizedPath, ...this.settings.recentWorkspaces.filter((p) => p !== normalizedPath)].slice(0, 8) }
-    this.settings.lastWorkspacePath = normalizedPath
-    await this.saveSettings()
-    return loadSummary(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
+    try {
+      throwIfWorkspaceRequestAborted(options?.signal)
+      await this.installWorkspace(normalizedPath, store)
+      throwIfWorkspaceRequestAborted(options?.signal)
+      await this.recordRecentWorkspace(normalizedPath, options?.signal)
+      throwIfWorkspaceRequestAborted(options?.signal)
+      return loadSummary(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
+    } catch (error) {
+      this.currentPath = previous.path
+      this.currentStore = previous.store
+      this.agent = previous.agent
+      throw error
+    }
   }
 
-  async openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
-    return this.openWorkspace(normalizeAndroidWorkspacePath(path))
+  private async recordRecentWorkspace(path: string, signal?: AbortSignal): Promise<void> {
+    return withAndroidSettingsLock(async () => {
+      throwIfWorkspaceRequestAborted(signal)
+      const previous = this.settings
+      await this.loadSettingsFromPreferences()
+      throwIfWorkspaceRequestAborted(signal)
+      const recent = markRecentWorkspace({
+        recentWorkspaces: this.settings.recentWorkspaces,
+        recentWorkspaceOpenedAt: this.settings.recentWorkspaceOpenedAt
+      }, path)
+      this.settings = { ...this.settings, ...recent, lastWorkspacePath: path }
+      try {
+        await this.saveSettings()
+        throwIfWorkspaceRequestAborted(signal)
+      } catch (error) {
+        if (signal?.aborted) {
+          this.settings = previous
+          await this.saveSettings()
+        }
+        throw error
+      }
+    })
+  }
+
+  async openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
+    return this.openWorkspace(normalizeAndroidWorkspacePath(path), options)
   }
 
   async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null }
@@ -213,11 +333,16 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const uri = await Filesystem.getUri({ path, directory: Directory.Cache })
     await Share.share({ title: archive.fileName, text: 'StoryFabric 会话', files: [uri.uri], dialogTitle: '导出会话' })
   }
-  async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary> {
+  async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const root = new CapacitorFileStore(WORKSPACE_PREFIX)
     const baseName = (target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')).replace(/[\\/:*?"<>|]/g, '').trim() || '导入工作区'
     normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${baseName}`)
-    const path = await withAndroidImportLock(async () => {
+    throwIfWorkspaceRequestAborted(options?.signal)
+    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent }
+    let path: string | null = null
+    try {
+      path = await withAndroidImportLock(async () => {
+      throwIfWorkspaceRequestAborted(options?.signal)
       let finalId = baseName
       let suffix = 2
       while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
@@ -231,20 +356,29 @@ export class AndroidPlatformApi implements StoryFabricApi {
         targetReserved = true
         const targetStore = new CapacitorFileStore(targetPath)
         await importWorkspaceArchive(targetStore, bytes)
+        throwIfWorkspaceRequestAborted(options?.signal)
         await setWorkspaceName(targetStore, baseName)
+        throwIfWorkspaceRequestAborted(options?.signal)
         return targetPath
       } catch (error) {
         if (targetReserved) await root.remove(finalId)
         throw error
       }
-    })
-    const store = new CapacitorFileStore(path)
-    await this.installWorkspace(path, store)
-    await this.loadSettings()
-    this.settings = { ...this.settings, recentWorkspaces: [path, ...this.settings.recentWorkspaces.filter((p) => p !== path)].slice(0, 8) }
-    this.settings.lastWorkspacePath = path
-    await this.saveSettings()
-    return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
+      })
+      throwIfWorkspaceRequestAborted(options?.signal)
+      const store = new CapacitorFileStore(path)
+      await this.installWorkspace(path, store)
+      throwIfWorkspaceRequestAborted(options?.signal)
+      await this.recordRecentWorkspace(path, options?.signal)
+      throwIfWorkspaceRequestAborted(options?.signal)
+      return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
+    } catch (error) {
+      this.currentPath = previous.path
+      this.currentStore = previous.store
+      this.agent = previous.agent
+      if (path && path !== previous.path) await root.remove(path.slice(`${WORKSPACE_PREFIX}/`.length))
+      throw error
+    }
   }
 
   async saveCharacter(doc: Partial<CharacterDoc>): Promise<CharacterDoc> { return saveCharacter(this.requireStore(), doc) }
@@ -283,32 +417,59 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async getUsageRecords(): Promise<UsageRecord[]> { return [] }
 
   async updateSettings(patch: SettingsPatch): Promise<PublicAppSettings> {
-    this.settings = { ...this.settings, ...patch }
-    await this.saveSettings()
-    return this.settings
+    return withAndroidSettingsLock(async () => {
+      await this.loadSettingsFromPreferences()
+      this.settings = { ...this.settings, ...patch }
+      await this.saveSettings()
+      return this.settings
+    })
   }
 
   async saveProvider(input: ProviderInput): Promise<PublicAppSettings> {
-    const id = input.id ?? `prov_${Date.now().toString(36)}`
-    const previous = this.settings.providers.find((p) => p.id === id)
-    this.settings.providers = [...this.settings.providers.filter((p) => p.id !== id), { id, name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, models: input.models, hasKey: input.apiKey ? true : Boolean(previous?.hasKey), keyPreview: input.apiKey ? keyPreview(input.apiKey) : previous?.keyPreview, modelSettings: pruneModelSettings(input.models, input.modelSettings ?? previous?.modelSettings) }]
-    if (input.apiKey) await SecureStorage.setItem(this.keyName(id), input.apiKey)
-    await this.saveSettings()
-    return this.settings
+    return withAndroidSettingsLock(async () => {
+      await this.loadSettingsFromPreferences()
+      const id = input.id ?? `prov_${Date.now().toString(36)}`
+      const previous = this.settings.providers.find((p) => p.id === id)
+      this.settings = {
+        ...this.settings,
+        providers: [...this.settings.providers.filter((p) => p.id !== id), { id, name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, models: input.models, hasKey: input.apiKey ? true : Boolean(previous?.hasKey), keyPreview: input.apiKey ? keyPreview(input.apiKey) : previous?.keyPreview, modelSettings: pruneModelSettings(input.models, input.modelSettings ?? previous?.modelSettings) }]
+      }
+      if (input.apiKey) await SecureStorage.setItem(this.keyName(id), input.apiKey)
+      await this.saveSettings()
+      return this.settings
+    })
   }
 
   async deleteProvider(id: string): Promise<PublicAppSettings> {
-    this.settings.providers = this.settings.providers.filter((p) => p.id !== id)
-    try { await SecureStorage.removeItem(this.keyName(id)) } catch { /* no-op */ }
-    if (this.settings.defaultChatModel?.providerId === id) this.settings.defaultChatModel = undefined
-    if (this.settings.quickActionModel?.providerId === id) this.settings.quickActionModel = undefined
-    await this.saveSettings()
-    return this.settings
+    return withAndroidSettingsLock(async () => {
+      await this.loadSettingsFromPreferences()
+      this.settings = {
+        ...this.settings,
+        providers: this.settings.providers.filter((p) => p.id !== id),
+        defaultChatModel: this.settings.defaultChatModel?.providerId === id ? undefined : this.settings.defaultChatModel,
+        quickActionModel: this.settings.quickActionModel?.providerId === id ? undefined : this.settings.quickActionModel
+      }
+      try { await SecureStorage.removeItem(this.keyName(id)) } catch { /* no-op */ }
+      await this.saveSettings()
+      return this.settings
+    })
+  }
+
+  private async providerInput(input: FetchModelsInput): Promise<{ protocol: FetchModelsInput['protocol']; baseUrl: string; apiKey: string }> {
+    if (!input.providerId) return { protocol: input.protocol, baseUrl: input.baseUrl, apiKey: input.apiKey ?? '' }
+    const settings = await this.loadSettings()
+    const provider = settings.providers.find((item) => item.id === input.providerId)
+    if (!provider) throw new Error('供应商不存在')
+    return {
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      apiKey: input.apiKey ?? await this.keyOf(provider.id)
+    }
   }
 
   async fetchModels(input: FetchModelsInput): Promise<string[]> {
-    const key = input.apiKey ?? (input.providerId ? await this.keyOf(input.providerId) : '')
-    return fetchProviderModels(input.protocol, input.baseUrl, key)
+    const provider = await this.providerInput(input)
+    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   }
   async agentRun(req: RunAgentRequest): Promise<{ sessionId: string }> {
     if (!this.agent) throw new Error('尚未打开工作区')
@@ -327,6 +488,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   loadSession(id: string): Promise<ChatSession | null> { return this.sessions().load(id) }
   deleteSession(id: string): Promise<void> { return this.sessions().delete(id) }
   async updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { if (!(await this.sessions().updateMeta(id, patch))) throw new Error('会话不存在') }
+  async updateSessionModelPreference(id: string, value: import('../../../shared/types').SessionModelPreference): Promise<void> { if (!(await this.sessions().updateModelPreference(id, value))) throw new Error('会话不存在') }
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void { this.eventListeners.add(cb); return () => this.eventListeners.delete(cb) }
 
   /* 远程部署仅桌面端可用 */

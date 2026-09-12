@@ -4,20 +4,25 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --app: #fafafa;
-  --panel: #ffffff;
-  --elevated: #f4f4f5;
-  --line: #e4e4e7;
-  --fg: #18181b;
-  --muted: #71717a;
-  --faint: #a1a1aa;
-  --accent: #6366f1;
-  --accent-strong: #4f46e5;
+  --app: #f4f1e9;
+  --panel: #fffdf8;
+  --elevated: #ece8de;
+  --line: #d9d4c8;
+  --fg: #17203a;
+  --muted: #6d7386;
+  --faint: #9ca0ad;
+  --accent: #6f68bb;
+  --accent-strong: #5b55a8;
   --accent-fg: #ffffff;
-  --accent-soft: #eef2ff;
-  --danger: #dc2626;
-  --danger-soft: #fef2f2;
-  --ok: #16a34a;
+  --accent-soft: #ebeaf8;
+  --danger: #c94f45;
+  --danger-soft: #f8e3df;
+  --ok: #2f8a69;
+  --coral: #d85d49;
+  --coral-strong: #c94f3d;
+  --coral-soft: #f6ded8;
+  --gold: #d3a54b;
+  --gold-soft: #f4e4b8;
   /* React Flow 控件跟随应用配色：默认按钮是纯白 (#fefefe)，在深色主题下非常刺眼 */
   --xy-controls-button-background-color: var(--panel);
   --xy-controls-button-color: var(--muted);
@@ -28,20 +33,25 @@
 }
 
 .dark {
-  --app: #111113;
-  --panel: #1a1a1e;
-  --elevated: #232329;
-  --line: #2e2e35;
-  --fg: #ececee;
-  --muted: #9d9da6;
-  --faint: #63636c;
-  --accent: #818cf8;
-  --accent-strong: #6d78ee;
-  --accent-fg: #0f0f12;
-  --accent-soft: #22233a;
-  --danger: #ef4444;
-  --danger-soft: #2a1a1a;
-  --ok: #22c55e;
+  --app: #0e142a;
+  --panel: #171f3b;
+  --elevated: #222c4b;
+  --line: #303b5e;
+  --fg: #f5f1e9;
+  --muted: #a8adbe;
+  --faint: #6e7690;
+  --accent: #9992e8;
+  --accent-strong: #8179db;
+  --accent-fg: #14172a;
+  --accent-soft: #29294a;
+  --danger: #ef7266;
+  --danger-soft: #3b2227;
+  --ok: #58b391;
+  --coral: #df705e;
+  --coral-strong: #d85d49;
+  --coral-soft: #3d292d;
+  --gold: #d9af5a;
+  --gold-soft: #453b26;
 }
 
 @theme inline {
@@ -59,7 +69,13 @@
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-ok: var(--ok);
-  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --color-coral: var(--coral);
+  --color-coral-strong: var(--coral-strong);
+  --color-coral-soft: var(--coral-soft);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --font-sans: 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+  --font-serif: 'Source Han Serif SC', 'Songti SC', 'STSong', 'Noto Serif SC', serif;
 }
 
 /* 弹窗与遮罩过渡：原代码用的 animate-in 来自未安装的 tailwindcss-animate，实际不生效。
@@ -140,6 +156,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+}
+
+::selection {
+  color: var(--accent-fg);
+  background: var(--accent);
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: var(--font-sans);
+}
+
 /* Capacitor 手机端：避免桌面固定宽度、长文本和控件撑破视口。 */
 @media (max-width: 640px) {
   html,
@@ -163,6 +197,219 @@ body {
 
   .prose {
     overflow-wrap: anywhere;
+  }
+}
+
+/* v0.1.3 interaction motion: short, directional transitions that preserve reading flow. */
+.app-sidebar-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+.app-sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.app-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.app-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.app-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes app-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scaleY(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes chat-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-item-enter {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+[data-app-shell] main > div > * {
+  animation: app-page-enter 260ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.chat-sidebar-panel {
+  transform-origin: right center;
+  will-change: transform;
+}
+
+.chat-sidebar-flyout {
+  will-change: width, opacity;
+}
+
+.chat-sidebar-drawer {
+  animation: chat-drawer-enter 210ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+  transform-origin: top center;
+}
+
+.session-drawer-item {
+  animation: chat-item-enter 220ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.session-drawer-item:nth-child(2) {
+  animation-delay: 24ms;
+}
+
+.session-drawer-item:nth-child(3) {
+  animation-delay: 48ms;
+}
+
+.session-drawer-item:nth-child(4) {
+  animation-delay: 72ms;
+}
+
+.session-drawer-item:nth-child(5) {
+  animation-delay: 96ms;
+}
+
+.agent-message,
+.chat-sidebar-panel .space-y-4 > * {
+  animation: chat-message-enter 240ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.agent-thinking-row {
+  animation: chat-message-enter 220ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 12px;
+}
+
+.thinking-dots i {
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: thinking-dot 900ms ease-in-out infinite;
+}
+
+.thinking-dots i:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.thinking-dots i:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes thinking-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.agent-tool-row {
+  animation: chat-message-enter 220ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.context-meter {
+  min-width: 7rem;
+  padding: 0.35rem 0.55rem;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+[data-app-shell] button:not(:disabled),
+[data-app-shell] a[href] {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+[data-app-shell] button:not(:disabled):active,
+[data-app-shell] a[href]:active {
+  transform: scale(0.97);
+}
+
+[data-app-shell] button:not(:disabled):hover > svg,
+[data-app-shell] a[href]:hover > svg {
+  transform: translateY(-1px);
+}
+
+[data-app-shell] button svg,
+[data-app-shell] a svg {
+  transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+[data-app-shell] .list-row:hover,
+[data-app-shell] .change-card:hover {
+  transform: translateY(-2px);
+}
+
+[data-app-shell] input,
+[data-app-shell] textarea,
+[data-app-shell] select {
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-app-shell] *,
+  [data-app-shell] *::before,
+  [data-app-shell] *::after,
+  .chat-sidebar-panel,
+  .chat-sidebar-drawer,
+  .agent-message {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

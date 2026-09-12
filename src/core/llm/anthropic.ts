@@ -3,6 +3,7 @@ import type { ChatMessage, ToolDefJson } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
+import { toAnthropicMessageContent } from '../attachments/messageContent'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -29,7 +30,7 @@ export function toAnthropicMessages(
   const out: { role: 'user' | 'assistant'; content: ContentBlock[] }[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', content: [{ type: 'text', text: m.text ?? '' }] })
+      out.push({ role: 'user', content: toAnthropicMessageContent(m) })
     } else if (m.role === 'assistant') {
       const blocks: ContentBlock[] = []
       // 扩展思考：thinking 块必须排在正文与 tool_use 之前原样回传，否则带工具的多轮对话会被拒；
@@ -105,7 +106,7 @@ export class AnthropicAdapter implements LlmAdapter {
     /** 扩展思考块：按 index 记录，结束时按顺序输出，供下一轮回传 */
     const thinkingBlocks: Array<{ index: number; block: { type: string; thinking?: string; signature?: string; data?: string } }> = []
 
-    for await (const line of sseLines(res)) {
+    for await (const line of sseLines(res, req.signal)) {
       const data = sseData(line)
       if (!data) continue
       let json: any
@@ -200,4 +201,3 @@ export async function fetchAnthropicModels(baseUrl: string, apiKey: string): Pro
     .map((m) => m.id)
     .filter((id): id is string => Boolean(id))
 }
-

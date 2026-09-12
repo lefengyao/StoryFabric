@@ -4,10 +4,12 @@ export const IPC = {
   /* 工作区 */
   PickFolder: 'workspace:pick-folder',
   ListWorkspaces: 'workspace:list',
+  ListRecentWorkspaces: 'workspace:recent-list',
   GetDefaultDir: 'workspace:default-dir',
   CreateWorkspace: 'workspace:create',
   OpenWorkspace: 'workspace:open',
   OpenWorkspaceByPath: 'workspace:open-by-path',
+  CancelWorkspaceRequest: 'workspace:cancel-request',
   CloseWorkspace: 'workspace:close',
   GetCurrentWorkspace: 'workspace:current',
   RefreshWorkspace: 'workspace:refresh',
@@ -65,6 +67,7 @@ export const IPC = {
   LoadSession: 'agent:sessions:get',
   DeleteSession: 'agent:sessions:delete',
   UpdateSession: 'agent:sessions:update',
+  UpdateSessionModelPreference: 'agent:sessions:model-preference:update',
   AgentEvent: 'agent:event',
 
   /* 远程部署（仅桌面端） */

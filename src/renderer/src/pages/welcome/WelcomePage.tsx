@@ -1,31 +1,119 @@
 import { BookOpen, FolderOpen, FolderPlus, History, Server } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrandMark } from '../../components/icons/BrandMark'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { DeployWizard } from './DeployWizard'
+import { RecentWorkspaceList } from './RecentWorkspaceList'
 import { api } from '../../lib/api'
-import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 import { getLocalPlatformApi, getPlatformApi, isWebPlatform } from '../../platform/platformApi'
 import { HttpPlatformApi } from '../../platform/httpApi'
 import { installPlatformApi } from '../../platform/platformApi'
 import { loginRemote } from '../../platform/webAuth'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../../lib/workspaceArchiveFile'
-import type { WorkspaceImportTarget } from '../../../../shared/api'
-import type { DeployTargetPublic } from '../../../../shared/types'
+import type { StoryFabricApi, WorkspaceImportTarget } from '../../../../shared/api'
+import type { DeployTargetPublic, WorkspaceListItem } from '../../../../shared/types'
+
+/** 服务器部署与远程连接尚未完成可用性验证，稳定版暂不向用户开放。 */
+export const SERVER_DEPLOYMENT_ENABLED = false
+
+export function createRecentConfigKey(
+  isWeb: boolean,
+  isAndroid: boolean,
+  mode: 'local' | 'remote',
+  serviceRoot: string,
+  serviceKey: string
+): string {
+  return JSON.stringify([isWeb, isAndroid, mode, serviceRoot, serviceKey])
+}
+
+export function shouldAutoLoadRecentWorkspaces(
+  isWeb: boolean,
+  mode: 'local' | 'remote',
+  serviceConfigSubmitted: boolean
+): boolean {
+  return isWeb || mode === 'local' || serviceConfigSubmitted
+}
+
+export function isWorkspaceRequestCurrent(
+  expectedConfigKey: string,
+  currentConfigKey: string,
+  expectedLoadId: number,
+  currentLoadId: number
+): boolean {
+  return expectedConfigKey === currentConfigKey && expectedLoadId === currentLoadId
+}
+
+export interface WorkspaceOpenRequestGuard {
+  isCurrent: () => boolean
+}
+
+export function createWorkspaceOpenRequestGuard(
+  expectedConfigKey: string,
+  expectedRequestId: number,
+  isMounted: () => boolean,
+  getCurrentConfigKey: () => string,
+  getCurrentRequestId: () => number
+): WorkspaceOpenRequestGuard {
+  return {
+    isCurrent: () => isMounted() && expectedConfigKey === getCurrentConfigKey() && expectedRequestId === getCurrentRequestId()
+  }
+}
+
+export function shouldClearWorkspaceLoading(
+  mounted: boolean,
+  expectedConfigKey: string,
+  loadingConfigKey: string | null,
+  expectedLoadId: number,
+  loadingLoadId: number | null
+): boolean {
+  return mounted && loadingConfigKey !== null && loadingLoadId !== null && isWorkspaceRequestCurrent(
+    expectedConfigKey,
+    loadingConfigKey,
+    expectedLoadId,
+    loadingLoadId
+  )
+}
+
+export function shouldClearRecentWorkspaceOpening(
+  mounted: boolean,
+  expectedRequestId: number,
+  currentRequestId: number
+): boolean {
+  return mounted && expectedRequestId === currentRequestId
+}
+
+export function shouldCloseWorkspacePicker(
+  nextOpen: boolean,
+  _workspaceLoading: boolean,
+  _workspaceActionBusy: boolean
+): boolean {
+  return !nextOpen
+}
+
+export async function openRecentWorkspaceThenRefresh(
+  path: string,
+  openWorkspace: (path: string) => Promise<void>,
+  refreshRecent: () => void | Promise<void>,
+  isCurrent: () => boolean = () => true
+): Promise<void> {
+  if (!isCurrent()) return
+  await openWorkspace(path)
+  if (!isCurrent()) return
+  void Promise.resolve(refreshRecent()).catch(() => undefined)
+}
 
 export function WelcomePage(): React.ReactElement {
   const open = useWorkspace((s) => s.open)
   const createAndOpen = useWorkspace((s) => s.createAndOpen)
   const error = useWorkspace((s) => s.error)
-  const settings = useSettings((s) => s.settings)
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState('')
   const [parentDir, setParentDir] = useState('')
   const [busy, setBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
-  const [workspaces, setWorkspaces] = useState<import('../../../../shared/types').WorkspaceListItem[]>([])
+  const [workspaces, setWorkspaces] = useState<WorkspaceListItem[]>([])
   const [workspaceMode, setWorkspaceMode] = useState<'open' | 'import'>('open')
   const [workspacePath, setWorkspacePath] = useState('')
   const [archiveName, setArchiveName] = useState('')
@@ -35,34 +123,170 @@ export function WelcomePage(): React.ReactElement {
   const [workspaceActionBusy, setWorkspaceActionBusy] = useState(false)
   const [workspaceApiReady, setWorkspaceApiReady] = useState(false)
   const workspaceLoadId = useRef(0)
-  const workspaceCloseAllowed = useRef(false)
+  const workspaceLoadingRequest = useRef<{ loadId: number; configKey: string } | null>(null)
+  const workspaceRequestSequence = useRef(0)
+  const workspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
   const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
   const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
   const [serviceUrl, setServiceUrl] = useState('')
   const [serviceKey, setServiceKey] = useState('')
   const [serviceError, setServiceError] = useState<string | null>(null)
+  const [serviceConnecting, setServiceConnecting] = useState(false)
+  const [recentLoadConfig, setRecentLoadConfig] = useState<{
+    mode: 'local' | 'remote'
+    serviceRoot: string
+    serviceKey: string
+    serviceConfigSubmitted: boolean
+  }>({
+    mode: isWeb ? 'remote' : 'local',
+    serviceRoot: '',
+    serviceKey: '',
+    serviceConfigSubmitted: true
+  })
+  const [recentItems, setRecentItems] = useState<WorkspaceListItem[]>([])
+  const [recentItemsConfigKey, setRecentItemsConfigKey] = useState<string | null>(null)
+  const [recentLoading, setRecentLoading] = useState(false)
+  const [recentError, setRecentError] = useState<string | null>(null)
+  const [recentOpeningPath, setRecentOpeningPath] = useState<string | null>(null)
+  const recentOpeningRequestId = useRef(0)
+  const recentWorkspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
+  const [recentLoadGeneration, setRecentLoadGeneration] = useState(0)
   const [deployOpen, setDeployOpen] = useState(false)
   const [targets, setTargets] = useState<DeployTargetPublic[]>([])
   const [targetNotice, setTargetNotice] = useState<Record<string, string>>({})
   const [targetBusy, setTargetBusy] = useState<string | null>(null)
   const [logs, setLogs] = useState<{ title: string; text: string } | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
-  const localApiRef = useRef<import('../../../../shared/api').StoryFabricApi | null>(null)
+  const localApiRef = useRef<StoryFabricApi | null>(null)
+  const recentLoadId = useRef(0)
+  const mountedRef = useRef(false)
   if (!localApiRef.current && !isWeb) localApiRef.current = getLocalPlatformApi()
 
-  const reloadTargets = async (): Promise<void> => {
+  const currentServiceRoot = !isWeb && mode === 'remote' ? serviceUrl.trim().replace(/\/+$/, '') : ''
+  const currentServiceKey = !isWeb && mode === 'remote' ? serviceKey.trim() : ''
+  const currentConfigKey = createRecentConfigKey(isWeb, isAndroid, mode, currentServiceRoot, currentServiceKey)
+  const recentConfigKey = createRecentConfigKey(
+    isWeb,
+    isAndroid,
+    recentLoadConfig.mode,
+    recentLoadConfig.serviceRoot,
+    recentLoadConfig.serviceKey
+  )
+  const currentConfigKeyRef = useRef(currentConfigKey)
+  currentConfigKeyRef.current = currentConfigKey
+  const recentConfigKeyRef = useRef(recentConfigKey)
+  recentConfigKeyRef.current = recentConfigKey
+  const serviceConnectionRequestId = useRef(0)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      workspaceLoadId.current += 1
+      recentLoadId.current += 1
+      recentOpeningRequestId.current += 1
+      workspaceRequest.current?.controller.abort()
+      const requestId = workspaceRequest.current?.requestId
+      if (requestId) void getPlatformApi().cancelWorkspaceRequest?.(requestId)?.catch(() => undefined)
+      const recentRequestId = recentWorkspaceRequest.current?.requestId
+      recentWorkspaceRequest.current?.controller.abort()
+      if (recentRequestId) void getPlatformApi().cancelWorkspaceRequest?.(recentRequestId)?.catch(() => undefined)
+    }
+  }, [])
+
+  const loadRecentWorkspaces = useCallback(async (expectedConfigKey: string = recentConfigKey): Promise<void> => {
+    if (!mountedRef.current || recentConfigKeyRef.current !== expectedConfigKey || currentConfigKeyRef.current !== expectedConfigKey) return
+    const loadId = ++recentLoadId.current
+    const isCurrent = (): boolean =>
+      mountedRef.current &&
+      recentLoadId.current === loadId &&
+      recentConfigKeyRef.current === expectedConfigKey &&
+      currentConfigKeyRef.current === expectedConfigKey
+
+    if (!isCurrent()) return
+    setRecentError(null)
+
+    if (!shouldAutoLoadRecentWorkspaces(isWeb, recentLoadConfig.mode, recentLoadConfig.serviceConfigSubmitted)) {
+      setRecentItems([])
+      setRecentItemsConfigKey(null)
+      setRecentLoading(false)
+      return
+    }
+
+    setRecentItems([])
+    setRecentItemsConfigKey(null)
+    setRecentLoading(true)
+    try {
+      let recentApi: StoryFabricApi
+      if (isWeb) {
+        recentApi = getPlatformApi()
+      } else if (recentLoadConfig.mode === 'remote') {
+        const token = await loginRemote(recentLoadConfig.serviceRoot, recentLoadConfig.serviceKey)
+        if (!isCurrent()) return
+        const remote = new HttpPlatformApi(fetch, recentLoadConfig.serviceRoot, { kind: 'bearer', token })
+        if (!isCurrent()) return
+        installPlatformApi(remote)
+        recentApi = remote
+      } else {
+        recentApi = localApiRef.current ?? getPlatformApi()
+        if (!isCurrent()) return
+        installPlatformApi(recentApi)
+      }
+
+      const items = await recentApi.listRecentWorkspaces()
+      if (!isCurrent()) return
+      setRecentItems(items)
+      setRecentItemsConfigKey(expectedConfigKey)
+    } catch (err) {
+      if (!isCurrent()) return
+      setRecentItems([])
+      setRecentItemsConfigKey(null)
+      setRecentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (isCurrent()) setRecentLoading(false)
+    }
+  }, [isAndroid, isWeb, recentConfigKey, recentLoadConfig])
+
+  useEffect(() => {
+    const expectedConfigKey = recentConfigKey
+    const requestId = serviceConnectionRequestId.current
+    void loadRecentWorkspaces(expectedConfigKey).finally(() => {
+      if (requestId !== 0 && serviceConnectionRequestId.current === requestId) setServiceConnecting(false)
+    })
+    return () => {
+      recentLoadId.current += 1
+    }
+  }, [isAndroid, isWeb, recentLoadGeneration, loadRecentWorkspaces, recentConfigKey])
+
+  useEffect(() => {
+    const request = recentWorkspaceRequest.current
+    request?.controller.abort()
+    if (request) void getPlatformApi().cancelWorkspaceRequest?.(request.requestId)?.catch(() => undefined)
+    recentWorkspaceRequest.current = null
+    recentOpeningRequestId.current += 1
+    setRecentOpeningPath(null)
+    if (recentItemsConfigKey !== currentConfigKey) {
+      recentLoadId.current += 1
+      setRecentItems([])
+      setRecentItemsConfigKey(null)
+      setRecentLoading(false)
+      setRecentError(null)
+    }
+  }, [currentConfigKey])
+
+  const reloadTargets = useCallback(async (): Promise<void> => {
     try {
       setTargets(await api.deployListTargets())
     } catch {
       // 非桌面端不支持远程部署，静默忽略
       setTargets([])
     }
-  }
+  }, [])
 
   useEffect(() => {
-    void reloadTargets()
-  }, [])
+    if (SERVER_DEPLOYMENT_ENABLED) void reloadTargets()
+  }, [reloadTargets])
 
   const checkUpdate = async (target: DeployTargetPublic): Promise<void> => {
     setTargetBusy(target.id)
@@ -168,7 +392,67 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
+  const openRecentWorkspace = async (path: string): Promise<void> => {
+    const expectedConfigKey = recentItemsConfigKey
+    if (expectedConfigKey === null || expectedConfigKey !== currentConfigKey) return
+    const requestId = ++recentOpeningRequestId.current
+    const request = {
+      requestId: `welcome-recent-${Date.now().toString(36)}-${requestId}`,
+      controller: new AbortController()
+    }
+    recentWorkspaceRequest.current = request
+    const requestGuard = createWorkspaceOpenRequestGuard(
+      expectedConfigKey,
+      requestId,
+      () => mountedRef.current,
+      () => currentConfigKeyRef.current,
+      () => recentOpeningRequestId.current
+    )
+    setRecentOpeningPath(path)
+    setRecentError(null)
+    try {
+      await openRecentWorkspaceThenRefresh(
+        path,
+        (workspacePath) => open(workspacePath, requestGuard.isCurrent, { signal: request.controller.signal, requestId: request.requestId }),
+        loadRecentWorkspaces,
+        requestGuard.isCurrent
+      )
+    } catch (err) {
+      if (!requestGuard.isCurrent()) return
+      useWorkspace.setState({ error: null })
+      setRecentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (requestGuard.isCurrent()) {
+        setRecentOpeningPath(null)
+        if (recentWorkspaceRequest.current === request) recentWorkspaceRequest.current = null
+      }
+    }
+  }
+
+  const connectService = (): void => {
+    if (serviceConnecting) return
+    const root = serviceUrl.trim().replace(/\/+$/, '')
+    const key = serviceKey.trim()
+    if (!root) {
+      setServiceError('请输入服务地址')
+      return
+    }
+    if (!key) {
+      setServiceError('请输入访问密钥')
+      return
+    }
+    serviceConnectionRequestId.current += 1
+    setServiceConnecting(true)
+    setServiceError(null)
+    setRecentLoadConfig({ mode: 'remote', serviceRoot: root, serviceKey: key, serviceConfigSubmitted: true })
+    setRecentLoadGeneration((generation) => generation + 1)
+  }
+
   const resetWorkspacePicker = (): void => {
+    const request = workspaceRequest.current
+    request?.controller.abort()
+    if (request) void getPlatformApi().cancelWorkspaceRequest?.(request.requestId)?.catch(() => undefined)
+    workspaceRequest.current = null
     workspaceLoadId.current += 1
     setWorkspaces([])
     setWorkspaceMode('open')
@@ -177,6 +461,7 @@ export function WelcomePage(): React.ReactElement {
     setWorkspaceLoadError(null)
     setWorkspacePickerError(null)
     setWorkspaceLoading(false)
+    workspaceLoadingRequest.current = null
     setWorkspaceActionBusy(false)
     setWorkspaceApiReady(false)
     useWorkspace.setState({ error: null })
@@ -184,21 +469,17 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const closeWorkspacePicker = (): void => {
-    workspaceCloseAllowed.current = true
     setWorkspaceOpen(false)
     resetWorkspacePicker()
   }
 
   const handleWorkspacePickerOpenChange = (open: boolean): void => {
     if (open) {
-      workspaceCloseAllowed.current = false
       setWorkspaceOpen(true)
       return
     }
 
-    // Keep the same picker generation alive until its list or open/import API action settles.
-    // This prevents an old import/open request from affecting a newly opened picker.
-    if (!workspaceCloseAllowed.current && (workspaceLoading || workspaceActionBusy)) return
+    if (!shouldCloseWorkspacePicker(open, workspaceLoading, workspaceActionBusy)) return
     closeWorkspacePicker()
   }
 
@@ -221,47 +502,70 @@ export function WelcomePage(): React.ReactElement {
 
   const openTypedWorkspace = async (): Promise<void> => {
     const generation = workspaceLoadId.current
+    const requestGuard = createWorkspaceOpenRequestGuard(
+      currentConfigKey,
+      generation,
+      () => mountedRef.current,
+      () => currentConfigKeyRef.current,
+      () => workspaceLoadId.current
+    )
     const path = workspacePath.trim()
     if (!path) return
+    const request = workspaceRequest.current
+    const options = request ? { signal: request.controller.signal, requestId: request.requestId } : undefined
     setWorkspaceActionBusy(true)
     setWorkspacePickerError(null)
     try {
+      if (!requestGuard.isCurrent()) return
       requireWorkspaceApi()
-      const summary = await getPlatformApi().openWorkspaceByPath(path)
-      if (workspaceLoadId.current !== generation) return
+      const platform = getPlatformApi()
+      if (!requestGuard.isCurrent()) return
+      const summary = options ? await platform.openWorkspaceByPath(path, options) : await platform.openWorkspaceByPath(path)
+      if (!requestGuard.isCurrent()) return
       useWorkspace.setState({ status: 'ready', summary, error: null })
       closeWorkspacePicker()
     } catch (err) {
-      if (workspaceLoadId.current === generation) setWorkspacePickerFailure(err)
+      if (requestGuard.isCurrent()) setWorkspacePickerFailure(err)
     } finally {
-      if (workspaceLoadId.current === generation) setWorkspaceActionBusy(false)
+      if (requestGuard.isCurrent()) setWorkspaceActionBusy(false)
     }
   }
 
   const importSelectedArchive = async (file: File): Promise<void> => {
     const generation = workspaceLoadId.current
+    const requestGuard = createWorkspaceOpenRequestGuard(
+      currentConfigKey,
+      generation,
+      () => mountedRef.current,
+      () => currentConfigKeyRef.current,
+      () => workspaceLoadId.current
+    )
+    const isCurrent = requestGuard.isCurrent
+    const request = workspaceRequest.current
+    const options = request ? { signal: request.controller.signal, requestId: request.requestId } : undefined
     setWorkspaceActionBusy(true)
     setWorkspacePickerError(null)
     try {
       const bytes = await readWorkspaceArchiveFile(file)
-      if (workspaceLoadId.current !== generation) return
+      if (!isCurrent()) return
       requireWorkspaceApi()
       let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined }
       if (mode === 'local' && !isAndroid && !isWeb) {
-        if (workspaceLoadId.current !== generation) return
+        if (!isCurrent()) return
         const parentDir = await api.pickFolder()
-        if (workspaceLoadId.current !== generation) return
+        if (!isCurrent()) return
         if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
         target = { parentDir, name: archiveName.trim() || undefined }
       }
-      if (workspaceLoadId.current !== generation) return
-      await useWorkspace.getState().importArchive(bytes, file.name, target, () => workspaceLoadId.current === generation)
-      if (workspaceLoadId.current !== generation) return
+      if (!isCurrent()) return
+      if (options) await useWorkspace.getState().importArchive(bytes, file.name, target, isCurrent, options)
+      else await useWorkspace.getState().importArchive(bytes, file.name, target, isCurrent)
+      if (!isCurrent()) return
       closeWorkspacePicker()
     } catch (err) {
-      if (workspaceLoadId.current === generation) setWorkspacePickerFailure(err)
+      if (isCurrent()) setWorkspacePickerFailure(err)
     } finally {
-      if (workspaceLoadId.current === generation) {
+      if (isCurrent()) {
         setWorkspaceActionBusy(false)
         if (archiveInput.current) archiveInput.current.value = ''
       }
@@ -269,20 +573,40 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const openWorkspacePicker = async (): Promise<void> => {
-    workspaceCloseAllowed.current = false
     resetWorkspacePicker()
     const loadId = workspaceLoadId.current
+    const expectedConfigKey = currentConfigKey
+    const requestGuard = createWorkspaceOpenRequestGuard(
+      expectedConfigKey,
+      loadId,
+      () => mountedRef.current,
+      () => currentConfigKeyRef.current,
+      () => workspaceLoadId.current
+    )
+    const isCurrent = requestGuard.isCurrent
+    const requestId = `welcome-workspace-${Date.now().toString(36)}-${++workspaceRequestSequence.current}`
+    workspaceRequest.current = { requestId, controller: new AbortController() }
     setWorkspaceOpen(true)
+    workspaceLoadingRequest.current = { loadId, configKey: expectedConfigKey }
     setWorkspaceLoading(true)
     if (isWeb) {
       setWorkspaceApiReady(true)
       try {
         const list = await api.listWorkspaces()
-        if (workspaceLoadId.current === loadId) setWorkspaces(list)
+        if (isCurrent()) setWorkspaces(list)
       } catch (err) {
-        if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
+        if (isCurrent()) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
       } finally {
-        if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
+        if (shouldClearWorkspaceLoading(
+          mountedRef.current,
+          expectedConfigKey,
+          workspaceLoadingRequest.current?.configKey ?? null,
+          loadId,
+          workspaceLoadingRequest.current?.loadId ?? null
+        )) {
+          workspaceLoadingRequest.current = null
+          setWorkspaceLoading(false)
+        }
       }
       return
     }
@@ -290,28 +614,47 @@ export function WelcomePage(): React.ReactElement {
       try {
         const root = serviceUrl.trim().replace(/\/+$/, '')
         const token = await loginRemote(root, serviceKey.trim())
+        if (!isCurrent()) return
         const remote = new HttpPlatformApi(fetch, root, { kind: 'bearer', token })
-        if (workspaceLoadId.current !== loadId) return
+        if (!isCurrent()) return
         installPlatformApi(remote)
         setWorkspaceApiReady(true)
         const list = await remote.listWorkspaces()
-        if (workspaceLoadId.current === loadId) setWorkspaces(list)
+        if (isCurrent()) setWorkspaces(list)
       } catch (err) {
-        if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
+        if (isCurrent()) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
       } finally {
-        if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
+        if (shouldClearWorkspaceLoading(
+          mountedRef.current,
+          expectedConfigKey,
+          workspaceLoadingRequest.current?.configKey ?? null,
+          loadId,
+          workspaceLoadingRequest.current?.loadId ?? null
+        )) {
+          workspaceLoadingRequest.current = null
+          setWorkspaceLoading(false)
+        }
       }
       return
     }
     try {
-      if (localApiRef.current) installPlatformApi(localApiRef.current)
-      if (workspaceLoadId.current === loadId) setWorkspaceApiReady(true)
+      if (localApiRef.current && isCurrent()) installPlatformApi(localApiRef.current)
+      if (isCurrent()) setWorkspaceApiReady(true)
       const list = await getPlatformApi().listWorkspaces()
-      if (workspaceLoadId.current === loadId) setWorkspaces(list)
+      if (isCurrent()) setWorkspaces(list)
     } catch (err) {
-      if (workspaceLoadId.current === loadId) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
+      if (isCurrent()) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
     } finally {
-      if (workspaceLoadId.current === loadId) setWorkspaceLoading(false)
+      if (shouldClearWorkspaceLoading(
+        mountedRef.current,
+        expectedConfigKey,
+        workspaceLoadingRequest.current?.configKey ?? null,
+        loadId,
+        workspaceLoadingRequest.current?.loadId ?? null
+      )) {
+        workspaceLoadingRequest.current = null
+        setWorkspaceLoading(false)
+      }
     }
   }
 
@@ -337,9 +680,7 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
-  const recent = settings?.recentWorkspaces ?? []
-
-  if (deployOpen) {
+  if (SERVER_DEPLOYMENT_ENABLED && deployOpen) {
     return (
       <DeployWizard
         onClose={() => setDeployOpen(false)}
@@ -347,6 +688,7 @@ export function WelcomePage(): React.ReactElement {
           setMode('remote')
           setServiceUrl(url)
           setServiceKey(accessKey)
+          setRecentLoadConfig({ mode: 'remote', serviceRoot: url.trim().replace(/\/+$/, ''), serviceKey: accessKey.trim(), serviceConfigSubmitted: true })
           setDeployOpen(false)
           void reloadTargets()
         }}
@@ -356,38 +698,44 @@ export function WelcomePage(): React.ReactElement {
 
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
-      <div className="w-full max-w-xl">
-        <div className="mb-6 text-center sm:mb-10">
-          <div className="mx-auto mb-5 flex justify-center">
-            <BrandMark variant="flat" size={64} className="drop-shadow-lg shadow-accent/25 rounded-[14px]" />
+      <div className="w-full max-w-6xl">
+        <div className="mx-auto mb-6 flex min-w-0 max-w-5xl items-center justify-center gap-4 sm:mb-10 sm:gap-5">
+          <BrandMark variant="flat" size={56} className="shrink-0 rounded-[14px] drop-shadow-lg shadow-accent/25 sm:h-16 sm:w-16" />
+          <div className="min-w-0 max-w-3xl">
+            <div className="flex min-w-0 items-baseline gap-3">
+              <h1 className="truncate text-2xl font-bold tracking-wide sm:text-3xl">织章</h1>
+              <p className="truncate text-xs font-medium tracking-[0.16em] text-muted sm:text-sm sm:tracking-[0.2em]">STORYFABRIC</p>
+            </div>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
           </div>
-          <h1 className="text-2xl font-bold tracking-wide sm:text-3xl">织章</h1>
-          <p className="mt-1 text-xs font-medium tracking-[0.16em] text-muted sm:text-sm sm:tracking-[0.2em]">STORYFABRIC</p>
-          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
         </div>
 
-        <Card className="p-5">
-          {!isWeb && (
+        <Card className="grid min-w-0 gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-6">
+          <div className="min-w-0">
+          {!isWeb && SERVER_DEPLOYMENT_ENABLED && (
             <div className="mb-4 grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
-              <button type="button" onClick={() => { setMode('local'); if (localApiRef.current) installPlatformApi(localApiRef.current) }} className={`rounded-md px-3 py-2 ${mode === 'local' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>本地</button>
-              <button type="button" onClick={() => setMode('remote')} className={`rounded-md px-3 py-2 ${mode === 'remote' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>服务</button>
+              <button type="button" aria-pressed={mode === 'local'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('local'); setServiceError(null); setRecentLoadConfig({ mode: 'local', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: true }); if (localApiRef.current) installPlatformApi(localApiRef.current) }} className={`rounded-md px-3 py-2 ${mode === 'local' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>本地</button>
+              <button type="button" aria-pressed={mode === 'remote'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('remote'); setRecentError(null); setRecentItems([]); setRecentLoadConfig({ mode: 'remote', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: false }) }} className={`rounded-md px-3 py-2 ${mode === 'remote' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>服务</button>
             </div>
           )}
-          {mode === 'remote' && !isWeb && (
-            <div className="mb-4 space-y-2">
-              <Input value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" />
-              <Input type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" />
+          {SERVER_DEPLOYMENT_ENABLED && mode === 'remote' && !isWeb && (
+            <form className="mb-4 space-y-2" onSubmit={(event) => { event.preventDefault(); connectService() }}>
+              <label htmlFor="service-url" className="sr-only">服务地址</label>
+              <Input id="service-url" value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
+              <label htmlFor="service-key" className="sr-only">访问密钥</label>
+              <Input id="service-key" type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
+              <Button type="submit" size="sm" variant="outline" loading={serviceConnecting} disabled={serviceConnecting}>连接服务</Button>
               {!isAndroid && (
-                <Button size="sm" variant="outline" onClick={() => setDeployOpen(true)}>
+                <Button type="button" size="sm" variant="outline" onClick={() => setDeployOpen(true)}>
                   <Server size={13} /> 安装到服务器
                 </Button>
               )}
-              {serviceError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
-            </div>
+              {serviceError && <div id="service-error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
+            </form>
           )}
           <div className="flex flex-col gap-3 sm:flex-row">
             <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy || workspaceLoading}>
-              <FolderOpen size={16} /> 打开工作区
+              <FolderOpen size={16} /> 打开其他工作区
             </Button>
             <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
               <FolderPlus size={16} /> 创建新工作区
@@ -396,7 +744,7 @@ export function WelcomePage(): React.ReactElement {
 
           {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
-          {mode === 'remote' && !isWeb && targets.length > 0 && (
+          {SERVER_DEPLOYMENT_ENABLED && mode === 'remote' && !isWeb && targets.length > 0 && (
             <div className="mt-5 space-y-2">
               <div className="flex items-center gap-1.5 text-xs font-medium text-muted">
                 <Server size={13} /> 已部署的服务器
@@ -441,31 +789,17 @@ export function WelcomePage(): React.ReactElement {
             </div>
           )}
 
-          {mode === 'local' && recent.length > 0 && (
-            <div className="mt-5">
-              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted">
-                <History size={13} /> 最近打开
-              </div>
-              <div className="space-y-1">
-                {recent.map((p) => {
-                  const label = p.split(/[\\/]/).filter(Boolean).pop() ?? p
-                  return (
-                    <button
-                      key={p}
-                      onClick={() => void doOpen(p)}
-                      disabled={busy}
-                      title={p}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-elevated transition cursor-pointer"
-                    >
-                      <BookOpen size={14} className="shrink-0 text-faint" />
-                      <span className="text-sm">{label}</span>
-                      <span className="ml-auto truncate max-w-56 text-xs text-faint">{p}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+          </div>
+          <div className="min-w-0 border-t border-line pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+            <RecentWorkspaceList
+              items={recentItemsConfigKey === currentConfigKey ? recentItems : []}
+              loading={recentItemsConfigKey === currentConfigKey ? recentLoading : false}
+              error={recentItemsConfigKey === currentConfigKey ? recentError : null}
+              openingPath={recentOpeningPath}
+              onOpen={openRecentWorkspace}
+              onRetry={loadRecentWorkspaces}
+            />
+          </div>
         </Card>
 
         <p className="mt-6 text-center text-xs text-faint">

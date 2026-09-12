@@ -16,6 +16,8 @@ import type {
 import type { FetchModelsInput } from '../../shared/api'
 import { pruneModelSettings } from '../../core/llm/modelCatalog'
 import { keyPreview } from '../../shared/keyPreview'
+import { markRecentWorkspace } from '../../shared/recentWorkspaces'
+import { throwIfWorkspaceRequestAborted } from '../../shared/api'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
   theme: 'system',
   recentWorkspaces: [],
+  recentWorkspaceOpenedAt: {},
   customPrompt: '',
   showSessionLength: false,
   completionSound: false,
@@ -54,6 +57,49 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 const PLAIN_PREFIX = 'plain:'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isProviderProtocol(value: unknown): value is ProviderStored['protocol'] {
+  return value === 'openai' || value === 'anthropic' || value === 'gemini'
+}
+
+function normalizeProvider(value: unknown): ProviderStored | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0 || typeof value.name !== 'string' || !isProviderProtocol(value.protocol) || typeof value.baseUrl !== 'string') return null
+  const models = Array.isArray(value.models) ? value.models.filter((model): model is string => typeof model === 'string') : []
+  const modelSettings = isRecord(value.modelSettings)
+    ? Object.fromEntries(Object.entries(value.modelSettings).filter((entry) => isRecord(entry[1]))) as ProviderStored['modelSettings']
+    : {}
+  return {
+    ...value,
+    id: value.id,
+    name: value.name,
+    protocol: value.protocol,
+    baseUrl: value.baseUrl,
+    apiKeyEncrypted: typeof value.apiKeyEncrypted === 'string' ? value.apiKeyEncrypted : '',
+    models,
+    modelSettings
+  }
+}
+
+function normalizeProviders(value: unknown): ProviderStored[] {
+  return Array.isArray(value) ? value.map(normalizeProvider).filter((provider): provider is ProviderStored => provider !== null) : []
+}
+
+function normalizeSettings(raw: unknown): AppSettings {
+  const parsed = isRecord(raw) ? raw : {}
+  const providers = normalizeProviders(parsed.providers)
+  const recentWorkspaces = Array.isArray(parsed.recentWorkspaces)
+    ? parsed.recentWorkspaces.filter((item): item is string => typeof item === 'string')
+    : []
+  const recentWorkspaceOpenedAt: Record<string, string> = isRecord(parsed.recentWorkspaceOpenedAt)
+    ? Object.fromEntries(Object.entries(parsed.recentWorkspaceOpenedAt).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {}
+
+  return { ...DEFAULT_SETTINGS, ...parsed, providers, recentWorkspaces, recentWorkspaceOpenedAt }
+}
 
 export function encryptApiKey(plain: string): string {
   const ss = getSafeStorage()
@@ -96,8 +142,7 @@ export class SettingsService {
 
   private async loadRaw(): Promise<AppSettings> {
     try {
-      const raw = JSON.parse(await fs.readFile(this.filePath, 'utf-8')) as Partial<AppSettings>
-      return { ...DEFAULT_SETTINGS, ...raw }
+      return normalizeSettings(JSON.parse(await fs.readFile(this.filePath, 'utf-8')))
     } catch {
       return { ...DEFAULT_SETTINGS }
     }
@@ -120,6 +165,26 @@ export class SettingsService {
     return this.serialized(async () => {
       const next = { ...(await this.loadRaw()), ...patch }
       await this.saveRaw(next)
+      return next
+    })
+  }
+
+  recordRecentWorkspace(path: string, signal?: AbortSignal): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      throwIfWorkspaceRequestAborted(signal)
+      const recent = markRecentWorkspace({
+        recentWorkspaces: settings.recentWorkspaces,
+        recentWorkspaceOpenedAt: settings.recentWorkspaceOpenedAt
+      }, path)
+      const next = { ...settings, ...recent, lastWorkspacePath: path }
+      try {
+        await this.saveRaw(next)
+        throwIfWorkspaceRequestAborted(signal)
+      } catch (error) {
+        if (signal?.aborted) await this.saveRaw(settings)
+        throw error
+      }
       return next
     })
   }

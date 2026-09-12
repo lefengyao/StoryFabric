@@ -13,6 +13,7 @@ import type {
   RunAgentRequest,
   SearchHit,
   SessionMeta,
+  SessionModelPreference,
   StoryEvent,
   WorkspaceSummary,
   WorkspaceListItem,
@@ -67,15 +68,29 @@ export interface WorkspaceImportTarget {
   name?: string
 }
 
+export interface WorkspaceRequestOptions {
+  signal?: AbortSignal
+  /** Electron uses this opaque ID to cancel work already handed to the main process. */
+  requestId?: string
+}
+
+export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  const error = new Error('工作区请求已取消')
+  error.name = 'AbortError'
+  throw error
+}
+
 export interface StoryFabricApi {
   /* 工作区 */
   pickFolder(): Promise<string | null>
   listWorkspaces(): Promise<WorkspaceListItem[]>
+  listRecentWorkspaces(): Promise<WorkspaceListItem[]>
   /** 默认新建位置：系统文档目录 */
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
-  openWorkspace(path: string): Promise<WorkspaceSummary>
-  openWorkspaceByPath(path: string): Promise<WorkspaceSummary>
+  openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary>
+  openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary>
   closeWorkspace(): Promise<void>
   getCurrentWorkspace(): Promise<WorkspaceSummary | null>
   refreshWorkspace(): Promise<WorkspaceSummary | null>
@@ -85,7 +100,8 @@ export interface StoryFabricApi {
   exportSession(id: string): Promise<SessionArchive>
   importSession(base64: string, fileName: string): Promise<SessionMeta>
   shareSessionArchive?(archive: SessionArchive): Promise<void>
-  importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary>
+  importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary>
+  cancelWorkspaceRequest?(requestId: string): Promise<void>
   getChapterBody(id: string): Promise<string | null>
   searchProject(query: string): Promise<SearchHit[]>
   /** 关系图谱节点坐标（按人物 id） */
@@ -137,6 +153,7 @@ export interface StoryFabricApi {
   deleteSession(id: string): Promise<void>
   /** 更新会话元信息：重命名 / 归档 */
   updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void>
+  updateSessionModelPreference(id: string, value: SessionModelPreference): Promise<void>
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void
 
   /* 远程部署（仅桌面端；其它平台实现为抛出「仅支持桌面端」） */

@@ -76,6 +76,21 @@ describe('server workspace registry', () => {
     expect(metadata.name).toBe('新名称')
   })
 
+  it('rolls back only the exact imported workspace returned by the import transaction', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const existing = await registry.create('既有项目')
+    const source = new NodeFileStore(join(root, 'workspaces', existing.path))
+    const archive = await exportWorkspaceArchive(source, '既有项目')
+    const imported = await registry.importArchive(archive.bytes, '待回滚项目')
+
+    await registry.removeImported(imported)
+
+    await expect(registry.summary(imported.path)).rejects.toThrow('工作区不存在')
+    await expect(registry.summary(existing.path)).resolves.toMatchObject({ path: existing.path, name: '既有项目' })
+    expect((await registry.list()).map((item) => item.path)).toEqual(expect.arrayContaining(['default', existing.path]))
+  })
+
   it('keeps every workspace record when concurrent creates complete', async () => {
     const registry = await WorkspaceRegistry.open(await dataRoot())
     const created = await Promise.all(['并发项目 A', '并发项目 B', '并发项目 C'].map((name) => registry.create(name)))
@@ -161,6 +176,18 @@ describe('server workspace registry', () => {
     const registry = await WorkspaceRegistry.open(root)
 
     await expect(registry.summary(legacyId)).resolves.toMatchObject({ path: legacyId, name: '旧注册记录' })
+  })
+
+  it.each(['.', './'])('rejects a registry record that points at the managed root (%s)', async (directory) => {
+    const root = await dataRoot()
+    const managed = join(root, 'workspaces')
+    await mkdir(managed, { recursive: true })
+    await writeFile(join(managed, 'registry.json'), JSON.stringify({
+      version: 1,
+      workspaces: [{ id: 'ws_aaaaaaaaaaaa', name: '托管根目录', createdAt: 1, updatedAt: 1, directory }],
+    }))
+
+    await expect(WorkspaceRegistry.open(root)).rejects.toThrow('托管根目录')
   })
 
   it('rejects registry records whose directories resolve to the same real path', async () => {

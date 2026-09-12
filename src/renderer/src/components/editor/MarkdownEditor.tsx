@@ -7,6 +7,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import type React from 'react'
 import { useEffect, useRef } from 'react'
 import { cn } from '../../lib/utils'
+import { externalEditorChange, shouldNotifyEditorChange } from '../../lib/editorChange'
 
 function themeExt(): Extension {
   return EditorView.theme({
@@ -50,7 +51,7 @@ export function MarkdownEditor({
           themeExt(),
           EditorView.lineWrapping,
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) {
+            if (shouldNotifyEditorChange(u.transactions)) {
               externalValue.current = u.state.doc.toString()
               onChangeRef.current(externalValue.current)
             }
@@ -74,7 +75,10 @@ export function MarkdownEditor({
     if (!view) return
     if (value === externalValue.current) return
     externalValue.current = value
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } })
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value },
+      annotations: externalEditorChange.of(true)
+    })
   }, [value])
 
   return (

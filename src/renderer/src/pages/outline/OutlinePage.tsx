@@ -5,6 +5,7 @@ import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { canSwitchDocument } from '../../lib/documentSwitch'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import type { OutlineDoc, OutlineKind } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
@@ -34,6 +35,7 @@ export function OutlinePage(): React.ReactElement {
   usePersistentScrollPosition(outlineReaderRef, workspaceKey, `outline:reader:${kind}:${chapterId || 'all'}:${draft?.id ?? selected?.id ?? 'overview'}`)
 
   const openDoc = (d: OutlineDoc | null): void => {
+    if (d && !canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: d.id, dirty, confirmDiscard: () => window.confirm('当前大纲有未保存的修改，放弃并切换？') })) return
     setSelectedId(d?.id ?? null)
     setDraft(d ? { ...d } : null)
     setDirty(false)
@@ -80,7 +82,7 @@ export function OutlinePage(): React.ReactElement {
           {filteredDocs.map((d) => (
             <button
               key={d.id}
-              onClick={() => draft === null && openDoc(d)}
+              onClick={() => openDoc(d)}
               className={`list-row w-full rounded-lg px-3 py-2 text-left transition cursor-pointer flex items-center gap-2 ${
                 selectedId === d.id ? 'bg-accent-soft text-accent' : 'hover:bg-elevated'
               }`}

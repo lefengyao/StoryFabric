@@ -1,6 +1,6 @@
 /** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
 
-export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note'
+export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note' | 'projectDoc'
 
 export type CharacterTier = 'primary' | 'secondary'
 export type OutlineKind = 'total' | 'chapter'
@@ -118,6 +118,7 @@ export interface WorkspaceListItem {
   chapterCount: number
   volumeCount: number
   relationshipCount: number
+  lastOpenedAt?: string
 }
 
 export interface VolumeMeta {
@@ -181,6 +182,7 @@ export interface AppSettings {
   quickActionModel?: ModelRef
   theme: 'light' | 'dark' | 'system'
   recentWorkspaces: string[]
+  recentWorkspaceOpenedAt: Record<string, string>
   lastWorkspacePath?: string
   /** 用户自定义提示词：附加在内置系统提示词之后 */
   customPrompt: string
@@ -224,6 +226,13 @@ export interface ProviderStored {
 
 /** 推理等级：off 表示不发送推理参数 */
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high'
+export type ReasoningPreference = 'inherit' | ReasoningLevel
+
+export interface SessionModelPreference {
+  providerId: string
+  model: string
+  reasoning: ReasoningPreference
+}
 
 /** 官方思考强度 → 本地等级的映射（用户自填，因无法可靠拉取） */
 export interface ReasoningMap {
@@ -281,6 +290,10 @@ export interface ProviderInput {
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
+export type MessageFile =
+  | { kind: 'image'; id: string; name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; size: number; base64: string }
+  | { kind: 'text'; id: string; name: string; mimeType: string; size: number; text: string }
+
 export interface ToolCallData {
   id: string
   name: string
@@ -298,6 +311,8 @@ export interface ChatMessage {
   isError?: boolean
   /** Anthropic 扩展思考块：开启推理后带工具调用继续对话必须原样回传 */
   thinkingBlocks?: unknown[]
+  files?: MessageFile[]
+  runSettings?: { providerId: string; model: string; reasoning: ReasoningLevel }
 }
 
 export interface SessionMeta {
@@ -315,6 +330,12 @@ export interface ChatSession {
   updatedAt: number
   archived: boolean
   messages: ChatMessage[]
+  modelPreferences?: SessionModelPreference[]
+  /** 自动压缩后的较早对话摘要；仅用于模型请求，不替换界面历史。 */
+  contextSummary?: string
+  /** 摘要覆盖到的最后一条消息 id。 */
+  contextSummaryThrough?: string
+  contextSummaryUpdatedAt?: number
 }
 
 /** @引用：显式附带的项目实体 */
@@ -330,6 +351,9 @@ export interface RunAgentRequest {
   providerId: string
   model: string
   attachments?: Attachment[]
+  files?: MessageFile[]
+  reasoning?: ReasoningLevel
+  clientRunId?: string
 }
 
 /* ---------------- 待确认写变更 ---------------- */
@@ -354,8 +378,10 @@ export type AgentEvent =
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }
+  | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
+  | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
   | { type: 'error'; message: string }
-  | { type: 'done' }
+  | { type: 'done'; session?: ChatSession }
 
 /* ---------------- 工具定义 ---------------- */
 
@@ -383,7 +409,8 @@ export interface UsageRecord {
   cacheWriteTokens: number
 }
 
-export const MAX_TOOL_ROUNDS = 10
+/** 防止模型进入病态循环的安全上限；正常批量改稿远低于此值。 */
+export const MAX_TOOL_ROUNDS = 100
 
 /* ---------------- 远程部署（仅桌面端） ---------------- */
 

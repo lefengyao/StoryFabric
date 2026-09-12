@@ -16,15 +16,17 @@ import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 const api: StoryFabricApi = {
   pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
   listWorkspaces: () => ipcRenderer.invoke(IPC.ListWorkspaces),
+  listRecentWorkspaces: () => ipcRenderer.invoke(IPC.ListRecentWorkspaces),
   getDefaultWorkspaceDir: () => ipcRenderer.invoke(IPC.GetDefaultDir),
   createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
-  openWorkspace: (path) => ipcRenderer.invoke(IPC.OpenWorkspace, path),
-  openWorkspaceByPath: (path) => ipcRenderer.invoke(IPC.OpenWorkspaceByPath, path),
+  openWorkspace: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspace, path, options?.requestId),
+  openWorkspaceByPath: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspaceByPath, path, options?.requestId),
   closeWorkspace: () => ipcRenderer.invoke(IPC.CloseWorkspace),
   getCurrentWorkspace: () => ipcRenderer.invoke(IPC.GetCurrentWorkspace),
   refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),
   exportWorkspace: () => ipcRenderer.invoke(IPC.ExportWorkspace),
-  importWorkspace: (bytes, fileName, target) => ipcRenderer.invoke(IPC.ImportWorkspace, bytes, fileName, target),
+  importWorkspace: (bytes, fileName, target, options) => ipcRenderer.invoke(IPC.ImportWorkspace, bytes, fileName, target, options?.requestId),
+  cancelWorkspaceRequest: (requestId) => ipcRenderer.invoke(IPC.CancelWorkspaceRequest, requestId),
   getChapterBody: (id) => ipcRenderer.invoke(IPC.GetChapterBody, id),
   searchProject: (query) => ipcRenderer.invoke(IPC.SearchProject, query),
   getGraphLayout: () => ipcRenderer.invoke(IPC.GetGraphLayout),
@@ -72,6 +74,7 @@ const api: StoryFabricApi = {
   loadSession: (id) => ipcRenderer.invoke(IPC.LoadSession, id),
   deleteSession: (id) => ipcRenderer.invoke(IPC.DeleteSession, id),
   updateSession: (id, patch) => ipcRenderer.invoke(IPC.UpdateSession, id, patch),
+  updateSessionModelPreference: (id, value) => ipcRenderer.invoke(IPC.UpdateSessionModelPreference, id, value),
   onAgentEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
     ipcRenderer.on(IPC.AgentEvent, listener)

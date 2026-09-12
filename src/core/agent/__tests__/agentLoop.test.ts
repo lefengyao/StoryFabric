@@ -87,6 +87,59 @@ describe('CoreAgentService', () => {
     expect(requests[1].system).toContain('save_chapter')
   })
 
+  it('连续重复调用相同工具时提前停止，而不是依赖十轮上限', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const repeated = call('c1', 'list_notes', {})
+    const { service, requests } = makeService(store, [repeated, repeated, repeated, text('未执行')], events)
+
+    const { sessionId } = await service.run({ message: '检查便签', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests).toHaveLength(3)
+    expect(session.messages.at(-1)?.text).toContain('连续 3 轮调用完全相同的工具和参数')
+    expect(session.messages.at(-1)?.text).not.toContain('上限（10 轮）')
+  })
+
+  it('上下文接近上限时先压缩较早对话，再携带摘要继续请求', async () => {
+    const store = await createStore()
+    const sessions = new CoreSessionStore(store)
+    const session = await sessions.create()
+    session.title = '长会话'
+    session.messages = Array.from({ length: 90 }, (_, index) => ({
+      id: `old_${index}`,
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `历史第 ${index} 条：${'需要保留的上下文'.repeat(24)}`
+    }))
+    await sessions.save(session)
+
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(
+      store,
+      [
+        text('用户正在批量整理章节。'),
+        text('用户正在批量整理章节，下一步需要继续处理第九章。'),
+        text('继续完成第九章。')
+      ],
+      events,
+      [],
+      { 'mock-model': { contextTokens: 5000, maxOutputTokens: 800 } }
+    )
+
+    const result = await service.run({ sessionId: session.id, message: '继续处理', providerId, model: 'mock-model' })
+    const saved = await loadSession(store, result.sessionId)
+
+    expect(events.some((event) => event.type === 'context-compression-start')).toBe(true)
+    expect(events.some((event) => event.type === 'context-compressed')).toBe(true)
+    expect(saved.contextSummary).toContain('用户正在批量整理章节')
+    expect(saved.contextSummaryThrough).toMatch(/^old_/)
+    expect(requests).toHaveLength(3)
+    expect(requests[0].tools).toHaveLength(0)
+    expect(requests[1].tools).toHaveLength(0)
+    expect(requests[2].system).toContain('较早对话的压缩摘要')
+    expect(requests[2].messages.length).toBeLessThan(saved.messages.length)
+  })
+
   it('按供应商的每模型设置注入请求参数', async () => {
     const store = await createStore()
     const events: AgentEvent[] = []
@@ -108,6 +161,37 @@ describe('CoreAgentService', () => {
     await service.run({ message: '你好', providerId, model: 'mock-model' })
 
     expect(requests[0].params).toEqual({ reasoning: 'off', contextTokens: 131072, maxOutputTokens: 8192 })
+  })
+
+  it('在 done 事件前持久化最终助手消息', async () => {
+    const store = await createStore()
+    const trace: string[] = []
+    let doneEvent: AgentEvent | undefined
+    const scripted = scriptedFactory([text('最终回答')])
+    const sessions = new class extends CoreSessionStore {
+      override async save(session: ChatSession): Promise<void> {
+        trace.push(session.messages.some((message) => message.role === 'assistant' && message.text === '最终回答') ? 'save-assistant' : 'save')
+        await super.save(session)
+      }
+    }(store)
+    const service = new CoreAgentService({
+      store,
+      sessions,
+      settings: async () => ({ providers: [{ id: providerId, protocol: 'openai' as const, baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+      getAdapter: scripted.factory,
+      emit: (_sid, event) => {
+        if (event.type === 'done') {
+          doneEvent = event
+          trace.push('done')
+        }
+      }
+    })
+
+    await service.run({ message: '你好', providerId, model: 'mock-model' })
+
+    expect(trace.indexOf('save-assistant')).toBeGreaterThanOrEqual(0)
+    expect(trace.indexOf('save-assistant')).toBeLessThan(trace.indexOf('done'))
+    expect(doneEvent?.type === 'done' ? doneEvent.session?.messages.at(-1)?.text : undefined).toBe('最终回答')
   })
 
   it('每次模型调用后回报归一化用量', async () => {

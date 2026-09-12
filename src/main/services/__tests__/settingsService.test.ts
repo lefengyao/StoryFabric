@@ -4,10 +4,11 @@ import { join } from 'path'
 import { describe, expect, it } from 'vitest'
 import { SettingsService } from '../settingsService'
 
-async function withService(run: (service: SettingsService) => Promise<void>): Promise<void> {
+async function withService(run: (service: SettingsService, file: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'sf-settings-'))
   try {
-    await run(new SettingsService(join(dir, 'settings.json')))
+    const file = join(dir, 'settings.json')
+    await run(new SettingsService(file), file)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -90,6 +91,147 @@ describe('SettingsService 每模型参数', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('旧设置文件缺少 recentWorkspaceOpenedAt 时读回空对象', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sf-settings-'))
+    try {
+      const file = join(dir, 'settings.json')
+      await writeFile(
+        file,
+        JSON.stringify({
+          providers: [],
+          theme: 'system',
+          recentWorkspaces: ['C:/旧工作区'],
+          customPrompt: '',
+          showSessionLength: false
+        }),
+        'utf-8'
+      )
+
+      const settings = await new SettingsService(file).load()
+      expect(settings.recentWorkspaceOpenedAt).toEqual({})
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    { recentWorkspaces: null, recentWorkspaceOpenedAt: null },
+    { recentWorkspaces: 'legacy-workspace', recentWorkspaceOpenedAt: [] },
+    { recentWorkspaces: { path: 'legacy-workspace' }, recentWorkspaceOpenedAt: 'legacy-time' },
+    { recentWorkspaces: [null, 42, { path: 'legacy-workspace' }], recentWorkspaceOpenedAt: { broken: null } }
+  ])('异常 recent 字段形状归一化为正确的空类型或合法值 %#', async (malformed) => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({
+        theme: 'dark',
+        customPrompt: '保留已有字段',
+        completionSound: true,
+        ...malformed
+      }), 'utf-8')
+
+      const settings = await service.load()
+
+      expect(settings.recentWorkspaces).toEqual([])
+      expect(settings.recentWorkspaceOpenedAt).toEqual({})
+      expect(settings.theme).toBe('dark')
+      expect(settings.customPrompt).toBe('保留已有字段')
+      expect(settings.completionSound).toBe(true)
+    })
+  })
+
+  it('合法 recent 字段和其他已有设置保持不变', async () => {
+    await withService(async (service, file) => {
+      const recentWorkspaces = ['C:/工作区-a', 'C:/工作区-b']
+      const recentWorkspaceOpenedAt = {
+        'C:/工作区-a': '2026-09-11T08:30:00.000Z',
+        'C:/工作区-b': '2026-09-11T08:31:00.000Z'
+      }
+      await writeFile(file, JSON.stringify({
+        theme: 'dark',
+        recentWorkspaces,
+        recentWorkspaceOpenedAt,
+        customPrompt: '保留已有字段'
+      }), 'utf-8')
+
+      await expect(service.load()).resolves.toMatchObject({
+        theme: 'dark',
+        recentWorkspaces,
+        recentWorkspaceOpenedAt,
+        customPrompt: '保留已有字段'
+      })
+    })
+  })
+
+  it('更新 recentWorkspaceOpenedAt 后能读回 ISO 时间映射', async () => {
+    await withService(async (service) => {
+      const openedAt = '2026-09-11T08:30:00.000Z'
+      const recentWorkspaceOpenedAt = { 'C:/工作区': openedAt }
+
+      await service.update({ recentWorkspaceOpenedAt })
+
+      expect((await service.load()).recentWorkspaceOpenedAt).toEqual(recentWorkspaceOpenedAt)
+    })
+  })
+
+  it('并发记录工作区时不丢失任一条记录', async () => {
+    await withService(async (service) => {
+      const first = 'C:/工作区-a'
+      const second = 'C:/工作区-b'
+
+      await Promise.all([
+        service.recordRecentWorkspace(first),
+        service.recordRecentWorkspace(second)
+      ])
+
+      const settings = await service.load()
+      expect(settings.recentWorkspaces).toEqual([second, first])
+      expect(settings.recentWorkspaceOpenedAt).toEqual({
+        [first]: expect.any(String),
+        [second]: expect.any(String)
+      })
+    })
+  })
+
+  it('malformed providers are filtered or normalized before settings IPC consumers use them', async () => {
+    await withService(async (service, file) => {
+      const validProvider = {
+        id: 'valid-provider',
+        name: '合法供应商',
+        protocol: 'openai',
+        baseUrl: 'https://valid.example/v1',
+        apiKeyEncrypted: 'plain:c2VjcmV0',
+        models: ['gpt-4o'],
+        modelSettings: { 'gpt-4o': { reasoning: 'high' } }
+      }
+      await writeFile(file, JSON.stringify({
+        providers: [
+          null,
+          'not-a-provider',
+          { id: 'missing-core-fields' },
+          { id: 'normalized-provider', name: '可归一化', protocol: 'anthropic', baseUrl: 'https://normalized.example', apiKeyEncrypted: 42, models: ['claude-3', 99], modelSettings: [] },
+          validProvider
+        ]
+      }), 'utf-8')
+
+      const settings = await service.load()
+
+      expect(settings.providers).toEqual([
+        {
+          id: 'normalized-provider',
+          name: '可归一化',
+          protocol: 'anthropic',
+          baseUrl: 'https://normalized.example',
+          apiKeyEncrypted: '',
+          models: ['claude-3'],
+          modelSettings: {}
+        },
+        validProvider
+      ])
+      expect(service.toPublic(settings).providers).toHaveLength(2)
+      await expect(service.saveProvider({ ...provider, id: 'valid-provider' })).resolves.toBeTruthy()
+      await expect(service.deleteProvider('normalized-provider')).resolves.toBeTruthy()
+    })
   })
 
   it('fetchModels with a saved provider always uses the saved protocol and base URL', async () => {

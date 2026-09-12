@@ -3,6 +3,7 @@ import type { ChatMessage, ToolDefJson } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
+import { toOpenAiMessageContent } from '../attachments/messageContent'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -11,7 +12,7 @@ export function toOpenAiMessages(system: string, messages: ChatMessage[]): any[]
   if (system) out.push({ role: 'system', content: system })
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.text ?? '' })
+      out.push({ role: 'user', content: toOpenAiMessageContent(m) })
     } else if (m.role === 'assistant') {
       const msg: any = { role: 'assistant', content: m.text ?? null }
       if (m.toolCalls?.length) {
@@ -78,7 +79,7 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
     let usage: TokenUsage | undefined
     const calls = new Map<number, { id: string; name: string; args: string }>()
 
-    for await (const line of sseLines(res)) {
+    for await (const line of sseLines(res, req.signal)) {
       const data = sseData(line)
       if (!data || data === '[DONE]') continue
       let json: any
@@ -133,4 +134,3 @@ export async function fetchOpenAiModels(baseUrl: string, apiKey: string): Promis
     .filter((id): id is string => Boolean(id))
     .sort()
 }
-

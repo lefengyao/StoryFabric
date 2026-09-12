@@ -28,7 +28,8 @@ export const ENTITY_KIND_LABEL: Record<string, string> = {
   event: '事件',
   chapter: '章节',
   note: '便签',
-  setting: '设定'
+  setting: '设定',
+  projectDoc: '项目文档'
 }
 
 export function formatTime(ts: number): string {

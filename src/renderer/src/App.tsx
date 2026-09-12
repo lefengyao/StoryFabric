@@ -31,6 +31,8 @@ export default function App(): React.ReactElement {
   const loadSettings = useSettings((s) => s.load)
   const bindEvents = useChat((s) => s.bindEvents)
   const initSessions = useChat((s) => s.initSessions)
+  const resetChatWorkspace = useChat((s) => s.resetWorkspace)
+  const workspacePath = useWorkspace((s) => s.summary?.path ?? null)
 
   useEffect(() => {
     if (!web) return
@@ -52,8 +54,10 @@ export default function App(): React.ReactElement {
   }, [webAuthReady])
 
   useEffect(() => {
-    if (status === 'ready') void initSessions()
-  }, [status, initSessions])
+    if (status !== 'ready') return
+    resetChatWorkspace()
+    void initSessions()
+  }, [status, workspacePath, initSessions, resetChatWorkspace])
 
 
   if (web && !webAuthChecked) {

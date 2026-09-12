@@ -23,6 +23,42 @@ describe('desktop tool registry parity', () => {
     expect(main).toEqual(core)
   })
 
+  it('keeps the unified delete_entity definition and behavior identical to core', async () => {
+    const core = CORE_TOOL_DEFS.find((tool) => tool.name === 'delete_entity')
+    const main = MAIN_TOOL_DEFS.find((tool) => tool.name === 'delete_entity')
+    expect(core).toBeDefined()
+    expect(main).toEqual(core)
+
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '统一删除测试')
+    const root = await mkdtemp(join(tmpdir(), 'sf-parity-'))
+    try {
+      await initializeWorkspace(new NodeFileStore(root), '统一删除测试')
+      await memory.writeText('docs/plan.md', '旧计划')
+      await new NodeFileStore(root).writeText('docs/plan.md', '旧计划')
+      const args = JSON.stringify({ kind: 'projectDoc', id: 'plan.md' })
+      const coreOutcome = await executeCoreTool(memory, 'delete_entity', args)
+      const mainOutcome = await executeMainTool(root, 'delete_entity', args)
+      expect(mainOutcome.kind).toBe('pending')
+      expect(coreOutcome.kind).toBe('pending')
+      if (coreOutcome.kind !== 'pending' || mainOutcome.kind !== 'pending') throw new Error('未生成待确认删除变更')
+      expect(mainOutcome.change).toEqual(expect.objectContaining({
+        toolName: 'delete_entity',
+        entityKind: coreOutcome.change.entityKind,
+        entityId: coreOutcome.change.entityId,
+        title: coreOutcome.change.title,
+        beforeText: coreOutcome.change.beforeText,
+        afterText: coreOutcome.change.afterText
+      }))
+      expect(await memory.readText('docs/plan.md')).toBe('旧计划')
+      expect(await new NodeFileStore(root).readText('docs/plan.md')).toBe('旧计划')
+      await mainOutcome.apply()
+      expect(await new NodeFileStore(root).readText('docs/plan.md')).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('reports the same failure text and preview for an unknown note', async () => {
     const memory = new MemoryFileStore()
     await initializeWorkspace(memory, '测试')

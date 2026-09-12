@@ -1,16 +1,18 @@
-import { ArchiveRestore, BookOpen, FolderPlus, Plus, Save, Sparkles, Trash2, Undo2 } from 'lucide-react'
+import { ArchiveRestore, BookOpen, Check, Copy, FolderPlus, Plus, Save, Sparkles, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { createAutosave } from '../../lib/autosave'
+import { copyPlainText } from '../../lib/clipboard'
+import { canSwitchDocument } from '../../lib/documentSwitch'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
 import { useChat } from '../../stores/chatStore'
 import { useSettings } from '../../stores/settingsStore'
+import { useUi } from '../../stores/uiStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 
 const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
@@ -22,8 +24,8 @@ const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
 export function ChaptersPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
   const refresh = useWorkspace((s) => s.refresh)
-  const navigate = useNavigate()
   const setAttachments = useChat((s) => s.setAttachments)
+  const openChatPanel = useUi((s) => s.openChatPanel)
 
   const [box, setBox] = useState<ChapterBox>('main')
   const [trashItems, setTrashItems] = useState<TrashEntry[]>([])
@@ -35,8 +37,11 @@ export function ChaptersPage(): React.ReactElement {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [reloadHint, setReloadHint] = useState(false)
   const [confirmOverwrite, setConfirmOverwrite] = useState(false)
+  const [copiedChapterId, setCopiedChapterId] = useState<string | null>(null)
+  const [copyError, setCopyError] = useState<string | null>(null)
   /** 打开（或最近一次同步）时的磁盘内容，用于检测智能体等外部修改 */
   const baseRef = useRef<string>('')
+  const openRequestRef = useRef(0)
   const lastApplied = useChat((s) => s.lastAppliedChange)
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
@@ -53,11 +58,15 @@ export function ChaptersPage(): React.ReactElement {
   useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
 
   const openChapter = async (meta: { id: string }): Promise<void> => {
-    if (draft && dirty && meta.id !== draft.id && !window.confirm('当前章节有未保存的修改，放弃并切换？')) return
-    setSelectedId(meta.id)
+    const target = chapters.find((chapter) => chapter.id === meta.id)
+    if (!target) return
+    if (!canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: target.id, dirty, confirmDiscard: () => window.confirm('当前章节有未保存的修改，放弃并切换？') })) return
+    const requestId = ++openRequestRef.current
     const body = await api.getChapterBody(meta.id)
+    if (requestId !== openRequestRef.current) return
     baseRef.current = body ?? ''
-    setDraft({ ...(selected ?? chapters.find((c) => c.id === meta.id)!), content: body ?? '' })
+    setSelectedId(target.id)
+    setDraft({ ...target, content: body ?? '' })
     setDirty(false)
     setReloadHint(false)
   }
@@ -171,11 +180,23 @@ export function ChaptersPage(): React.ReactElement {
 
   const restore = async (id: string): Promise<void> => { await api.restoreTrash(id); await refresh(); setTrashItems(await api.listTrash()) }
 
+  const copyChapter = async (id: string, content?: string): Promise<void> => {
+    setCopyError(null)
+    try {
+      const text = content ?? (await api.getChapterBody(id)) ?? ''
+      await copyPlainText(text)
+      setCopiedChapterId(id)
+      window.setTimeout(() => setCopiedChapterId((current) => (current === id ? null : current)), 1800)
+    } catch (error) {
+      setCopyError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   /** 把当前章节挂到智能体上下文，跳转工作台 */
   const askAi = (): void => {
     if (!selected) return
     setAttachments([{ kind: 'chapter', id: selected.id, label: selected.title }])
-    navigate('/chat')
+    openChatPanel()
   }
 
   return (
@@ -221,7 +242,7 @@ export function ChaptersPage(): React.ReactElement {
                   .map((c) => (
                     <button
                       key={c.id}
-                      onClick={() => draft === null && void openChapter(c)}
+                      onClick={() => void openChapter(c)}
                       className={`list-row w-full rounded-xl border px-3 py-2.5 text-left transition cursor-pointer ${
                         selectedId === c.id ? 'border-accent/40 bg-accent-soft text-accent shadow-sm' : 'border-line/70 bg-app hover:border-line hover:bg-elevated'
                       }`}
@@ -248,10 +269,22 @@ export function ChaptersPage(): React.ReactElement {
             <div className="mx-auto max-w-3xl p-8">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">{selected.title}</h2>
-                <Button size="sm" onClick={() => void openChapter(selected)}>
-                  打开编辑
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => void copyChapter(selected.id)}>
+                    {copiedChapterId === selected.id ? <Check size={13} /> : <Copy size={13} />}
+                    {copiedChapterId === selected.id ? '已复制' : '复制全章'}
+                  </Button>
+                  <Button size="sm" onClick={() => void openChapter(selected)}>
+                    打开编辑
+                  </Button>
+                </div>
               </div>
+              {copyError && (
+                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">
+                  <span>{copyError}</span>
+                  <button type="button" className="cursor-pointer font-medium" onClick={() => setCopyError(null)}>关闭</button>
+                </div>
+              )}
               <EmptyState icon={<BookOpen size={28} />} title={`${selected.wordCount} 字`} hint="点击「打开编辑」继续写作" />
             </div>
           ) : (
@@ -298,6 +331,10 @@ export function ChaptersPage(): React.ReactElement {
             <Button variant="ghost" size="sm" onClick={askAi} title="让智能体基于本章设定续写">
               <Sparkles size={13} /> AI 续写
             </Button>
+            <Button variant="outline" size="sm" onClick={() => void copyChapter(draft.id ?? 'draft', draft.content ?? '')} title="复制当前章节的完整正文">
+              {copiedChapterId === (draft.id ?? 'draft') ? <Check size={13} /> : <Copy size={13} />}
+              {copiedChapterId === (draft.id ?? 'draft') ? '已复制' : '复制全章'}
+            </Button>
             <Button variant="ghost" size="sm" className="text-danger hover:text-danger" onClick={() => setConfirmDelete(true)}>
               <Trash2 size={13} />
             </Button>
@@ -315,6 +352,13 @@ export function ChaptersPage(): React.ReactElement {
               <Button size="sm" variant="ghost" onClick={() => setReloadHint(false)}>
                 继续编辑我的版本
               </Button>
+            </div>
+          )}
+
+          {copyError && (
+            <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger">
+              <span>{copyError}</span>
+              <button type="button" className="cursor-pointer font-medium" onClick={() => setCopyError(null)}>关闭</button>
             </div>
           )}
 

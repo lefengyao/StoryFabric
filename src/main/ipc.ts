@@ -1,5 +1,6 @@
 /** 主进程 IPC 装配：把服务注册到 ipcMain */
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { promises as fs } from 'node:fs'
 import {
   deleteChapter,
   deleteCharacter,
@@ -23,7 +24,7 @@ import {
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
 import type { UsageService } from '../core/usage/usageService'
-import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
+import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, listWorkspaces as listLocalWorkspaces, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type { DeployService } from './services/deployService'
 import type {
@@ -42,7 +43,9 @@ import { exportWorkspaceArchive } from '../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
 import { genId } from '../core/workspace/entityStore'
 import { IPC } from '../shared/ipc'
+import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { serializeWorkspace } from './services/workspaceRuntime'
+import { throwIfWorkspaceRequestAborted } from '../shared/api'
 
 export interface AppContext {
   win: () => BrowserWindow | null
@@ -53,16 +56,40 @@ export interface AppContext {
 }
 
 let currentRoot: string | null = null
+const workspaceRequestControllers = new Map<string, AbortController>()
 
 function requireRoot(): string {
   if (!currentRoot) throw new Error('尚未打开工作区')
   return currentRoot
 }
 
-async function recentPush(settings: SettingsService, path: string): Promise<void> {
-  const s = await settings.load()
-  const recent = [path, ...s.recentWorkspaces.filter((p) => p !== path)].slice(0, 8)
-  await settings.update({ recentWorkspaces: recent, lastWorkspacePath: path })
+async function recentPush(settings: SettingsService, path: string, signal?: AbortSignal): Promise<void> {
+  await settings.recordRecentWorkspace(path, signal)
+}
+
+async function recentPushBestEffort(settings: SettingsService, path: string, signal?: AbortSignal): Promise<void> {
+  try {
+    await recentPush(settings, path, signal)
+  } catch (error) {
+    throwIfWorkspaceRequestAborted(signal)
+    console.warn('[storyfabric] failed to persist recent workspace record')
+  }
+}
+
+function requestSignal(requestId?: string): AbortSignal | undefined {
+  if (!requestId) return undefined
+  let controller = workspaceRequestControllers.get(requestId)
+  if (!controller) {
+    controller = new AbortController()
+    workspaceRequestControllers.set(requestId, controller)
+  }
+  return controller.signal
+}
+
+function finishRequest(requestId?: string): void {
+  if (requestId) {
+    workspaceRequestControllers.delete(requestId)
+  }
 }
 
 export function registerIpc(ctx: AppContext): void {
@@ -73,12 +100,25 @@ export function registerIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.ListWorkspaces, async () => {
-    const { recentWorkspaces } = await ctx.settings.load()
+    return listLocalWorkspaces(app.getPath('documents'))
+  })
+
+  ipcMain.handle(IPC.CancelWorkspaceRequest, async (_e, requestId: string) => {
+    workspaceRequestControllers.get(requestId)?.abort()
+  })
+
+  ipcMain.handle(IPC.ListRecentWorkspaces, async () => {
+    const settings = await ctx.settings.load()
+    const paths = orderRecentWorkspacePaths(settings.recentWorkspaces, settings.recentWorkspaceOpenedAt)
     const result = []
-    for (const path of recentWorkspaces) {
-      const valid = await validateWorkspace(path)
-      if (!valid.ok) continue
-      try { result.push(await loadWorkspaceListItem(path)) } catch { /* Skip unavailable recent folders. */ }
+    for (const path of paths) {
+      try {
+        const valid = await validateWorkspace(path)
+        if (!valid.ok) continue
+        const item = await loadWorkspaceListItem(path)
+        result.push({ ...item, lastOpenedAt: settings.recentWorkspaceOpenedAt[path] })
+        if (result.length >= 5) break
+      } catch { /* Skip unavailable recent folders. */ }
     }
     return result
   })
@@ -87,42 +127,84 @@ export function registerIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.CreateWorkspace, async (_e, parentDir: string, name: string) => createWorkspace(parentDir, name))
 
-  ipcMain.handle(IPC.OpenWorkspace, async (_e, path: string) => {
-    const v = await validateWorkspace(path)
-    if (!v.ok) throw new Error(v.reason)
-    currentRoot = path
-    await recentPush(ctx.settings, path)
-    return loadSummary(path)
+  ipcMain.handle(IPC.OpenWorkspace, async (_e, path: string, requestId?: string) => {
+    const signal = requestSignal(requestId)
+    try {
+      const v = await validateWorkspace(path)
+      if (!v.ok) throw new Error(v.reason)
+      throwIfWorkspaceRequestAborted(signal)
+      await recentPush(ctx.settings, path, signal)
+      throwIfWorkspaceRequestAborted(signal)
+      currentRoot = path
+      return loadSummary(path)
+    } finally {
+      finishRequest(requestId)
+    }
   })
-  ipcMain.handle(IPC.OpenWorkspaceByPath, async (_e, path: string) => {
-    const value = path.trim()
-    if (!value) throw new Error('请输入工作区路径')
-    const valid = await validateWorkspace(value)
-    if (!valid.ok) throw new Error(valid.reason)
-    currentRoot = value
-    await recentPush(ctx.settings, value)
-    return loadSummary(value)
+  ipcMain.handle(IPC.OpenWorkspaceByPath, async (_e, path: string, requestId?: string) => {
+    const signal = requestSignal(requestId)
+    try {
+      const value = path.trim()
+      if (!value) throw new Error('请输入工作区路径')
+      const valid = await validateWorkspace(value)
+      if (!valid.ok) throw new Error(valid.reason)
+      throwIfWorkspaceRequestAborted(signal)
+      await recentPush(ctx.settings, value, signal)
+      throwIfWorkspaceRequestAborted(signal)
+      currentRoot = value
+      return loadSummary(value)
+    } finally {
+      finishRequest(requestId)
+    }
   })
 
   ipcMain.handle(IPC.CloseWorkspace, async () => {
     currentRoot = null
+    await ctx.settings.update({ lastWorkspacePath: undefined })
   })
 
-  ipcMain.handle(IPC.GetCurrentWorkspace, async () => (currentRoot ? loadSummary(currentRoot) : null))
+  ipcMain.handle(IPC.GetCurrentWorkspace, async () => {
+    if (!currentRoot) {
+      const settings = await ctx.settings.load()
+      const lastWorkspacePath = settings.lastWorkspacePath?.trim()
+      if (lastWorkspacePath) {
+        const valid = await validateWorkspace(lastWorkspacePath)
+        if (valid.ok) {
+          currentRoot = lastWorkspacePath
+        } else {
+          await ctx.settings.update({ lastWorkspacePath: undefined })
+        }
+      }
+    }
+    return currentRoot ? loadSummary(currentRoot) : null
+  })
   ipcMain.handle(IPC.RefreshWorkspace, async () => (currentRoot ? loadSummary(currentRoot) : null))
   ipcMain.handle(IPC.ExportWorkspace, async () => {
     const root = requireRoot()
     return exportWorkspaceArchive(new NodeFileStore(root), (await loadSummary(root)).name)
   })
-  ipcMain.handle(IPC.ImportWorkspace, async (_e, bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget) => {
-    const parentDir = target?.parentDir?.trim()
-    if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
-    const derivedName = fileName.replace(/\.storyfabric\.zip$/i, '').replace(/[\\/:*?"<>|]/g, '').trim()
-    const workspaceName = target?.name?.trim() || derivedName || '导入工作区'
-    const root = await importWorkspaceIntoNewFolder(parentDir, workspaceName, bytes)
-    currentRoot = root
-    await recentPush(ctx.settings, root)
-    return loadSummary(root)
+  ipcMain.handle(IPC.ImportWorkspace, async (_e, bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, requestId?: string) => {
+    const signal = requestSignal(requestId)
+    let root: string | null = null
+    try {
+      const parentDir = target?.parentDir?.trim()
+      if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
+      const derivedName = fileName.replace(/\.storyfabric\.zip$/i, '').replace(/[\\/:*?"<>|]/g, '').trim()
+      const workspaceName = target?.name?.trim() || derivedName || '导入工作区'
+      root = await importWorkspaceIntoNewFolder(parentDir, workspaceName, bytes, signal)
+      throwIfWorkspaceRequestAborted(signal)
+      await recentPushBestEffort(ctx.settings, root, signal)
+      throwIfWorkspaceRequestAborted(signal)
+      const summary = await loadSummary(root)
+      throwIfWorkspaceRequestAborted(signal)
+      currentRoot = root
+      return summary
+    } catch (error) {
+      if (signal?.aborted && root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    } finally {
+      finishRequest(requestId)
+    }
   })
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))
   ipcMain.handle(IPC.SearchProject, async (_e, query: string) => searchProject(requireRoot(), query))
@@ -205,6 +287,9 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: { title?: string; archived?: boolean }) => {
     const okFlag = await sessionStore().updateMeta(id, patch)
     if (!okFlag) throw new Error('会话不存在')
+  })
+  ipcMain.handle(IPC.UpdateSessionModelPreference, async (_e, id: string, value: import('../shared/types').SessionModelPreference) => {
+    if (!(await sessionStore().updateModelPreference(id, value))) throw new Error('会话不存在')
   })
 
   /* ---------- 远程部署（仅桌面端） ---------- */

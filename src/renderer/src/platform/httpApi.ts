@@ -1,4 +1,4 @@
-import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget } from '../../../shared/api'
+import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, OutlineDoc, Relationship, RunAgentRequest, SettingDoc, StoryEvent, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 
@@ -14,7 +14,7 @@ interface RpcResponse<T> { result?: T; error?: string }
 export class HttpPlatformApi implements StoryFabricApi {
   private readonly auth: HttpAuth
 
-  constructor(private readonly fetcher: FetchLike = fetch, private readonly baseUrl = '', auth: HttpAuth = { kind: 'cookie' }) {
+  constructor(private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis), private readonly baseUrl = '', auth: HttpAuth = { kind: 'cookie' }) {
     this.auth = auth
   }
 
@@ -49,12 +49,13 @@ export class HttpPlatformApi implements StoryFabricApi {
   pickFolder(): Promise<string | null> { return Promise.resolve(null) }
   getDefaultWorkspaceDir(): Promise<string> { return Promise.resolve('') }
   listWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces') }
+  listRecentWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces/recent') }
   async createWorkspace(_parentDir: string, name: string): Promise<string> { return (await this.rest<WorkspaceSummary>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }), headers: { 'content-type': 'application/json' } })).path }
-  openWorkspace(path: string): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST' }) }
-  openWorkspaceByPath(path: string): Promise<WorkspaceSummary> {
+  openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST', signal: options?.signal }) }
+  openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const value = path.trim()
     if (!value) return Promise.reject(new Error('请输入工作区路径'))
-    return this.rest('/api/workspaces/open-path', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: value }) })
+    return this.rest('/api/workspaces/open-path', { method: 'POST', signal: options?.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: value }) })
   }
   closeWorkspace(): Promise<void> { return this.rpc('closeWorkspace') }
   getCurrentWorkspace(): Promise<WorkspaceSummary | null> { return this.rpc('getCurrentWorkspace') }
@@ -68,11 +69,11 @@ export class HttpPlatformApi implements StoryFabricApi {
     if (!response.ok) return this.responseError<WorkspaceArchive>(response)
     return { fileName: `${current.name}.storyfabric.zip`, bytes: new Uint8Array(await response.arrayBuffer()) }
   }
-  async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget): Promise<WorkspaceSummary> {
+  async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const headers = this.headers({ 'content-type': 'application/zip' })
     const name = target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')
     if (name) headers['x-storyfabric-workspace-name'] = encodeURIComponent(name)
-    return this.rest('/api/workspaces/import', { method: 'POST', headers, body: bytes.slice().buffer as ArrayBuffer })
+    return this.rest('/api/workspaces/import', { method: 'POST', signal: options?.signal, headers, body: bytes.slice().buffer as ArrayBuffer })
   }
   exportSession(id: string): ReturnType<StoryFabricApi['exportSession']> { return this.rpc('exportSession', [id]) }
   importSession(base64: string, fileName: string): ReturnType<StoryFabricApi['importSession']> { return this.rpc('importSession', [base64, fileName]) }
@@ -118,6 +119,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   loadSession(id: string): Promise<ChatSession | null> { return this.rpc('loadSession', [id]) }
   deleteSession(id: string): Promise<void> { return this.rpc('deleteSession', [id]) }
   updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { return this.rpc('updateSession', [id, patch]) }
+  updateSessionModelPreference(id: string, value: import('../../../shared/types').SessionModelPreference): Promise<void> { return this.rpc('updateSessionModelPreference', [id, value]) }
 
   /* 远程部署仅桌面端可用 */
   private unsupported(): never {

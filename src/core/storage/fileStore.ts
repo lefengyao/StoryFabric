@@ -8,6 +8,8 @@ export interface FileStore {
   ensureDir(path: string): Promise<void>
   readText(path: string): Promise<string | null>
   writeText(path: string, text: string): Promise<void>
+  readBytes(path: string): Promise<Uint8Array | null>
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>
   move(from: string, to: string): Promise<void>
   remove(path: string): Promise<void>
   /** 文件修改时间；无法提供时返回 null，供清理策略保守跳过。 */
@@ -17,7 +19,7 @@ export interface FileStore {
 }
 
 export function normalizeRelativePath(path: string, allowRoot = false): string {
-  const raw = String(path).replaceAll('\\', '/')
+  const raw = String(path).replace(/\\/g, '/')
   if (raw.startsWith('/') || /^[A-Za-z]:\//.test(raw)) throw new Error('FileStore 只接受工作区内相对路径')
   const parts = raw.split('/').filter(Boolean)
   if (parts.some((part) => part === '..')) throw new Error('禁止访问工作区外的路径')
@@ -29,12 +31,13 @@ export function normalizeRelativePath(path: string, allowRoot = false): string {
 /** 用于共享核心单测和 Android 首版适配验证的内存实现。 */
 export class MemoryFileStore implements FileStore {
   private readonly files = new Map<string, string>()
+  private readonly binary = new Map<string, Uint8Array>()
   private readonly mtimes = new Map<string, number>()
   private readonly dirs = new Set<string>([''])
 
   async exists(path: string): Promise<boolean> {
     const p = normalizeRelativePath(path)
-    return this.files.has(p) || this.dirs.has(p)
+    return this.files.has(p) || this.binary.has(p) || this.dirs.has(p)
   }
 
   async ensureDir(path: string): Promise<void> {
@@ -44,6 +47,7 @@ export class MemoryFileStore implements FileStore {
     let current = ''
     for (const part of parts) {
       current = current ? `${current}/${part}` : part
+      if (this.files.has(current) || this.binary.has(current)) throw new Error(`路径已被文件占用：${current}`)
       this.dirs.add(current)
     }
   }
@@ -52,11 +56,27 @@ export class MemoryFileStore implements FileStore {
     return this.files.get(normalizeRelativePath(path)) ?? null
   }
 
+  async readBytes(path: string): Promise<Uint8Array | null> {
+    const p = normalizeRelativePath(path)
+    const bytes = this.binary.get(p)
+    return bytes ? bytes.slice() : this.files.has(p) ? new TextEncoder().encode(this.files.get(p) ?? '') : null
+  }
+
   async writeText(path: string, text: string): Promise<void> {
     const p = normalizeRelativePath(path)
     const slash = p.lastIndexOf('/')
     await this.ensureDir(slash === -1 ? '' : p.slice(0, slash))
     this.files.set(p, text)
+    this.binary.delete(p)
+    this.mtimes.set(p, Date.now())
+  }
+
+  async writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+    const p = normalizeRelativePath(path)
+    const slash = p.lastIndexOf('/')
+    await this.ensureDir(slash === -1 ? '' : p.slice(0, slash))
+    this.binary.set(p, bytes.slice())
+    this.files.delete(p)
     this.mtimes.set(p, Date.now())
   }
 
@@ -65,6 +85,7 @@ export class MemoryFileStore implements FileStore {
     const target = normalizeRelativePath(to)
     if (!source || !target) throw new Error('移动路径不能为空')
     const sourceFile = this.files.get(source)
+    const sourceBytes = this.binary.get(source)
     if (sourceFile !== undefined) {
       const slash = target.lastIndexOf('/')
       await this.ensureDir(slash === -1 ? '' : target.slice(0, slash))
@@ -74,10 +95,20 @@ export class MemoryFileStore implements FileStore {
       this.mtimes.delete(source)
       return
     }
+    if (sourceBytes !== undefined) {
+      const slash = target.lastIndexOf('/')
+      await this.ensureDir(slash === -1 ? '' : target.slice(0, slash))
+      this.binary.set(target, sourceBytes.slice())
+      this.mtimes.set(target, this.mtimes.get(source) ?? Date.now())
+      this.binary.delete(source)
+      this.mtimes.delete(source)
+      return
+    }
     if (!this.dirs.has(source)) throw new Error(`源路径不存在：${source}`)
     const sourcePrefix = `${source}/`
     const targetPrefix = `${target}/`
     const fileEntries = [...this.files.entries()].filter(([key]) => key.startsWith(sourcePrefix))
+    const binaryEntries = [...this.binary.entries()].filter(([key]) => key.startsWith(sourcePrefix))
     const dirEntries = [...this.dirs].filter((key) => key === source || key.startsWith(sourcePrefix))
     await this.ensureDir(target)
     for (const [key, value] of fileEntries) {
@@ -85,9 +116,18 @@ export class MemoryFileStore implements FileStore {
       this.files.set(next, value)
       this.mtimes.set(next, this.mtimes.get(key) ?? Date.now())
     }
+    for (const [key, value] of binaryEntries) {
+      const next = `${targetPrefix}${key.slice(sourcePrefix.length)}`
+      this.binary.set(next, value.slice())
+      this.mtimes.set(next, this.mtimes.get(key) ?? Date.now())
+    }
     for (const key of dirEntries) this.dirs.add(`${target}${key === source ? '' : `/${key.slice(sourcePrefix.length)}`}`)
     for (const [key] of fileEntries) {
       this.files.delete(key)
+      this.mtimes.delete(key)
+    }
+    for (const [key] of binaryEntries) {
+      this.binary.delete(key)
       this.mtimes.delete(key)
     }
     for (const key of dirEntries) this.dirs.delete(key)
@@ -96,6 +136,7 @@ export class MemoryFileStore implements FileStore {
   async remove(path: string): Promise<void> {
     const p = normalizeRelativePath(path)
     this.files.delete(p)
+    this.binary.delete(p)
     this.mtimes.delete(p)
     for (const d of [...this.dirs]) {
       if (d === p || d.startsWith(`${p}/`)) this.dirs.delete(d)
@@ -104,13 +145,13 @@ export class MemoryFileStore implements FileStore {
 
   async modifiedAt(path: string): Promise<number | null> {
     const p = normalizeRelativePath(path)
-    return this.files.has(p) ? (this.mtimes.get(p) ?? null) : null
+    return this.files.has(p) || this.binary.has(p) ? (this.mtimes.get(p) ?? null) : null
   }
 
   async listFiles(dir: string, extension?: string): Promise<string[]> {
     const prefix = normalizeRelativePath(dir, true)
     const start = prefix ? `${prefix}/` : ''
-    return [...this.files.keys()]
+    return [...new Set([...this.files.keys(), ...this.binary.keys()])]
       .filter((p) => p.startsWith(start) && !p.slice(start.length).includes('/'))
       .map((p) => p.slice(start.length))
       .filter((name) => !extension || name.toLowerCase().endsWith(extension.toLowerCase()))

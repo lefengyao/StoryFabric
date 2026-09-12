@@ -99,6 +99,15 @@ export class NodeFileStore implements FileStore {
     }
   }
 
+  async readBytes(path: string): Promise<Uint8Array | null> {
+    try {
+      return Uint8Array.from(await fs.readFile(await this.secureResolve(path)))
+    } catch (error) {
+      if (this.isBoundaryError(error)) throw error
+      return null
+    }
+  }
+
   async writeText(path: string, text: string): Promise<void> {
     const target = await this.secureResolve(path)
     const previous = this.writeQueues.get(target) ?? Promise.resolve()
@@ -127,6 +136,28 @@ export class NodeFileStore implements FileStore {
     } finally {
       if (this.writeQueues.get(target) === operation) this.writeQueues.delete(target)
     }
+  }
+
+  async writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+    const target = await this.secureResolve(path)
+    const previous = this.writeQueues.get(target) ?? Promise.resolve()
+    const operation = previous.catch(() => undefined).then(async () => {
+      const checkedTarget = await this.secureResolve(path)
+      const checkedParent = await this.revalidateAbsolute(dirname(checkedTarget))
+      await fs.mkdir(checkedParent, { recursive: true })
+      const temp = `${checkedTarget}.${randomUUID()}.tmp`
+      try {
+        const checkedTemp = await this.revalidateAbsolute(temp)
+        await fs.writeFile(checkedTemp, bytes)
+        const renameSource = await this.revalidateAbsolute(temp)
+        const renameTarget = await this.secureResolve(path)
+        await fs.rename(renameSource, renameTarget)
+      } finally {
+        try { await fs.rm(await this.revalidateAbsolute(temp), { force: true }) } catch (error) { if (this.isBoundaryError(error)) throw error }
+      }
+    })
+    this.writeQueues.set(target, operation)
+    try { await operation } finally { if (this.writeQueues.get(target) === operation) this.writeQueues.delete(target) }
   }
 
   async move(from: string, to: string): Promise<void> {

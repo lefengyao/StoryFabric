@@ -33,6 +33,12 @@ describe('reasoningBudget', () => {
 })
 
 describe('buildModelParams', () => {
+  it('keeps OpenAI reasoning effort when the output budget is small', () => {
+    expect(buildModelParams('openai', 'o3-mini', params({ reasoning: 'high', contextTokens: 200000, maxOutputTokens: 1024 }))).toMatchObject({
+      max_completion_tokens: 1024,
+      reasoning_effort: 'high'
+    })
+  })
   it('OpenAI 普通模型只带 max_tokens', () => {
     expect(buildModelParams('openai', 'gpt-4o', params({ reasoning: 'high' }))).toEqual({ max_tokens: 8192 })
   })

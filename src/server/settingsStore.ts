@@ -5,6 +5,8 @@ import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 import type { AppSettings, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
 import { pruneModelSettings } from '../core/llm/modelCatalog'
 import { keyPreview } from '../shared/keyPreview'
+import { markRecentWorkspace } from '../shared/recentWorkspaces'
+import { throwIfWorkspaceRequestAborted } from '../shared/api'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
@@ -18,6 +20,7 @@ const DEFAULT_SETTINGS: ServerSettings = {
   providers: [],
   theme: 'system',
   recentWorkspaces: [],
+  recentWorkspaceOpenedAt: {},
   customPrompt: '',
   showSessionLength: false,
   completionSound: false,
@@ -29,6 +32,35 @@ const DEFAULT_SETTINGS: ServerSettings = {
   autosaveSeconds: 0,
   sendShortcut: 'enter',
   chatDensity: 'comfortable'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
+}
+
+function isProviderProtocol(value: unknown): value is ProviderStored['protocol'] {
+  return value === 'openai' || value === 'anthropic' || value === 'gemini'
+}
+
+function normalizeProvider(value: unknown, decryptKey: (value: string, strict?: boolean) => string): ServerProvider | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0 || typeof value.name !== 'string' || !isProviderProtocol(value.protocol) || typeof value.baseUrl !== 'string') return null
+  const models = Array.isArray(value.models) ? value.models.filter((model): model is string => typeof model === 'string') : []
+  const modelSettings = isRecord(value.modelSettings)
+    ? Object.fromEntries(Object.entries(value.modelSettings).filter((entry) => isRecord(entry[1]))) as ServerProvider['modelSettings']
+    : {}
+  return {
+    id: value.id,
+    name: value.name,
+    protocol: value.protocol,
+    baseUrl: value.baseUrl,
+    apiKey: decryptKey(typeof value.apiKey === 'string' ? value.apiKey : '', true),
+    models,
+    modelSettings
+  }
 }
 
 export class ServerSettingsStore {
@@ -47,7 +79,7 @@ export class ServerSettingsStore {
     return `enc:v1:${iv.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}:${encrypted.toString('base64url')}`
   }
 
-  private decryptKey(value: string): string {
+  private decryptKey(value: string, strict = false): string {
     if (!value) return ''
     if (!value.startsWith('enc:v1:')) return value
     try {
@@ -56,6 +88,7 @@ export class ServerSettingsStore {
       decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
       return Buffer.concat([decipher.update(Buffer.from(dataText, 'base64url')), decipher.final()]).toString('utf8')
     } catch {
+      if (strict) throw new Error('设置中的供应商 API key 无法解密')
       return ''
     }
   }
@@ -66,17 +99,41 @@ export class ServerSettingsStore {
     return run
   }
 
+  private async loadRawStrict(): Promise<ServerSettings> {
+    const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as unknown
+    if (!isRecord(parsed)) throw new Error('设置文件格式无效')
+
+    const providers = Array.isArray(parsed.providers)
+      ? parsed.providers.map((item) => normalizeProvider(item, (value, strict) => this.decryptKey(value, strict))).filter((provider): provider is ServerProvider => provider !== null)
+      : []
+    const recentWorkspaces = Array.isArray(parsed.recentWorkspaces) ? parsed.recentWorkspaces.filter((item): item is string => typeof item === 'string') : []
+    const recentWorkspaceOpenedAt: Record<string, string> = isRecord(parsed.recentWorkspaceOpenedAt)
+      ? Object.fromEntries(Object.entries(parsed.recentWorkspaceOpenedAt).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+      : {}
+
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      providers,
+      recentWorkspaces,
+      recentWorkspaceOpenedAt
+    }
+  }
+
   private async loadRaw(): Promise<ServerSettings> {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as Partial<ServerSettings>
-      const providers = Array.isArray(parsed.providers) ? parsed.providers.filter((item): item is ServerProvider => Boolean(item && typeof item.id === 'string')).map((item) => ({ ...item, apiKey: this.decryptKey(typeof item.apiKey === 'string' ? item.apiKey : '') })) : []
-      return {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        providers
-      }
+      return await this.loadRawStrict()
     } catch {
       return { ...DEFAULT_SETTINGS, providers: [] }
+    }
+  }
+
+  private async loadRawForMutation(): Promise<ServerSettings> {
+    try {
+      return await this.loadRawStrict()
+    } catch (error) {
+      if (isFileNotFound(error)) return { ...DEFAULT_SETTINGS, providers: [] }
+      throw error
     }
   }
 
@@ -113,14 +170,29 @@ export class ServerSettingsStore {
 
   update(patch: SettingsPatch): Promise<PublicAppSettings> {
     return this.serialized(async () => {
-      const next = { ...(await this.loadRaw()), ...patch }
+      const next = { ...(await this.loadRawForMutation()), ...patch }
       return this.toPublic(await this.persist(next))
+    })
+  }
+
+  recordRecentWorkspace(path: string, signal?: AbortSignal): Promise<void> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      throwIfWorkspaceRequestAborted(signal)
+      const recent = markRecentWorkspace(settings, path)
+      try {
+        await this.persist({ ...settings, ...recent })
+        throwIfWorkspaceRequestAborted(signal)
+      } catch (error) {
+        if (signal?.aborted) await this.saveRaw(settings)
+        throw error
+      }
     })
   }
 
   saveProvider(input: ProviderInput): Promise<PublicAppSettings> {
     return this.serialized(async () => {
-      const settings = await this.loadRaw()
+      const settings = await this.loadRawForMutation()
       const providers = [...settings.providers]
       const index = input.id ? providers.findIndex((provider) => provider.id === input.id) : -1
       if (index >= 0) {
@@ -151,7 +223,7 @@ export class ServerSettingsStore {
 
   deleteProvider(id: string): Promise<PublicAppSettings> {
     return this.serialized(async () => {
-      const settings = await this.loadRaw()
+      const settings = await this.loadRawForMutation()
       const next = {
         ...settings,
         providers: settings.providers.filter((provider) => provider.id !== id),

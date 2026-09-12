@@ -12,6 +12,14 @@ export function resolveCapability(model: string, settings?: ModelSettings): { re
   }
 }
 
+export function resolveContextWindow(model: string, settings?: ModelSettings): { contextTokens: number; maxOutputTokens: number } {
+  const profile = profileForModel(model)
+  return {
+    contextTokens: settings?.contextTokens ?? profile.contextTokens,
+    maxOutputTokens: settings?.maxOutputTokens ?? profile.maxOutputTokens
+  }
+}
+
 /** 合并添加：去空白、去重、保持顺序。 */
 export function addModels(current: string[], incoming: string[]): string[] {
   const out = [...current]

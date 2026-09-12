@@ -6,6 +6,8 @@ import { listTrash, restoreFromTrash } from '../workspace/trash'
 import { listVolumes, moveChapter } from '../workspace/workspaceService'
 import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from './writeValidation'
 import { AGENT_CHAPTER_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA } from './writeSchemas'
+import { executeProjectDocTool, PROJECT_DOC_TOOL_DEFS } from './projectDocTools'
+import { executeDeleteEntityTool } from './deleteEntityTool'
 
 export type ToolOutcome =
   | { kind: 'result'; text: string; ok: boolean; preview: string }
@@ -47,9 +49,11 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', properties: { noteId: { type: 'string', description: '要删除的便签 id' } }, required: ['noteId'] } }
   ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷；需要用户确认。', parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；需要用户确认。', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }
+  ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' } }, required: ['kind', 'id'] } }
+  ,...PROJECT_DOC_TOOL_DEFS
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'move_chapter', 'restore_from_trash'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'delete_entity', 'move_chapter', 'restore_from_trash', 'save_project_doc'])
 
 async function readTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   const ok = (text: string): ToolOutcome => ({ kind: 'result', ok: true, text, preview: clip(text) })
@@ -136,5 +140,10 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
 }
 
 export async function executeTool(store: FileStore, name: string, argsJson: string): Promise<ToolOutcome> {
-  try { return WRITE_TOOLS.has(name) ? await writeTool(store, name, argsOf(argsJson)) : await readTool(store, name, argsOf(argsJson)) } catch (err) { const text = `工具执行失败：${err instanceof Error ? err.message : String(err)}`; return { kind: 'result', ok: false, text, preview: clip(text) } }
+  try {
+    const args = argsOf(argsJson)
+    if (name === 'delete_entity') return await executeDeleteEntityTool(store, args)
+    if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc') return await executeProjectDocTool(store, name, args)
+    return WRITE_TOOLS.has(name) ? await writeTool(store, name, args) : await readTool(store, name, args)
+  } catch (err) { const text = `工具执行失败：${err instanceof Error ? err.message : String(err)}`; return { kind: 'result', ok: false, text, preview: clip(text) } }
 }

@@ -31,6 +31,18 @@ describe('pendingChangeView', () => {
     })
   })
 
+  it('统一删除工具按是否支持回收站显示不同确认文案', () => {
+    const trash = pendingChangeView(change({ toolName: 'delete_entity', entityKind: 'note', afterText: '确认后移入回收站' }))
+    expect(trash.variant).toBe('remove')
+    expect(trash.confirmLabel).toBe('移入回收站')
+    expect(trash.outcome).toContain('可从回收站恢复')
+
+    const direct = pendingChangeView(change({ toolName: 'delete_entity', entityKind: 'projectDoc', afterText: '确认后直接删除（此类型没有回收站）' }))
+    expect(direct.variant).toBe('remove')
+    expect(direct.confirmLabel).toBe('确认直接删除')
+    expect(direct.outcome).toContain('无法恢复')
+  })
+
   it('内容变更保持新建/更新语义且不带结果说明', () => {
     const created = pendingChangeView(change({ beforeText: '' }))
     // 用 toMatchObject 而不是 toStrictEqual：后者会与「实现是否显式写出 outcome 键」耦合

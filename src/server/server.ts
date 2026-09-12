@@ -3,12 +3,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, relative, resolve, sep } from 'node:path'
 import { URL } from 'node:url'
 import type { FileStore } from '../core/storage/fileStore'
+import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { createAccessKeyVerifier, createSessionStore } from './auth'
 import { ServerSettingsStore } from './settingsStore'
 import { UsageService } from '../core/usage/usageService'
 import { WorkspaceRegistry } from './workspaceRegistry'
 import type { AgentEventEnvelope, FetchModelsInput, SettingsPatch, StoryFabricApi } from '../shared/api'
-import type { ChapterDoc, ChatSession, OutlineDoc, ProviderInput, Relationship, RunAgentRequest, SettingDoc, StoryEvent, NoteDoc, VolumeMeta } from '../shared/types'
+import { throwIfWorkspaceRequestAborted } from '../shared/api'
+import type { ChapterDoc, ChatSession, OutlineDoc, ProviderInput, Relationship, RunAgentRequest, SettingDoc, StoryEvent, NoteDoc, VolumeMeta, WorkspaceListItem } from '../shared/types'
 import { CoreAgentService } from '../core/agent/agentLoop'
 import { getAdapter, fetchProviderModels } from '../core/llm'
 import { CoreSessionStore } from '../core/workspace/sessionStore'
@@ -20,6 +22,16 @@ import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineD
 
 const MAX_JSON_BODY_BYTES = 16 * 1024 * 1024
 const DEFAULT_SESSION_TTL = 8 * 60 * 60 * 1000
+
+export async function recordRecentWorkspaceBestEffort(record: () => Promise<void>): Promise<boolean> {
+  try {
+    await record()
+    return true
+  } catch {
+    console.warn('[storyfabric] failed to persist recent workspace record')
+    return false
+  }
+}
 
 export interface StoryFabricServerOptions {
   accessKey: string
@@ -93,6 +105,33 @@ async function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<U
     chunks.push(value)
   }
   return new Uint8Array(Buffer.concat(chunks))
+}
+
+function requestAbortSignal(req: IncomingMessage, res?: ServerResponse): AbortSignal {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  req.on('aborted', abort)
+  req.socket.on('close', abort)
+  req.on('close', () => {
+    if (!req.complete) abort()
+  })
+  res?.on('close', () => {
+    if (!res.writableEnded) abort()
+  })
+  return controller.signal
+}
+
+function requestWasAborted(req: IncomingMessage, res: ServerResponse, signal: AbortSignal): boolean {
+  return signal.aborted || req.aborted || req.socket.destroyed || res.destroyed
+}
+
+function throwIfRequestAborted(req: IncomingMessage, res: ServerResponse, signal: AbortSignal): void {
+  if (requestWasAborted(req, res, signal)) {
+    const error = new Error('工作区请求已取消')
+    error.name = 'AbortError'
+    throw error
+  }
+  throwIfWorkspaceRequestAborted(signal)
 }
 
 function parseCookie(req: IncomingMessage, name: string): string | null {
@@ -169,6 +208,22 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   const events = new EventHub()
   const runtimes = new Map<string, Runtime>()
 
+
+  const listRecentWorkspaces = async (): Promise<WorkspaceListItem[]> => {
+    const [currentSettings, workspaces] = await Promise.all([settings.load(), registry.list()])
+    const byPath = new Map(workspaces.map((item) => [item.path, item]))
+    const results: WorkspaceListItem[] = []
+    const uniquePaths = [...new Set(currentSettings.recentWorkspaces)]
+    for (const path of orderRecentWorkspacePaths(uniquePaths, currentSettings.recentWorkspaceOpenedAt)) {
+      const item = byPath.get(path)
+      if (!item) continue
+      const lastOpenedAt = currentSettings.recentWorkspaceOpenedAt[path]
+      results.push(lastOpenedAt ? { ...item, lastOpenedAt } : item)
+      if (results.length >= 5) break
+    }
+    return results
+  }
+
   const authenticate = (req: IncomingMessage): AuthContext | null => {
     const token = parseBearer(req) ?? parseCookie(req, 'storyfabric_session')
     if (!token) return null
@@ -219,11 +274,13 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     if (method === 'listWorkspaces') return registry.list()
     if (method === 'createWorkspace') {
       const summary = await registry.create(String(arg<string>(1) || 'StoryFabric'))
+      await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path))
       authSessions.setWorkspace(context.token, summary.path)
       return summary.path
     }
     if (method === 'openWorkspace') {
       const summary = await registry.summary(String(arg<string>()))
+      await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path))
       authSessions.setWorkspace(context.token, summary.path)
       return summary
     }
@@ -310,6 +367,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       case 'loadSession': return runtime.sessions.load(arg<string>())
       case 'deleteSession': return runtime.sessions.delete(arg<string>())
       case 'updateSession': if (!(await runtime.sessions.updateMeta(arg<string>(), arg<{ title?: string; archived?: boolean }>(1)))) throw new Error('会话不存在'); return undefined
+      case 'updateSessionModelPreference': if (!(await runtime.sessions.updateModelPreference(arg<string>(), arg<import('../shared/types').SessionModelPreference>(1)))) throw new Error('会话不存在'); return undefined
       default: throw new Error(`不支持的 API 方法：${method}`)
     }
   }
@@ -386,33 +444,46 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     try { await registryReady } catch (error) { sendError(res, 500, error); return }
 
     if (pathname === '/api/workspaces' && req.method === 'GET') { sendJson(res, 200, await registry.list()); return }
+    if (pathname === '/api/workspaces/recent' && req.method === 'GET') { sendJson(res, 200, await listRecentWorkspaces()); return }
     if (pathname === '/api/workspaces' && req.method === 'POST') {
       try {
         const body = JSON.parse(await readBody(req)) as { name?: string }
         const summary = await registry.create(String(body.name ?? 'StoryFabric'))
+        await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path))
         authSessions.setWorkspace(context.token, summary.path)
         sendJson(res, 201, summary)
       } catch (error) { sendError(res, 400, error) }
       return
     }
     if (pathname === '/api/workspaces/open-path' && req.method === 'POST') {
+      const signal = requestAbortSignal(req, res)
       try {
         const body = JSON.parse(await readBody(req)) as { path?: string }
-        const summary = await registry.openPath(body.path ?? '')
+        const summary = await registry.openPath(body.path ?? '', signal)
+        await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path, signal))
+        throwIfWorkspaceRequestAborted(signal)
         authSessions.setWorkspace(context.token, summary.path)
         sendJson(res, 200, summary)
       } catch (error) { sendError(res, 400, error) }
       return
     }
     if (pathname === '/api/workspaces/import' && req.method === 'POST') {
+      const signal = requestAbortSignal(req, res)
+      let imported: Awaited<ReturnType<WorkspaceRegistry['importArchive']>> | null = null
       try {
         const bytes = await readBinaryBody(req, WORKSPACE_ARCHIVE_MAX_BYTES)
         const requestedName = req.headers['x-storyfabric-workspace-name']
         const name = typeof requestedName === 'string' ? decodeURIComponent(requestedName) : undefined
-        const summary = await registry.importArchive(bytes, name)
-        authSessions.setWorkspace(context.token, summary.path)
-        sendJson(res, 201, summary)
-      } catch (error) { sendError(res, 400, error) }
+        imported = await registry.importArchive(bytes, name, signal)
+        await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(imported!.path, signal))
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        throwIfRequestAborted(req, res, signal)
+        authSessions.setWorkspace(context.token, imported.path)
+        sendJson(res, 201, imported)
+      } catch (error) {
+        if (imported && requestWasAborted(req, res, signal)) await registry.removeImported(imported).catch(() => undefined)
+        sendError(res, 400, error)
+      }
       return
     }
     const match = /^\/api\/workspaces\/([^/]+)\/(open|archive)$/.exec(pathname)
@@ -420,7 +491,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       const id = decodeUri(match[1])
       if (id === null) { sendError(res, 400, '非法工作区地址'); return }
       if (match[2] === 'open' && req.method === 'POST') {
-        try { const summary = await registry.summary(id); authSessions.setWorkspace(context.token, summary.path); sendJson(res, 200, summary) } catch (error) { sendError(res, 404, error) }
+        const signal = requestAbortSignal(req, res)
+        try { const summary = await registry.summary(id); await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path, signal)); throwIfWorkspaceRequestAborted(signal); authSessions.setWorkspace(context.token, summary.path); sendJson(res, 200, summary) } catch (error) { sendError(res, 404, error) }
         return
       }
       if (match[2] === 'archive' && req.method === 'GET') {

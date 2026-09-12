@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { HttpPlatformApi, WebAuthRequiredError } from '../httpApi'
 
 describe('web platform api', () => {
@@ -12,6 +12,34 @@ describe('web platform api', () => {
     await expect(api.getCurrentWorkspace()).resolves.toEqual({ name: '服务工作区' })
     expect(requests[0].url).toBe('/api/rpc')
     expect(JSON.parse(requests[0].body)).toEqual({ method: 'getCurrentWorkspace', args: [] })
+  })
+
+  it('requests recent workspaces from the dedicated endpoint', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const recent = [{ name: '最近工作区', path: 'ws_recent', chapterCount: 1, volumeCount: 0, relationshipCount: 0, lastOpenedAt: '2026-09-11T08:00:00.000Z' }]
+    const api = new HttpPlatformApi(async (input, init) => {
+      requests.push({ url: String(input), init })
+      return new Response(JSON.stringify(recent), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    await expect(api.listRecentWorkspaces()).resolves.toEqual(recent)
+    expect(requests[0].url).toBe('/api/workspaces/recent')
+    expect(requests[0].init?.credentials).toBe('include')
+  })
+
+  it('invokes the default browser fetch with the global receiver', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = function (this: unknown, _input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
+      if (this !== globalThis) throw new TypeError('Illegal invocation')
+      return Promise.resolve(new Response(JSON.stringify({ result: { name: '默认 fetch' } }), { status: 200 }))
+    } as typeof fetch
+
+    try {
+      const api = new HttpPlatformApi()
+      await expect(api.getCurrentWorkspace()).resolves.toEqual({ name: '默认 fetch' })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('surfaces an authentication error for expired web sessions', async () => {
@@ -46,6 +74,22 @@ describe('web platform api', () => {
     expect(requests[0].init?.method).toBe('POST')
     expect(requests[0].init?.headers).toMatchObject({ authorization: `Bearer ${'t'.repeat(32)}`, 'content-type': 'application/json' })
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ path: '/srv/storyfabric/workspaces/demo' })
+  })
+
+  it('forwards an AbortSignal to open and import requests', async () => {
+    const requests: RequestInit[] = []
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init) requests.push(init)
+      return new Response(JSON.stringify({ name: '工作区', path: 'ws_signal' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const api = new HttpPlatformApi(fetcher, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+    const controller = new AbortController()
+
+    await api.openWorkspaceByPath('/srv/workspace', { signal: controller.signal })
+    await api.importWorkspace(new Uint8Array([1]), 'workspace.storyfabric.zip', undefined, { signal: controller.signal })
+
+    expect(requests[0].signal).toBe(controller.signal)
+    expect(requests[1].signal).toBe(controller.signal)
   })
 
   it('rejects an empty workspace path', async () => {

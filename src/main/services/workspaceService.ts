@@ -19,6 +19,7 @@ import {
 } from '../../core/workspace/workspaceService'
 import type { ChapterBox, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
 import { listTrash as coreListTrash, restoreFromTrash as coreRestoreTrash, purgeTrashEntry as corePurgeTrash } from '../../core/workspace/trash'
+import { throwIfWorkspaceRequestAborted } from '../../shared/api'
 
 function storeOf(root: string): NodeFileStore {
   return workspaceStore(root)
@@ -89,19 +90,23 @@ async function reserveWorkspaceDirectory(target: string, name: string): Promise<
 }
 
 /** Import into a freshly reserved sibling directory without replacing an existing path. */
-export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array): Promise<string> {
+export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+  throwIfWorkspaceRequestAborted(signal)
   const parent = resolve(parentDir)
   const safeName = safeWorkspaceName(name)
   const target = resolve(parent, safeName)
   if (!isChildOf(parent, target)) throw new Error('目标工作区必须位于所选文件夹内')
 
   return withWorkspaceImportLock(target, async () => {
+    throwIfWorkspaceRequestAborted(signal)
     // mkdir is the exclusive reservation; the parent boundary prevents archive paths escaping target.
     await reserveWorkspaceDirectory(target, basename(target))
     try {
       const targetStore = new NodeFileStore(target, parent)
       await importWorkspaceArchive(targetStore, bytes)
+      throwIfWorkspaceRequestAborted(signal)
       await coreSetWorkspaceName(targetStore, safeName)
+      throwIfWorkspaceRequestAborted(signal)
       return target
     } catch (error) {
       await fs.rm(target, { recursive: true, force: true })
@@ -116,6 +121,37 @@ export function loadSummary(root: string): Promise<WorkspaceSummary> {
 
 export function loadWorkspaceListItem(root: string): Promise<WorkspaceListItem> {
   return coreLoadWorkspaceListItem(storeOf(root), basename(root), root)
+}
+
+/** Enumerate valid local workspaces below the user's documents root. */
+export async function listWorkspaces(parentDir: string): Promise<WorkspaceListItem[]> {
+  const result: WorkspaceListItem[] = []
+
+  const visit = async (directory: string): Promise<void> => {
+    let entries
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const root = join(directory, entry.name)
+      try {
+        if ((await validateWorkspace(root)).ok) {
+          result.push(await loadWorkspaceListItem(root))
+          continue
+        }
+      } catch {
+        continue
+      }
+      await visit(root)
+    }
+  }
+
+  await visit(resolve(parentDir))
+  return result.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.path.localeCompare(b.path))
 }
 
 export function listVolumes(root: string): Promise<VolumeMeta[]> { return coreListVolumes(storeOf(root)) }

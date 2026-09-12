@@ -1,5 +1,6 @@
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
 import { normalizeRelativePath, type FileStore } from '../../../core/storage/fileStore'
+import { base64ToBytes, bytesToBase64 } from './archiveTransfer'
 
 /** Capacitor Android 应用私有目录适配器；所有路径均相对于一个工作区根目录。 */
 export class CapacitorFileStore implements FileStore {
@@ -20,7 +21,18 @@ export class CapacitorFileStore implements FileStore {
   }
 
   async ensureDir(path: string): Promise<void> {
-    await Filesystem.mkdir({ path: this.path(path, true), directory: Directory.Data, recursive: true })
+    const target = this.path(path, true)
+    try {
+      await Filesystem.mkdir({ path: target, directory: Directory.Data, recursive: true })
+    } catch (error) {
+      try {
+        const stat = await Filesystem.stat({ path: target, directory: Directory.Data })
+        if (stat.type === 'directory') return
+      } catch {
+        /* Preserve the original mkdir error when the target is not an existing directory. */
+      }
+      throw error
+    }
   }
 
   async readText(path: string): Promise<string | null> {
@@ -32,11 +44,28 @@ export class CapacitorFileStore implements FileStore {
     }
   }
 
+  async readBytes(path: string): Promise<Uint8Array | null> {
+    try {
+      const result = await Filesystem.readFile({ path: this.path(path), directory: Directory.Data })
+      if (typeof result.data !== 'string') return null
+      return base64ToBytes(result.data)
+    } catch {
+      return null
+    }
+  }
+
   async writeText(path: string, text: string): Promise<void> {
     const clean = normalizeRelativePath(path)
     const slash = clean.lastIndexOf('/')
     if (slash > 0) await this.ensureDir(clean.slice(0, slash))
     await Filesystem.writeFile({ path: this.path(clean), directory: Directory.Data, data: text, encoding: Encoding.UTF8, recursive: true })
+  }
+
+  async writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+    const clean = normalizeRelativePath(path)
+    const slash = clean.lastIndexOf('/')
+    if (slash > 0) await this.ensureDir(clean.slice(0, slash))
+    await Filesystem.writeFile({ path: this.path(clean), directory: Directory.Data, data: bytesToBase64(bytes), recursive: true })
   }
 
   async move(from: string, to: string): Promise<void> {

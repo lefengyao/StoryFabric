@@ -14,17 +14,17 @@ export const WORKSPACE_ARCHIVE_MAX_ENTRY_BYTES = 10 * 1024 * 1024
 export const WORKSPACE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 
 const ROOT_FILES = new Set(['storyfabric.json', 'relationships.json'])
-const ROOT_DIRS = new Set(['characters', 'outline', 'settings', 'events', 'chapters', 'notes', '.storyfabric'])
+const ROOT_DIRS = new Set(['characters', 'outline', 'settings', 'events', 'chapters', 'notes', 'docs', '.storyfabric'])
 const DERIVED_PATHS = new Set(['.storyfabric/index.json'])
 
 interface ArchiveFile {
   path: string
-  text: string
+  bytes: Uint8Array
 }
 
 function safeEntry(path: string): string | null {
   if (!path || path.includes('\0')) return null
-  const normalized = path.replaceAll('\\', '/')
+  const normalized = path.replace(/\\/g, '/')
   if (normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) return null
   const parts = normalized.split('/')
   if (parts.some((part) => !part || part === '.' || part === '..')) return null
@@ -37,6 +37,7 @@ function isPortablePath(path: string): boolean {
   const [root] = path.split('/', 1)
   if (!root || !ROOT_DIRS.has(root)) return false
   if (DERIVED_PATHS.has(path) || path.startsWith('.storyfabric/tmp/')) return false
+  if (path.startsWith('docs/')) return true
   return !path.toLowerCase().endsWith('.tmp') && !path.toLowerCase().endsWith('.bak')
 }
 
@@ -44,8 +45,8 @@ async function addTree(zip: JSZip, store: FileStore, dir: string): Promise<void>
   for (const file of await store.listFiles(dir)) {
     const path = dir ? `${dir}/${file}` : file
     if (!isPortablePath(path)) continue
-    const text = await store.readText(path)
-    if (text !== null) zip.file(path, text)
+    const bytes = await store.readBytes(path)
+    if (bytes !== null) zip.file(path, bytes)
   }
   for (const child of await store.listDirs(dir)) {
     const path = dir ? `${dir}/${child}` : child
@@ -67,7 +68,7 @@ function validateMetadata(files: ArchiveFile[]): void {
   const metadata = files.find((file) => file.path === 'storyfabric.json')
   if (!metadata) throw new Error('压缩包不是有效的 StoryFabric 工作区')
   try {
-    const value = JSON.parse(metadata.text) as { app?: unknown; version?: unknown }
+    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadata.bytes)) as { app?: unknown; version?: unknown }
     if (value.app !== 'storyfabric' || typeof value.version !== 'number' || !Number.isFinite(value.version) || value.version > CURRENT_WORKSPACE_VERSION) throw new Error('invalid')
   } catch {
     throw new Error('压缩包不是有效的 StoryFabric 工作区')
@@ -106,15 +107,12 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
     uncompressedBytes += content.byteLength
     if (uncompressedBytes > WORKSPACE_ARCHIVE_MAX_UNCOMPRESSED_BYTES) throw new Error('工作区压缩包解压后超过限制')
 
-    let text: string
-    try {
-      text = new TextDecoder('utf-8', { fatal: true }).decode(content)
-    } catch {
-      throw new Error(`工作区压缩包包含非文本文件：${path}`)
+    if (path !== 'storyfabric.json' && path !== 'relationships.json' && !path.startsWith('docs/')) {
+      try { new TextDecoder('utf-8', { fatal: true }).decode(content) } catch { throw new Error(`工作区压缩包包含非文本文件：${path}`) }
     }
     paths.add(path)
     portablePaths.add(portableKey)
-    files.push({ path, text })
+    files.push({ path, bytes: content })
   }
 
   if (!files.length) throw new Error('压缩包不是有效的 StoryFabric 工作区')
@@ -126,8 +124,8 @@ export async function exportWorkspaceArchive(store: FileStore, name: string): Pr
   const zip = new JSZip()
   for (const file of await store.listFiles('')) {
     if (!isPortablePath(file)) continue
-    const text = await store.readText(file)
-    if (text !== null) zip.file(file, text)
+    const bytes = await store.readBytes(file)
+    if (bytes !== null) zip.file(file, bytes)
   }
   for (const dir of ROOT_DIRS) await addTree(zip, store, dir)
   const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
@@ -141,6 +139,16 @@ export async function exportWorkspaceArchive(store: FileStore, name: string): Pr
 export async function importWorkspaceArchive(store: FileStore, bytes: Uint8Array | ArrayBuffer): Promise<void> {
   await assertEmpty(store)
   const files = await readArchive(bytes)
-  for (const file of files) await store.writeText(file.path, file.text)
+  for (const file of files) {
+    if (file.path.startsWith('docs/')) {
+      try {
+        await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
+      } catch {
+        await store.writeBytes(file.path, file.bytes)
+      }
+    } else {
+      await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
+    }
+  }
   await migrateWorkspace(store)
 }

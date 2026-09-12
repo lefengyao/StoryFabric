@@ -3,6 +3,7 @@ import type { ChatMessage } from '../../shared/types'
 import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
+import { toGeminiMessageParts } from '../attachments/messageContent'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -17,7 +18,7 @@ export function toGeminiContents(messages: ChatMessage[]): { role: 'user' | 'mod
   const out: { role: 'user' | 'model'; parts: GeminiPart[] }[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', parts: [{ text: m.text ?? '' }] })
+      out.push({ role: 'user', parts: toGeminiMessageParts(m) })
     } else if (m.role === 'assistant') {
       const parts: GeminiPart[] = []
       if (m.text) parts.push({ text: m.text })
@@ -90,7 +91,7 @@ export class GeminiAdapter implements LlmAdapter {
     let usage: TokenUsage | undefined
     const toolCalls: StreamResult['toolCalls'] = []
 
-    for await (const line of sseLines(res)) {
+    for await (const line of sseLines(res, req.signal)) {
       const data = sseData(line)
       if (!data) continue
       let json: any
@@ -144,4 +145,3 @@ export async function fetchGeminiModels(baseUrl: string, apiKey: string): Promis
     .filter(Boolean)
     .sort()
 }
-

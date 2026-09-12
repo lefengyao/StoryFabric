@@ -42,6 +42,18 @@ describe('workspace archive', () => {
     expect(await target.readText('.storyfabric/index.json')).toBeNull()
   })
 
+  it('keeps docs backup files byte-for-byte', async () => {
+    const source = new MemoryFileStore()
+    await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '文档备份' }))
+    await source.writeBytes('docs/plan.md.bak', new Uint8Array([0, 255, 1]))
+    await source.writeText('characters/old.md.bak', '不应导出')
+    const archive = await exportWorkspaceArchive(source, '文档备份')
+    const target = new MemoryFileStore()
+    await importWorkspaceArchive(target, archive.bytes)
+    expect(await target.readBytes('docs/plan.md.bak')).toEqual(new Uint8Array([0, 255, 1]))
+    expect(await target.readText('characters/old.md.bak')).toBeNull()
+  })
+
   it('rejects imported trash and arbitrary runtime files before writing', async () => {
     const target = new MemoryFileStore()
     const bytes = await zipBytes({

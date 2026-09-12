@@ -5,12 +5,9 @@ import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { splitDelimitedText } from '../../lib/delimitedInput'
 import type { StoryEvent } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
-
-function parseTags(text: string): string[] {
-  return text.split(/[,，、\s]+/).map((t) => t.trim()).filter(Boolean)
-}
 
 export function EventsPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
@@ -21,6 +18,7 @@ export function EventsPage(): React.ReactElement {
 
   const [editing, setEditing] = useState<StoryEvent | null>(null)
   const [isNew, setIsNew] = useState(false)
+  const [tagsText, setTagsText] = useState('')
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -37,6 +35,7 @@ export function EventsPage(): React.ReactElement {
       nextIds: [],
       content: ''
     })
+    setTagsText('')
     setIsNew(true)
   }
 
@@ -44,8 +43,9 @@ export function EventsPage(): React.ReactElement {
     if (!editing) return
     setSaving(true)
     try {
-      await api.saveEvent({ ...editing, id: editing.id || undefined })
+      await api.saveEvent({ ...editing, tags: splitDelimitedText(tagsText), id: editing.id || undefined })
       setEditing(null)
+      setTagsText('')
       await refresh()
     } finally {
       setSaving(false)
@@ -103,7 +103,7 @@ export function EventsPage(): React.ReactElement {
             {events.map((e, i) => (
               <div key={e.id} className="relative pl-16 pr-6 py-3 group">
                 <div className="absolute left-[19px] top-5 h-4 w-4 rounded-full border-2 border-accent bg-app" />
-                <button onClick={() => { setEditing({ ...e }); setIsNew(false); setConfirmDelete(false) }} className="w-full cursor-pointer rounded-xl border border-line bg-panel p-4 text-left transition hover:border-accent hover:shadow-sm">
+                <button onClick={() => { setEditing({ ...e }); setTagsText(e.tags.join('，')); setIsNew(false); setConfirmDelete(false) }} className="w-full cursor-pointer rounded-xl border border-line bg-panel p-4 text-left transition hover:border-accent hover:shadow-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     {e.storyTime && <Badge tone="accent">{e.storyTime}</Badge>}
                     <span className="text-sm font-semibold">{e.title}</span>
@@ -174,7 +174,7 @@ export function EventsPage(): React.ReactElement {
             </Field>
           </div>
           <Field label="标签（逗号分隔）">
-            <Input value={editing.tags.join('，')} onChange={(ev) => setEditing({ ...editing, tags: parseTags(ev.target.value) })} />
+            <Input value={tagsText} onChange={(ev) => setTagsText(ev.target.value)} />
           </Field>
 
           <Field label={`关联人物（${editing.characterIds.length}）`}>

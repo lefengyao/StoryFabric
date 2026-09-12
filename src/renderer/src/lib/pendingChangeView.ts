@@ -24,6 +24,18 @@ export function pendingChangeView(change: PendingChange): PendingChangeView {
       confirmLabel: '移入回收站'
     }
   }
+  if (change.toolName === 'delete_entity') {
+    const isTrashBacked = change.afterText.includes('移入回收站') && !change.afterText.includes('直接删除')
+    return {
+      variant: 'remove',
+      label,
+      caption: isTrashBacked
+        ? `智能体请求删除${label} —— 确认后将移入回收站`
+        : `智能体请求删除${label} —— 确认后将直接删除`,
+      outcome: isTrashBacked ? '将移入回收站，可从回收站恢复' : '该类型没有回收站，确认后无法恢复',
+      confirmLabel: isTrashBacked ? '移入回收站' : '确认直接删除'
+    }
+  }
   if (change.toolName === 'restore_from_trash') {
     return {
       variant: 'restore',

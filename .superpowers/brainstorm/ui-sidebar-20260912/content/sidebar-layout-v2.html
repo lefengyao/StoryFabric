@@ -1,0 +1,74 @@
+<style>
+  .v2-wrap { display:grid; gap:18px; }
+  .v2-note { border-left:3px solid #5966d9; padding:10px 13px; background:#f3f4ff; color:#555d78; font-size:13px; border-radius:0 9px 9px 0; }
+  .v2-shell { display:flex; height:290px; overflow:hidden; border:1px solid #dfe3ec; border-radius:14px; background:#fbfcff; color:#252a3b; box-shadow:0 10px 24px rgba(33,39,61,.08); }
+  .v2-side { width:238px; flex:none; padding:14px 12px; background:#242b4b; color:#d5daf1; }
+  .v2-side.collapsed { width:62px; padding:14px 8px; }
+  .v2-brand { display:flex; align-items:center; gap:9px; padding:0 4px 13px; border-bottom:1px solid rgba(255,255,255,.14); margin-bottom:11px; }
+  .v2-logo { width:32px; height:32px; flex:none; display:grid; place-items:center; border-radius:9px; background:#f2c75c; color:#242b4b; font-weight:900; }
+  .v2-brand-text { min-width:0; }
+  .v2-brand-title { color:#fff; font-weight:800; font-size:13px; }
+  .v2-brand-sub { color:#aeb7dc; font-size:9px; margin-top:2px; }
+  .v2-item { display:flex; align-items:center; gap:10px; padding:9px 10px; margin:4px 0; border-radius:8px; font-size:11px; }
+  .v2-item.active { color:#fff; background:#5966d9; }
+  .v2-item-icon { width:18px; text-align:center; font-size:14px; }
+  .v2-item-count { margin-left:auto; opacity:.55; }
+  .v2-reset { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:14px; padding:8px 6px; border:1px dashed rgba(255,255,255,.32); border-radius:8px; color:#e0e4fb; font-size:10px; }
+  .v2-side.collapsed .v2-brand { justify-content:center; padding-left:0; padding-right:0; }
+  .v2-side.collapsed .v2-brand-text, .v2-side.collapsed .v2-item-label, .v2-side.collapsed .v2-item-count, .v2-side.collapsed .v2-reset-label { display:none; }
+  .v2-side.collapsed .v2-item { justify-content:center; padding:9px 0; }
+  .v2-side.collapsed .v2-reset { width:38px; height:31px; margin-left:auto; margin-right:auto; }
+  .v2-content { flex:1; padding:18px 22px; }
+  .v2-content-head { display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid #e3e6ef; }
+  .v2-content-title { font-size:16px; font-weight:800; }
+  .v2-memory { display:inline-flex; align-items:center; gap:5px; color:#5966d9; font-size:10px; background:#f0f1ff; border-radius:99px; padding:5px 8px; }
+  .v2-lines { display:grid; gap:10px; margin-top:20px; }
+  .v2-line { height:10px; background:#e3e7ef; border-radius:5px; }
+  .v2-line.short { width:58%; }
+  .v2-caption { color:#7a8296; font-size:12px; margin-top:8px; }
+</style>
+
+<h2>实际需求确认版</h2>
+<p class="subtitle">现有左侧导航增加文字；按钮可永久记住展开状态，并可恢复为当前的纯图标状态</p>
+
+<div class="v2-wrap">
+  <div class="v2-note">阅读位置记忆：章节、大纲、人物等页面按“工作区 + 页面”单独保存滚动位置，重新进入时自动恢复；不同工作区互不串位。</div>
+
+  <div class="cards">
+    <div class="card" data-choice="expanded" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="v2-shell">
+          <div class="v2-side">
+            <div class="v2-brand"><div class="v2-logo">S</div><div class="v2-brand-text"><div class="v2-brand-title">织章</div><div class="v2-brand-sub">StoryFabric</div></div></div>
+            <div class="v2-item active"><span class="v2-item-icon">♙</span><span class="v2-item-label">人物</span><span class="v2-item-count">12</span></div>
+            <div class="v2-item"><span class="v2-item-icon">⌘</span><span class="v2-item-label">关系</span></div>
+            <div class="v2-item"><span class="v2-item-icon">▤</span><span class="v2-item-label">大纲</span><span class="v2-item-count">8</span></div>
+            <div class="v2-item"><span class="v2-item-icon">▥</span><span class="v2-item-label">章节</span><span class="v2-item-count">24</span></div>
+            <div class="v2-item"><span class="v2-item-icon">✦</span><span class="v2-item-label">智能体</span></div>
+            <div class="v2-reset"><span>‹</span><span class="v2-reset-label">还原为纯图标</span></div>
+          </div>
+          <div class="v2-content"><div class="v2-content-head"><div class="v2-content-title">人物介绍</div><div class="v2-memory">◷ 已恢复上次位置</div></div><div class="v2-lines"><div class="v2-line"></div><div class="v2-line short"></div><div class="v2-line"></div><div class="v2-line"></div><div class="v2-line short"></div></div><div class="v2-caption">左侧导航文字直接对应当前工作区区域，当前选中项更醒目。</div></div>
+        </div>
+      </div>
+      <div class="card-body"><h3>展开态：图标＋文字</h3><p>默认采用此状态，侧栏宽度扩大并显示“人物、关系、大纲、章节、智能体”等文字；底部按钮可恢复纯图标。</p></div>
+    </div>
+
+    <div class="card" data-choice="collapsed" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="v2-shell">
+          <div class="v2-side collapsed">
+            <div class="v2-brand"><div class="v2-logo">S</div><div class="v2-brand-text"><div class="v2-brand-title">织章</div><div class="v2-brand-sub">StoryFabric</div></div></div>
+            <div class="v2-item active"><span class="v2-item-icon">♙</span><span class="v2-item-label">人物</span><span class="v2-item-count">12</span></div>
+            <div class="v2-item"><span class="v2-item-icon">⌘</span><span class="v2-item-label">关系</span></div>
+            <div class="v2-item"><span class="v2-item-icon">▤</span><span class="v2-item-label">大纲</span><span class="v2-item-count">8</span></div>
+            <div class="v2-item"><span class="v2-item-icon">▥</span><span class="v2-item-label">章节</span><span class="v2-item-count">24</span></div>
+            <div class="v2-item"><span class="v2-item-icon">✦</span><span class="v2-item-label">智能体</span></div>
+            <div class="v2-reset"><span>›</span><span class="v2-reset-label">还原为纯图标</span></div>
+          </div>
+          <div class="v2-content"><div class="v2-content-head"><div class="v2-content-title">人物介绍</div><div class="v2-memory">◷ 位置已记忆</div></div><div class="v2-lines"><div class="v2-line"></div><div class="v2-line short"></div><div class="v2-line"></div><div class="v2-line"></div></div><div class="v2-caption">恢复后只保留图标，悬停仍显示文字提示。</div></div>
+        </div>
+      </div>
+      <div class="card-body"><h3>还原态：纯图标</h3><p>保留当前版本的紧凑布局；按钮仍可点击重新展开，图标悬停显示名称。</p></div>
+    </div>
+  </div>
+</div>

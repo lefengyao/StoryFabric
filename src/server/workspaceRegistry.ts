@@ -10,6 +10,7 @@ import { listTrash } from '../core/workspace/trash'
 import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName, validateWorkspace } from '../core/workspace/workspaceService'
 import type { FileStore } from '../core/storage/fileStore'
 import type { VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../shared/types'
+import { throwIfWorkspaceRequestAborted } from '../shared/api'
 
 interface WorkspaceRecord {
   id: string
@@ -18,6 +19,16 @@ interface WorkspaceRecord {
   updatedAt: number
   directory?: string
 }
+
+interface ImportRollbackReceipt {
+  id: string
+  root: string
+  createdAt: number
+  consumed: boolean
+}
+
+const importRollbackReceipt = Symbol('storyfabric.importRollbackReceipt')
+type ImportedWorkspaceSummary = WorkspaceSummary & { [importRollbackReceipt]?: ImportRollbackReceipt }
 
 interface RegistryFile {
   version: 1
@@ -84,6 +95,8 @@ export class RevalidatedFileStore implements FileStore {
   async ensureDir(path: string): Promise<void> { return (await this.loadStore()).ensureDir(path) }
   async readText(path: string): Promise<string | null> { return (await this.loadStore()).readText(path) }
   async writeText(path: string, text: string): Promise<void> { return (await this.loadStore()).writeText(path, text) }
+  async readBytes(path: string): Promise<Uint8Array | null> { return (await this.loadStore()).readBytes(path) }
+  async writeBytes(path: string, bytes: Uint8Array): Promise<void> { return (await this.loadStore()).writeBytes(path, bytes) }
   async move(from: string, to: string): Promise<void> { return (await this.loadStore()).move(from, to) }
   async remove(path: string): Promise<void> { return (await this.loadStore()).remove(path) }
   async modifiedAt(path: string): Promise<number | null> { return (await this.loadStore()).modifiedAt(path) }
@@ -180,6 +193,7 @@ export class WorkspaceRegistry {
     const directory = record.directory === undefined ? record.id : record.directory.trim()
     if (!directory || isAbsolute(directory) || directory.split(/[\\/]/).includes('..')) throw new Error('工作区目录无效')
     const root = resolve(this.managedRoot, directory)
+    if (this.canonicalPath(root) === this.canonicalPath(this.managedRootBoundary)) throw new Error('工作区目录不能是托管根目录')
     if (!isWithin(this.managedRoot, root)) throw new Error('工作区目录越界')
     return root
   }
@@ -316,9 +330,10 @@ export class WorkspaceRegistry {
     })
   }
 
-  async importArchive(bytes: Uint8Array, suggestedName?: string): Promise<WorkspaceSummary> {
+  async importArchive(bytes: Uint8Array, suggestedName?: string, signal?: AbortSignal): Promise<WorkspaceSummary> {
     await this.ensureReady()
     return this.mutate(async () => {
+      throwIfWorkspaceRequestAborted(signal)
       const staging = await fs.mkdtemp(join(this.importsRoot, 'workspace-'))
       let root: string | null = null
       let id: string | null = null
@@ -327,34 +342,80 @@ export class WorkspaceRegistry {
       try {
         const stagingStore = new NodeFileStore(staging, this.managedRootBoundary)
         await importWorkspaceArchive(stagingStore, bytes)
+        throwIfWorkspaceRequestAborted(signal)
         const imported = await loadSummary(stagingStore, '导入工作区', 'pending')
         id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
         root = this.rootOf({ id, name: '导入工作区', createdAt: 0, updatedAt: 0 }, true)
         const displayName = suggestedName?.trim() ? safeName(suggestedName) : imported.name
         await setWorkspaceName(stagingStore, displayName)
+        throwIfWorkspaceRequestAborted(signal)
         await fs.rename(staging, root)
         published = true
+        throwIfWorkspaceRequestAborted(signal)
         const now = Date.now()
         this.records.push({ id, name: displayName, createdAt: now, updatedAt: now })
         recordAdded = true
         try {
           await this.saveRecords()
+          throwIfWorkspaceRequestAborted(signal)
         } catch (error) {
           this.records = this.records.filter((record) => record.id !== id)
           throw error
         }
-        return loadSummary(new NodeFileStore(root, this.managedRootBoundary), displayName, id)
+        const summary = await loadSummary(new NodeFileStore(root, this.managedRootBoundary), displayName, id)
+        Object.defineProperty(summary, importRollbackReceipt, {
+          value: { id, root: this.canonicalPath(root), createdAt: now, consumed: false } satisfies ImportRollbackReceipt,
+          enumerable: false
+        })
+        return summary
       } catch (error) {
-        if (recordAdded && id) this.records = this.records.filter((record) => record.id !== id)
+        if (recordAdded && id) {
+          this.records = this.records.filter((record) => record.id !== id)
+          await this.saveRecords().catch(() => undefined)
+        }
         await fs.rm(published && root ? root : staging, { recursive: true, force: true }).catch(() => undefined)
         throw error
       }
     })
   }
 
-  async openPath(input: string): Promise<WorkspaceSummary> {
+  async removeImported(summary: WorkspaceSummary): Promise<void> {
+    const receipt = (summary as ImportedWorkspaceSummary)[importRollbackReceipt]
+    if (!receipt || receipt.consumed) return
+    receipt.consumed = true
+    try {
+      await this.ensureReady()
+      await this.mutate(async () => {
+        const index = this.records.findIndex((record) => record.id === receipt.id)
+        if (index < 0) return
+        const record = this.records[index]
+        if (record.createdAt !== receipt.createdAt) return
+
+        let root: string
+        try { root = this.rootOf(record, true) } catch { return }
+        if (this.canonicalPath(root) !== receipt.root) return
+
+        const previous = this.records
+        this.records = this.records.filter((_record, recordIndex) => recordIndex !== index)
+        try {
+          await this.saveRecords()
+          await fs.rm(root, { recursive: true, force: true })
+        } catch (error) {
+          this.records = previous
+          await this.saveRecords().catch(() => undefined)
+          throw error
+        }
+      })
+    } catch (error) {
+      receipt.consumed = false
+      throw error
+    }
+  }
+
+  async openPath(input: string, signal?: AbortSignal): Promise<WorkspaceSummary> {
     await this.ensureReady()
     return this.mutate(async () => {
+      throwIfWorkspaceRequestAborted(signal)
       const value = typeof input === 'string' ? input.trim() : ''
       if (!value) throw new Error('工作区路径不能为空')
       const requested = resolve(value)
@@ -366,6 +427,7 @@ export class WorkspaceRegistry {
       if (!info.isDirectory()) throw new Error('工作区路径必须是文件夹')
       const valid = await validateWorkspace(new NodeFileStore(target, this.managedRootBoundary))
       if (!valid.ok) throw new Error(valid.reason)
+      throwIfWorkspaceRequestAborted(signal)
 
       const targetIdentity = this.canonicalPath(target)
       const store = this.storeForPath(target)
@@ -384,8 +446,10 @@ export class WorkspaceRegistry {
       this.records.push({ id, name: summary.name, directory, createdAt: now, updatedAt: now })
       try {
         await this.saveRecords()
+        throwIfWorkspaceRequestAborted(signal)
       } catch (error) {
         this.records = this.records.filter((record) => record.id !== id)
+        await this.saveRecords().catch(() => undefined)
         throw error
       }
       return { ...summary, path: id }

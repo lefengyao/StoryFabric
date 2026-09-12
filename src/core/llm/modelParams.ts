@@ -29,7 +29,11 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
   const useMap = Boolean(mappedPath) && mappedValue !== undefined
 
   const budget = support && !useMap ? reasoningBudget(params.reasoning, params.maxOutputTokens) : 0
-  const reasoningOn = budget > 0
+  // OpenAI effort is independent from Anthropic/Gemini token budgets. A small
+  // output limit must not silently turn an explicitly selected effort off.
+  const reasoningOn = protocol === 'openai'
+    ? Boolean(support && !useMap && params.reasoning !== 'off')
+    : budget > 0
 
   const body: Record<string, unknown> =
     protocol === 'anthropic'
