@@ -43,7 +43,9 @@ export function ChaptersPage(): React.ReactElement {
   const volumes = summary?.volumes ?? []
   const workspaceKey = summary?.path ?? ''
   const chapterListRef = useRef<HTMLDivElement | null>(null)
-  const chapterReaderRef = useRef<HTMLDivElement | null>(null)
+  const chapterReadOnlyRef = useRef<HTMLDivElement | null>(null)
+  const chapterEditorRef = useRef<HTMLDivElement | null>(null)
+  const chapterReaderRef = draft ? chapterEditorRef : chapterReadOnlyRef
 
   usePersistentScrollPosition(chapterListRef, workspaceKey, `chapters:list:${box}`)
   usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`)
