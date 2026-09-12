@@ -45,6 +45,10 @@ describe('persistentScroll', () => {
     expect(new Set([first, second, third]).size).toBe(3)
   })
 
+  it('does not collide when encoded segments contain the old dot separator', () => {
+    expect(scrollStorageKey('a.', 'b')).not.toBe(scrollStorageKey('a', '.b'))
+  })
+
   it('reads valid non-negative finite positions from JSON', () => {
     const storage = createStorage()
     storage.values.set('scroll', JSON.stringify({ top: 12.5, left: 3 }))
@@ -169,6 +173,12 @@ describe('persistentScroll', () => {
         usePersistentScrollPosition({ current: null } as MutableRefObject<HTMLElement | null>, '', 'outline', false)
         runEffect?.()
       }).not.toThrow()
+    })
+
+    it('safely returns when enabled but the ref is not mounted', () => {
+      usePersistentScrollPosition({ current: null } as MutableRefObject<HTMLElement | null>, 'workspace', 'outline', true)
+
+      expect(() => runEffect?.()).not.toThrow()
     })
   })
 })

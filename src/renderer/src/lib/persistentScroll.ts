@@ -6,7 +6,7 @@ export type ScrollPosition = { top: number; left: number }
 const SCROLL_STORAGE_PREFIX = 'storyfabric.ui.scroll-position.v1'
 
 export function scrollStorageKey(workspaceId: string, scope: string): string {
-  return `${SCROLL_STORAGE_PREFIX}.${encodeURIComponent(workspaceId)}.${encodeURIComponent(scope)}`
+  return `${SCROLL_STORAGE_PREFIX}:${encodeURIComponent(workspaceId)}:${encodeURIComponent(scope)}`
 }
 
 export function readScrollPosition(storage: Storage | null, key: string): ScrollPosition | null {
