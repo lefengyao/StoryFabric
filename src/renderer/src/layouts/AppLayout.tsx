@@ -1,11 +1,12 @@
-import { BarChart3, BookOpen, Download, FileText, FolderSync, ListTree, Network, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { BarChart3, BookOpen, Download, FileText, FolderSync, ListTree, Network, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { BrandMark } from '../components/icons/BrandMark'
 import { useSettings } from '../stores/settingsStore'
 import { useWorkspace } from '../stores/workspaceStore'
 import { cn } from '../lib/utils'
 import { api } from '../lib/api'
+import { readSidebarExpanded, SIDEBAR_EXPANDED_KEY, writeSidebarExpanded } from '../lib/navigationPreference'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../lib/workspaceArchiveFile'
 import { getPlatformApi } from '../platform/platformApi'
 import { HttpPlatformApi } from '../platform/httpApi'
@@ -55,8 +56,15 @@ export function AppLayout(): React.ReactElement {
   const [transferBusy, setTransferBusy] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
+  const [sidebarExpanded, setSidebarExpanded] = useState(() => (
+    typeof window === 'undefined' ? true : readSidebarExpanded(window.localStorage, true)
+  ))
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const isRemote = getPlatformApi() instanceof HttpPlatformApi
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') writeSidebarExpanded(window.localStorage, sidebarExpanded)
+  }, [sidebarExpanded])
 
   const downloadArchive = async (): Promise<void> => {
     setTransferBusy(true); setTransferError(null)
@@ -103,7 +111,13 @@ export function AppLayout(): React.ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 左侧导航栏 */}
-      <aside className="mobile-bottom-nav order-2 flex min-h-[76px] w-full shrink-0 items-center justify-start gap-1 overflow-x-auto border-t-2 border-line bg-panel px-1 pb-[max(env(safe-area-inset-bottom),24px)] shadow-[0_-3px_10px_rgba(0,0,0,0.08)] sm:order-none sm:min-h-0 sm:h-full sm:w-16 sm:flex-col sm:justify-start sm:gap-1.5 sm:overflow-visible sm:border-t-0 sm:border-r sm:px-0 sm:py-4 sm:pb-0 sm:shadow-none">
+      <aside
+        data-sidebar-preference-key={SIDEBAR_EXPANDED_KEY}
+        className={cn(
+          'mobile-bottom-nav order-2 flex min-h-[76px] w-full shrink-0 items-center justify-start gap-1 overflow-x-auto border-t-2 border-line bg-panel px-1 pb-[max(env(safe-area-inset-bottom),24px)] shadow-[0_-3px_10px_rgba(0,0,0,0.08)] sm:order-none sm:min-h-0 sm:h-full sm:flex-col sm:justify-start sm:gap-1.5 sm:overflow-visible sm:border-t-0 sm:border-r sm:px-0 sm:py-4 sm:pb-0 sm:shadow-none',
+          sidebarExpanded ? 'sm:w-[158px]' : 'sm:w-16'
+        )}
+      >
         <NavLink to="/chat" title="织章 · StoryFabric" className="hidden mb-3 h-9 w-9 items-center justify-center rounded-xl shadow-sm sm:flex">
           <BrandMark variant="flat" size={36} className="rounded-[9px]" />
         </NavLink>
@@ -117,13 +131,17 @@ export function AppLayout(): React.ReactElement {
             onTouchStart={() => prefetch(load)}
             className={({ isActive }) =>
               cn(
-                'group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:w-10 sm:rounded-lg',
+                'group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:rounded-lg',
+                sidebarExpanded ? 'sm:w-full sm:justify-start sm:gap-2 sm:px-3' : 'sm:w-10',
                 isActive ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-elevated hover:text-fg'
               )
             }
           >
             <Icon size={18} />
-            <span className="pointer-events-none absolute bottom-12 z-30 hidden whitespace-nowrap rounded-md border border-line bg-panel px-2 py-1 text-xs text-fg opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block">
+            <span className={cn('hidden text-sm', sidebarExpanded && 'sm:inline')}>
+              {label}
+            </span>
+            <span className={cn('pointer-events-none absolute bottom-12 z-30 hidden whitespace-nowrap rounded-md border border-line bg-panel px-2 py-1 text-xs text-fg opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block', sidebarExpanded && 'sm:hidden')}>
               {label}
             </span>
           </NavLink>
@@ -136,11 +154,29 @@ export function AppLayout(): React.ReactElement {
           onFocus={() => prefetch(loadSettingsPage)}
           onTouchStart={() => prefetch(loadSettingsPage)}
           className={({ isActive }) =>
-            cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors', isActive ? 'text-accent bg-accent-soft' : 'text-muted hover:bg-elevated hover:text-fg')
+            cn(
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
+              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-2 sm:px-3',
+              isActive ? 'text-accent bg-accent-soft' : 'text-muted hover:bg-elevated hover:text-fg'
+            )
           }
         >
           <SettingsIcon size={18} />
+          <span className={cn('hidden text-sm', sidebarExpanded && 'sm:inline')}>设置</span>
         </NavLink>
+        <button
+          type="button"
+          title={sidebarExpanded ? '还原为纯图标导航' : '展开文字导航'}
+          aria-label={sidebarExpanded ? '还原为纯图标导航' : '展开文字导航'}
+          onClick={() => setSidebarExpanded(sidebarExpanded ? false : true)}
+          className={cn(
+            'hidden h-10 shrink-0 items-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-fg cursor-pointer sm:flex',
+            sidebarExpanded ? 'sm:w-full sm:justify-start sm:gap-2 sm:px-3' : 'w-10 justify-center sm:w-10'
+          )}
+        >
+          {sidebarExpanded ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+          {sidebarExpanded && <span className="hidden text-sm sm:inline">还原图标</span>}
+        </button>
       </aside>
 
       {/* 内容区 */}
