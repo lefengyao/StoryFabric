@@ -28,6 +28,15 @@ const prefetch = (load: () => Promise<unknown>): void => {
   void load().catch(() => {})
 }
 const loadSettingsPage = (): Promise<unknown> => import('../pages/settings/SettingsPage')
+const getSidebarStorage = (): Storage | null => {
+  if (typeof window === 'undefined') return null
+
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
 
 const TITLE_MAP: Record<string, string> = {
   characters: '人物',
@@ -56,14 +65,12 @@ export function AppLayout(): React.ReactElement {
   const [transferBusy, setTransferBusy] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
-  const [sidebarExpanded, setSidebarExpanded] = useState(() => (
-    typeof window === 'undefined' ? true : readSidebarExpanded(window.localStorage, true)
-  ))
+  const [sidebarExpanded, setSidebarExpanded] = useState(() => readSidebarExpanded(getSidebarStorage(), true))
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const isRemote = getPlatformApi() instanceof HttpPlatformApi
 
   useEffect(() => {
-    if (typeof window !== 'undefined') writeSidebarExpanded(window.localStorage, sidebarExpanded)
+    writeSidebarExpanded(getSidebarStorage(), sidebarExpanded)
   }, [sidebarExpanded])
 
   const downloadArchive = async (): Promise<void> => {
