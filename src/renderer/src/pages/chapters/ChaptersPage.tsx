@@ -6,6 +6,7 @@ import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { createAutosave } from '../../lib/autosave'
+import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
 import { useChat } from '../../stores/chatStore'
@@ -40,6 +41,12 @@ export function ChaptersPage(): React.ReactElement {
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
   const volumes = summary?.volumes ?? []
+  const workspaceKey = summary?.path ?? ''
+  const chapterListRef = useRef<HTMLDivElement | null>(null)
+  const chapterReaderRef = useRef<HTMLDivElement | null>(null)
+
+  usePersistentScrollPosition(chapterListRef, workspaceKey, `chapters:list:${box}`)
+  usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`)
 
   useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
 
@@ -196,7 +203,7 @@ export function ChaptersPage(): React.ReactElement {
             </div>
           )}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div ref={chapterListRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {box === 'trash' ? trashItems.filter((item) => item.kind === 'chapter').map((item) => <div key={item.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-elevated"><Trash2 size={14} className="text-faint" /><span className="truncate text-sm">{item.title}</span><Button size="sm" variant="ghost" className="ml-auto" onClick={() => void restore(item.id)} title="恢复"><Undo2 size={13} /></Button></div>) : <>
           {chapters.length === 0 && <EmptyState icon={<BookOpen size={26} />} title="还没有章节" hint="新建第一章开始写作" />}
           {(box === 'draft' ? [{ id: 'draft', title: '草稿箱', order: 0 }] : volumes).map((vol) => (
@@ -234,7 +241,7 @@ export function ChaptersPage(): React.ReactElement {
 
       {/* 编辑区 */}
       {!draft ? (
-        <div className="flex-1">
+        <div ref={chapterReaderRef} className="flex-1 overflow-y-auto">
           {selected ? (
             <div className="mx-auto max-w-3xl p-8">
               <div className="mb-4 flex items-center justify-between">
@@ -310,7 +317,7 @@ export function ChaptersPage(): React.ReactElement {
           )}
 
           <div className="min-h-0 flex-1 p-4">
-            <MarkdownEditor value={draft.content ?? ''} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} />
+            <MarkdownEditor value={draft.content ?? ''} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} scrollRef={chapterReaderRef} />
           </div>
 
           <div className="flex h-8 shrink-0 items-center border-t border-line px-4 text-xs text-faint">
