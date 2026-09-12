@@ -1,10 +1,11 @@
 import { ListTree, Plus, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import type { OutlineDoc, OutlineKind } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 
@@ -23,6 +24,14 @@ export function OutlinePage(): React.ReactElement {
 
   const filteredDocs = useMemo(() => docs.filter((doc) => (doc.kind ?? 'total') === kind && (kind === 'total' || !chapterId || doc.chapterId === chapterId)), [docs, kind, chapterId])
   const selected = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0] ?? null
+  const workspaceKey = summary?.path ?? ''
+  const outlineListRef = useRef<HTMLDivElement | null>(null)
+  const outlineReadOnlyRef = useRef<HTMLDivElement | null>(null)
+  const outlineEditorRef = useRef<HTMLDivElement | null>(null)
+  const outlineReaderRef = draft ? outlineEditorRef : outlineReadOnlyRef
+
+  usePersistentScrollPosition(outlineListRef, workspaceKey, `outline:list:${kind}:${chapterId || 'all'}`)
+  usePersistentScrollPosition(outlineReaderRef, workspaceKey, `outline:reader:${kind}:${chapterId || 'all'}:${draft?.id ?? selected?.id ?? 'overview'}`)
 
   const openDoc = (d: OutlineDoc | null): void => {
     setSelectedId(d?.id ?? null)
@@ -67,7 +76,7 @@ export function OutlinePage(): React.ReactElement {
           </Button>
         </div>
         {kind === 'chapter' && <select value={chapterId} onChange={(e) => { setChapterId(e.target.value); setSelectedId(null); setDraft(null) }} className="mx-3 mb-2 h-8 rounded-md border border-line bg-panel px-2 text-xs"><option value="">全部章节</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>}
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+        <div ref={outlineListRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1">
           {filteredDocs.map((d) => (
             <button
               key={d.id}
@@ -85,7 +94,7 @@ export function OutlinePage(): React.ReactElement {
       </div>
 
       {!draft ? (
-        <div className="flex-1 overflow-y-auto">
+        <div ref={outlineReadOnlyRef} className="flex-1 overflow-y-auto">
           {selected ? (
             <article className="mx-auto max-w-3xl p-8">
               <h1 className="text-xl font-bold mb-4">{selected.title}</h1>
@@ -121,7 +130,7 @@ export function OutlinePage(): React.ReactElement {
             </Button>
           </div>
           <div className="min-h-0 flex-1 p-4">
-            <MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} />
+            <MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} scrollRef={outlineReaderRef} />
           </div>
         </div>
       )}
