@@ -4,6 +4,7 @@ import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import type React from 'react'
 import { useEffect, useRef } from 'react'
 import { cn } from '../../lib/utils'
 
@@ -22,11 +23,13 @@ function themeExt(): Extension {
 export function MarkdownEditor({
   value,
   onChange,
-  className
+  className,
+  scrollRef
 }: {
   value: string
   onChange: (v: string) => void
   className?: string
+  scrollRef?: React.MutableRefObject<HTMLElement | null>
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -57,8 +60,10 @@ export function MarkdownEditor({
       parent: hostRef.current
     })
     viewRef.current = view
+    if (scrollRef) scrollRef.current = view.scrollDOM
     return () => {
       view.destroy()
+      if (scrollRef?.current === view.scrollDOM) scrollRef.current = null
       viewRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
