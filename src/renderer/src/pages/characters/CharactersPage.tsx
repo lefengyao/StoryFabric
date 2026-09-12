@@ -1,10 +1,11 @@
 import { ChevronRight, Plus, Search, Trash2, UserRound, Users } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
 import { Markdown } from '../../components/markdown/Markdown'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
+import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { factionColor } from '../../lib/utils'
 import type { CharacterDoc } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
@@ -83,6 +84,14 @@ export function CharactersPage(): React.ReactElement {
   )
 
   const selected = characters.find((c) => c.id === selectedId) ?? null
+  const workspaceKey = summary?.path ?? ''
+  const characterListRef = useRef<HTMLDivElement | null>(null)
+  const characterReadOnlyRef = useRef<HTMLDivElement | null>(null)
+  const characterEditorRef = useRef<HTMLDivElement | null>(null)
+  const characterReaderRef = draft ? characterEditorRef : characterReadOnlyRef
+
+  usePersistentScrollPosition(characterListRef, workspaceKey, 'characters:list')
+  usePersistentScrollPosition(characterReaderRef, workspaceKey, `characters:reader:${draft?.id ?? selected?.id ?? 'overview'}`)
 
   const openEditor = (c: CharacterDoc | null): void => {
     if (draft && dirty && (c?.id ?? '') !== (draft.id ?? '') && !window.confirm('当前人物有未保存的修改，放弃并切换？')) return
@@ -132,7 +141,7 @@ export function CharactersPage(): React.ReactElement {
             <Plus size={14} />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 sm:px-3">
+        <div ref={characterListRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 sm:px-3">
           {filtered.length === 0 && (
             <EmptyState icon={<UserRound size={28} />} title={query ? '没有匹配的人物' : '还没有人物'} hint="点击右上角 + 创建第一张人物卡" />
           )}
@@ -197,7 +206,7 @@ export function CharactersPage(): React.ReactElement {
       {!draft ? (
         <div className="flex-1">
           {selected ? (
-            <ReadOnlyCard c={selected} onEdit={() => openEditor(selected)} />
+            <ReadOnlyCard c={selected} onEdit={() => openEditor(selected)} scrollRef={characterReadOnlyRef} />
           ) : (
             <EmptyState icon={<UserRound size={32} />} title="选择左侧人物查看" hint="或创建新的人物卡" />
           )}
@@ -218,6 +227,7 @@ export function CharactersPage(): React.ReactElement {
             setDraft(null)
             setDirty(false)
           }}
+          scrollRef={characterEditorRef}
         />
       )}
 
@@ -236,9 +246,9 @@ export function CharactersPage(): React.ReactElement {
   )
 }
 
-function ReadOnlyCard({ c, onEdit }: { c: CharacterDoc; onEdit: () => void }): React.ReactElement {
+function ReadOnlyCard({ c, onEdit, scrollRef }: { c: CharacterDoc; onEdit: () => void; scrollRef?: React.MutableRefObject<HTMLDivElement | null> }): React.ReactElement {
   return (
-    <div className="mx-auto max-w-3xl p-6 overflow-y-auto h-full">
+    <div ref={scrollRef} className="mx-auto max-w-3xl p-6 overflow-y-auto h-full">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">{c.name}</h2>
@@ -275,7 +285,8 @@ function CharacterForm({
   onChange,
   onSave,
   onDelete,
-  onCancel
+  onCancel,
+  scrollRef
 }: {
   draft: CharacterDoc
   dirty: boolean
@@ -285,6 +296,7 @@ function CharacterForm({
   onSave: () => void
   onDelete: () => void
   onCancel: () => void
+  scrollRef?: React.MutableRefObject<HTMLDivElement | null>
 }): React.ReactElement {
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -355,7 +367,7 @@ function CharacterForm({
         <div className="flex min-h-0 flex-col p-4">
           <div className="mb-1.5 text-xs font-medium text-muted">详细设定（Markdown：外貌 / 性格 / 背景 / 成长弧光……）</div>
           <div className="min-h-0 flex-1">
-            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} />
+            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} scrollRef={scrollRef} />
           </div>
         </div>
       </div>
