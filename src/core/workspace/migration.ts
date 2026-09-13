@@ -1,7 +1,7 @@
 import type { FileStore } from '../storage/fileStore'
-import { parseFrontMatter } from './frontMatter'
+import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 
-export const CURRENT_WORKSPACE_VERSION = 2
+export const CURRENT_WORKSPACE_VERSION = 3
 
 const V2_DIRS = [
   'characters/primary',
@@ -108,6 +108,39 @@ async function ensureDefaultVolumes(store: FileStore): Promise<void> {
   }
 }
 
+async function migrateEventMetadata(store: FileStore): Promise<void> {
+  let firstVolumeId = 'vol_default'
+  const volumesRaw = await store.readText('chapters/volumes.json')
+  if (volumesRaw) {
+    try {
+      const volumes = JSON.parse(volumesRaw)
+      if (Array.isArray(volumes) && typeof volumes[0]?.id === 'string' && volumes[0].id) {
+        firstVolumeId = volumes[0].id
+      }
+    } catch {
+      /* Malformed volume metadata falls back to the default volume id. */
+    }
+  }
+
+  for (const file of await store.listFiles('events', '.md')) {
+    const filePath = `events/${file}`
+    const raw = await store.readText(filePath)
+    if (!raw) continue
+    try {
+      const parsed = parseFrontMatter(raw)
+      const nextData = {
+        ...parsed.data,
+        volumeId: typeof parsed.data.volumeId === 'string' && parsed.data.volumeId ? parsed.data.volumeId : firstVolumeId,
+        branchIds: Array.isArray(parsed.data.branchIds) ? parsed.data.branchIds.filter((id): id is string => typeof id === 'string') : [],
+        ...(typeof parsed.data.branchFromId === 'string' && parsed.data.branchFromId ? { branchFromId: parsed.data.branchFromId } : {})
+      }
+      await store.writeText(filePath, stringifyFrontMatter(parsed.content, nextData))
+    } catch {
+      /* Leave malformed event files untouched. */
+    }
+  }
+}
+
 /**
  * Idempotent v1 -> v2 workspace migration. The operation only touches known
  * StoryFabric paths and leaves user documents intact when run repeatedly.
@@ -123,6 +156,9 @@ export async function migrateWorkspace(store: FileStore): Promise<void> {
     await ensureDefaultVolumes(store)
   } else if (!(await store.exists('chapters/volumes.json'))) {
     await ensureDefaultVolumes(store)
+  }
+  if (meta.version < 3) {
+    await migrateEventMetadata(store)
   }
 
   const next = {

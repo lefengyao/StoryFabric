@@ -100,7 +100,7 @@ describe('audit: 29 个工具端到端可用性', () => {
     // ---- 写入类（10 个） ----
     await write('save_character', { character: { name: '新人物', content: '简介' } })
     await write('save_relationship', { relationship: { fromCharacterId: a.id, toCharacterId: b.id, type: '师徒' } })
-    await write('save_event', { event: { title: '新事件', characterIds: [a.id] } })
+    await write('save_event', { event: { title: '新事件', volumeId: 'vol_default', characterIds: [a.id] } })
     await write('save_outline_doc', { doc: { title: '新章纲', kind: 'chapter', chapterId: mainChapter.id } })
     await write('save_chapter', { chapter: { title: '新草稿', box: 'draft', content: 'x' } })
     await write('save_setting', { setting: { title: '新设定', category: 'other', content: 'y' } })

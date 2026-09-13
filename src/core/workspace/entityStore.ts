@@ -23,6 +23,7 @@ import { invalidateProjectIndex } from '../retrieval/projectIndex'
 import { searchIndex } from '../retrieval/projectIndex'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 import { normalizeChapterContent } from './chapterFormatting'
+import { removeEventFromGraph } from './eventGraph'
 
 export function genId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8)
@@ -219,13 +220,13 @@ async function loadEvents(store: FileStore): Promise<Stored<StoryEvent>[]> {
   for (const fileName of await listMd(store, 'events')) {
     const parsed = await readMd(store, fileName)
     if (!parsed || typeof parsed.data.id !== 'string') continue
-    out.push({ fileName: fileName.replace(/^events\//, ''), doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, fileName.replace(/.*\//, '').replace(/\.md$/i, '')), storyTime: str(parsed.data.storyTime), order: num(parsed.data.order), location: str(parsed.data.location), tags: strArr(parsed.data.tags), characterIds: strArr(parsed.data.characterIds), prevIds: strArr(parsed.data.prevIds), nextIds: strArr(parsed.data.nextIds), content: parsed.content.replace(/^\n+/, '') } as StoryEvent })
+    out.push({ fileName: fileName.replace(/^events\//, ''), doc: { ...parsed.data, id: parsed.data.id, title: str(parsed.data.title, fileName.replace(/.*\//, '').replace(/\.md$/i, '')), volumeId: typeof parsed.data.volumeId === 'string' && parsed.data.volumeId ? parsed.data.volumeId : 'vol_default', storyTime: str(parsed.data.storyTime), order: num(parsed.data.order), location: str(parsed.data.location), tags: strArr(parsed.data.tags), characterIds: strArr(parsed.data.characterIds), prevIds: strArr(parsed.data.prevIds), nextIds: strArr(parsed.data.nextIds), branchIds: strArr(parsed.data.branchIds), branchFromId: typeof parsed.data.branchFromId === 'string' && parsed.data.branchFromId ? parsed.data.branchFromId : undefined, content: parsed.content.replace(/^\n+/, '') } as StoryEvent })
   }
   return out.sort((a, b) => a.doc.order - b.doc.order)
 }
 
 export async function listEvents(store: FileStore): Promise<StoryEvent[]> { return (await loadEvents(store)).map((x) => x.doc) }
-export function serializeEvent(e: StoryEvent): string { const { content: _content, ...metadata } = e as StoryEvent & Record<string, unknown>; return stringifyFrontMatter(e.content ?? '', { ...metadata, id: e.id, title: e.title, storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds }) }
+export function serializeEvent(e: StoryEvent): string { const { content: _content, ...metadata } = e as StoryEvent & Record<string, unknown>; return stringifyFrontMatter(e.content ?? '', { ...metadata, id: e.id, title: e.title, volumeId: e.volumeId ?? 'vol_default', storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds, branchIds: e.branchIds ?? [], ...(e.branchFromId ? { branchFromId: e.branchFromId } : {}) }) }
 
 export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & { id?: string }): Promise<StoryEvent> {
   await store.ensureDir('events')
@@ -233,7 +234,10 @@ export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & {
   const existing = input.id ? all.find((x) => x.doc.id === input.id) : undefined
   const doc = existing
     ? ({ ...existing.doc, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)), id: existing.doc.id } as StoryEvent)
-    : ({ id: input.id ?? genId('evt'), title: input.title?.trim() || '未命名事件', storyTime: input.storyTime ?? '', order: input.order ?? (all.length ? Math.max(...all.map((x) => x.doc.order)) + 1 : 1), location: input.location ?? '', tags: input.tags ?? [], characterIds: input.characterIds ?? [], prevIds: input.prevIds ?? [], nextIds: input.nextIds ?? [], content: input.content ?? '' } satisfies StoryEvent)
+    : ({ id: input.id ?? genId('evt'), title: input.title?.trim() || '未命名事件', volumeId: input.volumeId ?? 'vol_default', storyTime: input.storyTime ?? '', order: input.order ?? (all.length ? Math.max(...all.map((x) => x.doc.order)) + 1 : 1), location: input.location ?? '', tags: input.tags ?? [], characterIds: input.characterIds ?? [], prevIds: input.prevIds ?? [], nextIds: input.nextIds ?? [], branchIds: input.branchIds ?? [], branchFromId: input.branchFromId, content: input.content ?? '' } satisfies StoryEvent)
+  doc.prevIds = Array.from(new Set(doc.prevIds.filter((id) => id && id !== doc.id))).slice(0, 1)
+  doc.nextIds = Array.from(new Set(doc.nextIds.filter((id) => id && id !== doc.id))).slice(0, 1)
+  doc.branchIds = Array.from(new Set((doc.branchIds ?? []).filter((id) => id && id !== doc.id)))
   const base = `${sanitizeFileName(doc.title)}.md`
   const fileName = all.some((x) => x.fileName === base && x.doc.id !== doc.id) ? `${sanitizeFileName(doc.title)}_${doc.id.split('_')[1] ?? doc.id}.md` : base
   await store.writeText(`events/${fileName}`, serializeEvent(doc))
@@ -243,8 +247,19 @@ export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & {
 }
 
 export async function deleteEvent(store: FileStore, id: string): Promise<void> {
-  const hit = (await loadEvents(store)).find((x) => x.doc.id === id)
-  if (hit) await moveToTrash(store, makeTrashEntry({ id, kind: 'event', originalPath: `events/${hit.fileName}`, title: hit.doc.title }))
+  const all = await loadEvents(store)
+  const hit = all.find((x) => x.doc.id === id)
+  if (!hit) return
+  const healed = removeEventFromGraph(all.map((item) => item.doc), id)
+  const healedById = new Map(healed.map((event) => [event.id, event]))
+  for (const item of all) {
+    if (item.doc.id === id) continue
+    const next = healedById.get(item.doc.id)
+    if (next && JSON.stringify(next) !== JSON.stringify(item.doc)) {
+      await store.writeText(`events/${item.fileName}`, serializeEvent(next))
+    }
+  }
+  await moveToTrash(store, makeTrashEntry({ id, kind: 'event', originalPath: `events/${hit.fileName}`, title: hit.doc.title }))
   await invalidateProjectIndex(store)
 }
 

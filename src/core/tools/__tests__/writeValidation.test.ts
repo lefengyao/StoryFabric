@@ -14,6 +14,11 @@ describe('agent chapter placement validation', () => {
     expect(() => validate(null)).toThrow('必须是对象')
   })
 
+  it('requires a volume for newly created agent events', () => {
+    expect(() => validateAgentEventWrite({ title: '新事件' })).toThrow('volumeId')
+    expect(() => validateAgentEventWrite({ id: 'evt_existing', title: '更新事件' })).not.toThrow()
+  })
+
   it('rejects a chapter write without an explicit box', () => {
     expect(() => validateAgentChapterWrite({ title: '第二章', status: 'draft' })).toThrow('box')
   })

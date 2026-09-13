@@ -14,6 +14,9 @@ import type {
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 
 const api: StoryFabricApi = {
+  clipboardReadText: () => ipcRenderer.invoke(IPC.ClipboardReadText),
+  clipboardWriteText: (text) => ipcRenderer.invoke(IPC.ClipboardWriteText, text),
+
   pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
   listWorkspaces: () => ipcRenderer.invoke(IPC.ListWorkspaces),
   listRecentWorkspaces: () => ipcRenderer.invoke(IPC.ListRecentWorkspaces),

@@ -15,7 +15,9 @@ export function OutlinePage(): React.ReactElement {
   const refresh = useWorkspace((s) => s.refresh)
   const docs = summary?.outline ?? []
   const chapters = summary?.chapters ?? []
+  const volumes = summary?.volumes ?? []
   const [kind, setKind] = useState<OutlineKind>('total')
+  const [volumeId, setVolumeId] = useState<string>('')
   const [chapterId, setChapterId] = useState<string>('')
   const [selectedId, setSelectedId] = useState<string | null>(docs[0]?.id ?? null)
   const [draft, setDraft] = useState<OutlineDoc | null>(null)
@@ -23,7 +25,16 @@ export function OutlinePage(): React.ReactElement {
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const filteredDocs = useMemo(() => docs.filter((doc) => (doc.kind ?? 'total') === kind && (kind === 'total' || !chapterId || doc.chapterId === chapterId)), [docs, kind, chapterId])
+  const chapterById = useMemo(() => new Map(chapters.map((chapter) => [chapter.id, chapter])), [chapters])
+  const visibleChapters = useMemo(() => chapters.filter((chapter) => !volumeId || (chapter.volumeId ?? 'vol_default') === volumeId), [chapters, volumeId])
+  const filteredDocs = useMemo(() => docs.filter((doc) => {
+    if ((doc.kind ?? 'total') !== kind) return false
+    if (kind === 'total') return true
+    const chapter = doc.chapterId ? chapterById.get(doc.chapterId) : undefined
+    if (!chapter) return false
+    if (volumeId && (chapter.volumeId ?? 'vol_default') !== volumeId) return false
+    return !chapterId || doc.chapterId === chapterId
+  }), [chapterById, chapterId, docs, kind, volumeId])
   const selected = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0] ?? null
   const workspaceKey = summary?.path ?? ''
   const outlineListRef = useRef<HTMLDivElement | null>(null)
@@ -42,7 +53,8 @@ export function OutlinePage(): React.ReactElement {
   }
 
   const create = async (): Promise<void> => {
-    const saved = await api.saveOutlineDoc({ title: kind === 'total' ? '新总纲篇章' : '新章纲', kind, chapterId: kind === 'chapter' ? (chapterId || chapters[0]?.id) : undefined, order: (filteredDocs.length ? Math.max(...filteredDocs.map((x) => x.order)) : 0) + 1 })
+    const defaultChapterId = chapterId || visibleChapters[0]?.id || chapters[0]?.id
+    const saved = await api.saveOutlineDoc({ title: kind === 'total' ? '新总纲篇章' : '新章纲', kind, chapterId: kind === 'chapter' ? defaultChapterId : undefined, order: (filteredDocs.length ? Math.max(...filteredDocs.map((x) => x.order)) : 0) + 1 })
     await refresh()
     openDoc(saved)
   }
@@ -73,11 +85,22 @@ export function OutlinePage(): React.ReactElement {
       <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
         <div className="flex items-center justify-between p-3 pb-2">
           <div className="flex items-center gap-1"><Button size="sm" variant={kind === 'total' ? 'soft' : 'ghost'} onClick={() => { setKind('total'); setSelectedId(null); setDraft(null) }}>总纲</Button><Button size="sm" variant={kind === 'chapter' ? 'soft' : 'ghost'} onClick={() => { setKind('chapter'); setSelectedId(null); setDraft(null) }}>章纲</Button></div>
-          <Button size="sm" variant="primary" onClick={() => void create()}>
+          <Button size="sm" variant="primary" onClick={() => void create()} disabled={kind === 'chapter' && visibleChapters.length === 0}>
             <Plus size={13} /> 新建
           </Button>
         </div>
-        {kind === 'chapter' && <select value={chapterId} onChange={(e) => { setChapterId(e.target.value); setSelectedId(null); setDraft(null) }} className="mx-3 mb-2 h-8 rounded-md border border-line bg-panel px-2 text-xs"><option value="">全部章节</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>}
+        {kind === 'chapter' && (
+          <div className="mx-3 mb-2 grid grid-cols-2 gap-2">
+            <select value={volumeId} onChange={(e) => { setVolumeId(e.target.value); setChapterId(''); setSelectedId(null); setDraft(null) }} className="h-8 min-w-0 rounded-md border border-line bg-panel px-2 text-xs">
+              <option value="">全部卷</option>
+              {volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}
+            </select>
+            <select value={chapterId} onChange={(e) => { setChapterId(e.target.value); setSelectedId(null); setDraft(null) }} className="h-8 min-w-0 rounded-md border border-line bg-panel px-2 text-xs">
+              <option value="">全部章节</option>
+              {visibleChapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
+            </select>
+          </div>
+        )}
         <div ref={outlineListRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 space-y-1">
           {filteredDocs.map((d) => (
             <button
@@ -88,7 +111,14 @@ export function OutlinePage(): React.ReactElement {
               }`}
             >
               <ListTree size={14} className="shrink-0 opacity-60" />
-              <span className="truncate text-sm">{d.title}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">{d.title}</span>
+                {kind === 'chapter' && (
+                  <span className="mt-0.5 block truncate text-[10px] text-faint">
+                    {volumes.find((volume) => volume.id === (chapterById.get(d.chapterId ?? '')?.volumeId ?? 'vol_default'))?.title ?? '未分卷'}
+                  </span>
+                )}
+              </span>
               <Badge className="ml-auto">{d.order}</Badge>
             </button>
           ))}

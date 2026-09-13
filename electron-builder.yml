@@ -15,18 +15,22 @@ files:
   - node_modules/bcrypt-pbkdf/**
   - node_modules/safer-buffer/**
   - node_modules/tweetnacl/**
+  - '!node_modules/**/android/**'
+  - '!node_modules/**/ios/**'
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/
 win:
   icon: resources/icon.ico
+  artifactName: StoryFabric-Portable-${version}.${ext}
   target:
     - target: nsis
       arch:
         - x64
-    - target: portable
+    - target: zip
       arch:
         - x64
 nsis:
+  artifactName: StoryFabric Setup ${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

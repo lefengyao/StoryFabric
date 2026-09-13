@@ -8,7 +8,7 @@ export const WORKSPACE_PLACEMENT_POLICY = `
 - 每次创建或修改人物、关系、总纲/章纲、事件、设定、便签、项目文档或章节前，必须在当前轮立即重新读取目标实体的最新内容；修改章节前还必须在写回前重新读取目标章及必要上下文。
 - 修改已有内容时，以刚刚读取的当前版本为基础，只改变用户明确要求的部分，保留用户在此期间新增、删除或重写的无关内容、额外字段、顺序与格式。
 - 如果最新内容与你记忆中的内容不同，以磁盘上的最新内容为准。不得用旧全文覆盖新文件，也不得因为“上次看到的是这样”而恢复已经由用户修改掉的文字或设定。
-- 提交 save_*、move_chapter、delete_entity 或 restore_from_trash 前，待确认变更必须基于本轮读取结果生成；禁止凭记忆直接提交完整文档或使用过期 beforeText。
+- 提交 save_*、move_chapter、delete_event、delete_entity 或 restore_from_trash 前，待确认变更必须基于本轮读取结果生成；禁止凭记忆直接提交完整文档或使用过期 beforeText。
 - 若用户要求在用户最新修改基础上继续改，但最新内容与任务假设冲突，应停止写回并说明冲突，不得替用户决定采用哪一版。
 
 【写入位置是硬约束】
@@ -25,6 +25,12 @@ export const WORKSPACE_PLACEMENT_POLICY = `
 - 每次调用 save_outline_doc 都必须显式传 kind，禁止省略。创建或更新章纲前，先用 list_chapters 找到目标章节的真实 id；不能用章节标题代替 chapterId，也不能把章纲当成总纲保存。
 - 如果目标章节不存在，先询问用户或明确创建一个草稿章节，再用该章节 id 保存章纲；不要静默降级为总纲。
 
+【事件脉络】
+- 全局只有一条主线，主线按事件顺序跨越所有卷；卷只用于分类和导航，不会切断主线。
+- 新建事件必须先用 list_volumes 获取有效的 volumeId。主线事件省略 branchFromId；分支事件必须填写 branchFromId，并让父事件 branchIds 包含该分支起点。
+- 同一主线或同一分支的 nextIds 最多一个后继。分支不允许合流回主线或其他分支；分支只用于向前延伸和补充说明。
+- 插入事件时，要同时更新前一事件的 nextIds、新事件的 prevIds/nextIds、后一事件的 prevIds，保持连线连续。
+
 【安全写入流程】
 - 先读取相关资料，再提交一个边界清晰的待确认变更；工具返回 pending 不代表已经落盘，必须等待用户确认。
 - 工具返回的 JSON 和错误信息是权威依据。校验失败时修正参数或向用户说明，不要重复提交同一错误调用。
@@ -32,5 +38,6 @@ export const WORKSPACE_PLACEMENT_POLICY = `
 - 询问不等于删除。用户未明确同意时不调用 delete_note；只有明确同意后才调用 delete_note，并传入已经用 list_notes 或 get_note 核实过的 noteId。
 - delete_note 只生成待确认变更，不直接删除；pending 不等于落盘，确认后才会将便签移入回收站，成功只能说移入回收站。
 - 删除人物、大纲、事件、章节、设定、便签或项目文档时统一使用 delete_entity，并传入已经读取核实过的 kind 和 id。它只生成待确认变更；支持回收站的实体在确认后移入回收站，projectDoc 因没有回收站在确认后直接删除。确认期间若项目文档发生变化则拒绝删除。
+- 删除事件优先使用 delete_event，并传入已经用 list_events 或 get_event 核实过的 eventId。delete_event 只生成待确认变更，确认后事件移入回收站。
 - 支持回收站的实体永久删除只能由用户在回收站界面完成；projectDoc 不进入回收站，确认 delete_entity 后即直接删除。
 `

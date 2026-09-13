@@ -1,4 +1,4 @@
-import { AtSign, Bot, Check, ExternalLink, FileText, History, MessageSquarePlus, Plus, Send, Settings, Sparkles, Square, UserRound, X } from 'lucide-react'
+import { AtSign, Bot, Check, ChevronDown, ExternalLink, FileText, History, MessageSquarePlus, Plus, Send, Settings, Sparkles, Square, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ChatMessage, MessageFile } from '../../../../shared/types'
@@ -33,7 +33,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const [attachOpen, setAttachOpen] = useState(false)
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [referenceQuery, setReferenceQuery] = useState('')
-  const [sessionsOpen, setSessionsOpen] = useState(!chat.activeId)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((provider) => provider.models.length > 0), [settings])
@@ -68,12 +68,18 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   }, [chat.messages.length, chat.liveTimeline.length])
 
   useEffect(() => {
+    if (!open) setDetailsOpen(false)
+  }, [open])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && open && !chat.pendingChange) close()
+      if (event.key !== 'Escape' || !open || chat.pendingChange) return
+      if (detailsOpen) setDetailsOpen(false)
+      else close()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [chat.pendingChange, close, open])
+  }, [chat.pendingChange, close, detailsOpen, open])
 
   const send = async (): Promise<void> => {
     const text = input.trim()
@@ -88,12 +94,12 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
 
   const createSession = async (): Promise<void> => {
     await chat.newSession()
-    setSessionsOpen(false)
+    setDetailsOpen(false)
   }
 
   const selectSession = async (id: string): Promise<void> => {
     await chat.openSession(id)
-    setSessionsOpen(false)
+    setDetailsOpen(false)
   }
 
   return (
@@ -118,11 +124,14 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           </div>
           <p className="truncate text-[11px] text-muted">
-            {chat.streaming ? '正在处理工作区资料…' : activeSession?.title ?? '创建会话后开始提问'}
+            {chat.streaming
+              ? '正在处理工作区资料…'
+              : `${activeSession?.title ?? '创建会话后开始提问'}${defaultModel ? ` · ${defaultModel.model}` : ''}`}
           </p>
         </div>
-        <button type="button" onClick={() => setSessionsOpen((open) => !open)} title="选择会话" aria-expanded={sessionsOpen} className={cn('flex h-8 w-8 items-center justify-center rounded-lg transition hover:bg-elevated hover:text-fg', sessionsOpen && 'bg-accent-soft text-accent')}>
+        <button type="button" onClick={() => setDetailsOpen((open) => !open)} title="会话、模型与上下文" aria-label="会话、模型与上下文" aria-expanded={detailsOpen} aria-controls="chat-sidebar-details" className={cn('flex h-8 items-center gap-0.5 rounded-lg px-1.5 text-muted transition hover:bg-elevated hover:text-fg', detailsOpen && 'bg-accent-soft text-accent')}>
           <History size={16} />
+          <ChevronDown size={11} className={cn('transition-transform duration-200', detailsOpen && 'rotate-180')} />
         </button>
         <button type="button" onClick={() => void createSession()} disabled={chat.streaming} title="新建会话" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-40">
           <MessageSquarePlus size={16} />
@@ -132,9 +141,18 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col bg-app/70">
-        {sessionsOpen && (
-          <section className="chat-sidebar-drawer shrink-0 border-b border-line bg-panel px-3 py-3 shadow-[0_12px_30px_rgba(16,26,56,0.08)]">
+      {detailsOpen && (
+        <button
+          type="button"
+          aria-label="收起智能体信息"
+          onClick={() => setDetailsOpen(false)}
+          className="absolute inset-0 z-30 cursor-default bg-black/5"
+        />
+      )}
+
+      {detailsOpen && (
+        <div id="chat-sidebar-details" className="chat-sidebar-drawer absolute left-3 right-3 top-[68px] z-40 max-h-[calc(100%-80px)] overflow-y-auto rounded-xl border border-line bg-panel shadow-[0_18px_48px_rgba(16,26,56,0.18)]">
+          <section className="shrink-0 border-b border-line bg-panel px-3 py-3 shadow-[0_12px_30px_rgba(16,26,56,0.08)]">
             <div className="mb-2 flex items-center justify-between px-1">
               <div>
                 <strong className="text-xs">创作会话</strong>
@@ -144,7 +162,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 <Plus size={12} /> 新建
               </button>
             </div>
-            <div className="max-h-64 space-y-1 overflow-y-auto">
+            <div className="max-h-52 space-y-1 overflow-y-auto">
               {chat.sessions.filter((session) => !session.archived).length === 0 && (
                 <p className="px-2 py-5 text-center text-xs text-faint">还没有会话，新建一个开始提问</p>
               )}
@@ -172,59 +190,60 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 </button>
               ))}
             </div>
-            <Link to="/chat" onClick={close} className="mt-2 flex h-8 items-center justify-center gap-1.5 rounded-lg text-[11px] text-muted transition hover:bg-elevated hover:text-fg">
+            <Link to="/chat" onClick={() => { setDetailsOpen(false); close() }} className="mt-2 flex h-8 items-center justify-center gap-1.5 rounded-lg text-[11px] text-muted transition hover:bg-elevated hover:text-fg">
               打开完整智能体工作台 <ExternalLink size={12} />
             </Link>
           </section>
-        )}
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
-          {chat.attachments.length > 0 && (
-            <div className="flex w-full flex-wrap gap-1.5">
-              {chat.attachments.map((attachment) => (
-                <span key={`${attachment.kind}_${attachment.id}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
-                  <FileText size={11} />
-                  <span className="truncate">{attachment.label}</span>
-                  <button type="button" className="cursor-pointer hover:opacity-70" onClick={() => chat.setAttachments(chat.attachments.filter((item) => item.id !== attachment.id))}>
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
+          <div className="flex flex-wrap items-center gap-2 bg-app/50 px-3 py-3">
+            {chat.attachments.length > 0 && (
+              <div className="flex w-full flex-wrap gap-1.5">
+                {chat.attachments.map((attachment) => (
+                  <span key={`${attachment.kind}_${attachment.id}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
+                    <FileText size={11} />
+                    <span className="truncate">{attachment.label}</span>
+                    <button type="button" className="cursor-pointer hover:opacity-70" onClick={() => chat.setAttachments(chat.attachments.filter((item) => item.id !== attachment.id))}>
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {providerOptions.length > 0 ? (
+              <select
+                value={modelValue}
+                onChange={(event) => {
+                  const [providerId, model] = event.target.value.split('::')
+                  if (providerId && model) void useSettings.getState().update({ defaultChatModel: { providerId, model } })
+                }}
+                className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent"
+                aria-label="选择模型"
+              >
+                {providerOptions.map((provider) => (
+                  <optgroup key={provider.id} label={provider.name}>
+                    {provider.models.map((model) => <option key={model} value={`${provider.id}::${model}`}>{model}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            ) : (
+              <Link to="/settings" onClick={() => setDetailsOpen(false)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger-soft px-2.5 text-xs text-danger">
+                <Settings size={12} /> 配置模型
+              </Link>
+            )}
+            {activeSession && <span className="ml-auto text-[10px] text-faint">{formatTime(activeSession.updatedAt)}</span>}
+            <div className="w-full pt-1">
+              <ContextUsageMeter
+                usedTokens={contextUsage.usedTokens}
+                contextTokens={contextUsage.contextTokens}
+                compressing={chat.contextCompressing}
+                compressedMessages={chat.contextCompression?.summarizedMessages}
+              />
             </div>
-          )}
-          {providerOptions.length > 0 ? (
-            <select
-              value={modelValue}
-              onChange={(event) => {
-                const [providerId, model] = event.target.value.split('::')
-                if (providerId && model) void useSettings.getState().update({ defaultChatModel: { providerId, model } })
-              }}
-              className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent"
-              aria-label="选择模型"
-            >
-              {providerOptions.map((provider) => (
-                <optgroup key={provider.id} label={provider.name}>
-                  {provider.models.map((model) => <option key={model} value={`${provider.id}::${model}`}>{model}</option>)}
-                </optgroup>
-              ))}
-            </select>
-          ) : (
-            <Link to="/settings" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger-soft px-2.5 text-xs text-danger">
-              <Settings size={12} /> 配置模型
-            </Link>
-          )}
-          {activeSession && <span className="ml-auto text-[10px] text-faint">{formatTime(activeSession.updatedAt)}</span>}
-          <div className="w-full pt-1">
-            <ContextUsageMeter
-              usedTokens={contextUsage.usedTokens}
-              contextTokens={contextUsage.contextTokens}
-              compressing={chat.contextCompressing}
-              compressedMessages={chat.contextCompression?.summarizedMessages}
-              compact
-            />
           </div>
         </div>
+      )}
 
+      <div className="flex min-h-0 flex-1 flex-col bg-app/70">
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
           {chat.messages.length === 0 && !chat.streaming ? (
             <div className="mx-auto flex max-w-md flex-col items-center px-2 py-12 text-center">

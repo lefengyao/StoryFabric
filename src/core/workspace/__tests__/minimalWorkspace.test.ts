@@ -34,14 +34,14 @@ async function loadFixture(): Promise<MemoryFileStore> {
 }
 
 describe('minimal workspace example', () => {
-  it('loads every v2 writing category and preserves bounded retrieval behavior', async () => {
+  it('loads every writing category and preserves bounded retrieval behavior', async () => {
     const store = await loadFixture()
 
     expect((await validateWorkspace(store)).ok).toBe(true)
 
     const summary = await loadSummary(store, '示例', 'fixture://minimal-workspace')
     expect(summary.name).toBe('星港回声·最小示例')
-    expect(summary.version).toBe(2)
+    expect(summary.version).toBe(3)
     expect(summary.volumes).toEqual([{ id: 'vol_default', title: '第一卷：潮汐', order: 1 }])
     expect(summary.characters.map((item) => item.tier).sort()).toEqual(['primary', 'secondary'])
     expect(summary.outline.map((item) => item.kind).sort()).toEqual(['chapter', 'total'])

@@ -12,7 +12,7 @@ interface CreateCase {
 
 const CASES: CreateCase[] = [
   { tool: 'save_character', args: { character: { name: '甲' } }, list: listCharacters },
-  { tool: 'save_event', args: { event: { title: '事件' } }, list: listEvents },
+  { tool: 'save_event', args: { event: { title: '事件', volumeId: 'vol_default' } }, list: listEvents },
   { tool: 'save_outline_doc', args: { doc: { title: '总纲', kind: 'total' } }, list: listOutline },
   { tool: 'save_chapter', args: { chapter: { title: '章节', box: 'draft' } }, list: listChapters },
   { tool: 'save_setting', args: { setting: { title: '设定' } }, list: listSettings },

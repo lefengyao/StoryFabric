@@ -53,6 +53,10 @@ export const IPC = {
   DeleteProvider: 'settings:delete-provider',
   FetchModels: 'settings:fetch-models',
 
+  /* 剪贴板 */
+  ClipboardReadText: 'clipboard:read-text',
+  ClipboardWriteText: 'clipboard:write-text',
+
   /* 用量 */
   GetUsageRecords: 'usage:list',
 

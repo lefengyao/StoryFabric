@@ -15,4 +15,20 @@ describe('version-scoped release layout', () => {
     expect(bundleScript).toContain("const stage = join(versionDir, 'server-bundle')")
     expect(bundleScript).toContain('const outFile = join(versionDir, `storyfabric-server-${version}.tar.gz`)')
   })
+
+  it('ships the portable build as a ZIP that runs directly after extraction', () => {
+    const builderConfig = readFileSync(resolve(workspaceRoot, 'electron-builder.yml'), 'utf8')
+
+    expect(builderConfig).toContain('- target: zip')
+    expect(builderConfig).toContain('artifactName: StoryFabric-Portable-${version}.${ext}')
+    expect(builderConfig).toContain('artifactName: StoryFabric Setup ${version}.${ext}')
+    expect(builderConfig).not.toContain('- target: portable')
+  })
+
+  it('keeps Windows portable archives free of Android and iOS build paths', () => {
+    const builderConfig = readFileSync(resolve(workspaceRoot, 'electron-builder.yml'), 'utf8')
+
+    expect(builderConfig).toContain('!node_modules/**/android/**')
+    expect(builderConfig).toContain('!node_modules/**/ios/**')
+  })
 })

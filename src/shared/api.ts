@@ -82,6 +82,10 @@ export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
 }
 
 export interface StoryFabricApi {
+  /* 剪贴板 */
+  clipboardReadText?(): Promise<string>
+  clipboardWriteText?(text: string): Promise<void>
+
   /* 工作区 */
   pickFolder(): Promise<string | null>
   listWorkspaces(): Promise<WorkspaceListItem[]>

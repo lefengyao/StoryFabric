@@ -480,6 +480,7 @@ async function simulateEvent(root: string, patch: Partial<StoryEvent> & { id?: s
     : {
         id: effPatch.id!,
         title: effPatch.title ?? '未命名事件',
+        volumeId: effPatch.volumeId ?? 'vol_default',
         storyTime: effPatch.storyTime ?? '',
         order: effPatch.order ?? (all.length ? Math.max(...all.map((x) => x.order)) + 1 : 1),
         location: effPatch.location ?? '',
@@ -487,6 +488,8 @@ async function simulateEvent(root: string, patch: Partial<StoryEvent> & { id?: s
         characterIds: effPatch.characterIds ?? [],
         prevIds: effPatch.prevIds ?? [],
         nextIds: effPatch.nextIds ?? [],
+        branchIds: effPatch.branchIds ?? [],
+        branchFromId: effPatch.branchFromId,
         content: effPatch.content ?? ''
       }
   return {
@@ -637,6 +640,12 @@ async function simulateRelationship(
 export async function executeTool(root: string, name: string, argsJson: string): Promise<ToolOutcome> {
   const a = argsOf(argsJson)
   try {
+    if (name === 'delete_event') {
+      const outcome = await executeDeleteEntityTool(new NodeFileStore(root), { kind: 'event', id: a.eventId })
+      return outcome.kind === 'pending'
+        ? { ...outcome, change: { ...outcome.change, toolName: 'delete_event' } }
+        : outcome
+    }
     if (name === 'delete_entity') return await executeDeleteEntityTool(new NodeFileStore(root), a)
     if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc') {
       return await executeProjectDocTool(new NodeFileStore(root), name, a)

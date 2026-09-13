@@ -41,7 +41,35 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'get_chapter_outline', description: '读取一篇章纲；必须提供 outlineId 或 chapterId。', parameters: { type: 'object', properties: { outlineId: { type: 'string' }, chapterId: { type: 'string' } }, anyOf: [{ required: ['outlineId'] }, { required: ['chapterId'] }] } },
   { name: 'save_character', description: '新建或更新人物卡；需要用户确认。', parameters: { type: 'object', properties: { character: { type: 'object' } }, required: ['character'] } },
   { name: 'save_relationship', description: '新建人物关系；需要用户确认。', parameters: { type: 'object', properties: { relationship: { type: 'object' } }, required: ['relationship'] } },
-  { name: 'save_event', description: '新建或更新事件；需要用户确认。', parameters: { type: 'object', properties: { event: { type: 'object' } }, required: ['event'] } },
+  {
+    name: 'save_event',
+    description: '新建或更新事件；新建时必须指定 volumeId。全局只有一条主线，分支不允许合流；需要用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        event: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: '更新已有事件时必填' },
+            title: { type: 'string' },
+            volumeId: { type: 'string', description: '事件所属卷 id；新建时必填' },
+            storyTime: { type: 'string' },
+            order: { type: 'number' },
+            location: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+            characterIds: { type: 'array', items: { type: 'string' } },
+            prevIds: { type: 'array', items: { type: 'string' }, description: '同一主线或分支中的前一个事件' },
+            nextIds: { type: 'array', items: { type: 'string' }, description: '同一主线或分支中的下一个事件，最多一个' },
+            branchIds: { type: 'array', items: { type: 'string' }, description: '从当前事件开始的直接分支起点' },
+            branchFromId: { type: 'string', description: '当前事件所属分支的起点父事件；主线事件省略' },
+            content: { type: 'string' }
+          },
+          required: ['title']
+        }
+      },
+      required: ['event']
+    }
+  },
   { name: 'save_outline_doc', description: '新建或更新大纲；必须显式指定 kind：total=总纲，chapter=章纲；章纲还必须指定 chapterId；需要用户确认。', parameters: { type: 'object', properties: { doc: AGENT_OUTLINE_DOC_SCHEMA }, required: ['doc'] } },
   { name: 'save_chapter', description: '新建或更新章节正文；必须显式指定 box：draft=草稿箱，main=正文箱；正文箱还必须指定 volumeId；需要用户确认。', parameters: { type: 'object', properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
   { name: 'save_setting', description: '新建或更新设定；需要用户确认。', parameters: { type: 'object', properties: { setting: { type: 'object' } }, required: ['setting'] } },
@@ -49,11 +77,12 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', properties: { noteId: { type: 'string', description: '要删除的便签 id' } }, required: ['noteId'] } }
   ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷；需要用户确认。', parameters: { type: 'object', properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' } }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；需要用户确认。', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }
+  ,{ name: 'delete_event', description: '删除一条事件；必须先由用户明确同意；只会生成待确认变更，确认后将事件移入回收站并自动修复主线或分支连接。', parameters: { type: 'object', additionalProperties: false, properties: { eventId: { type: 'string', description: '要删除的事件 id' } }, required: ['eventId'] } }
   ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' } }, required: ['kind', 'id'] } }
   ,...PROJECT_DOC_TOOL_DEFS
 ]
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'delete_entity', 'move_chapter', 'restore_from_trash', 'save_project_doc'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'delete_event', 'delete_entity', 'move_chapter', 'restore_from_trash', 'save_project_doc'])
 
 async function readTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   const ok = (text: string): ToolOutcome => ({ kind: 'result', ok: true, text, preview: clip(text) })
@@ -101,7 +130,7 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     validateAgentCharacterWrite(a.character); const patch = a.character as Partial<CharacterDoc> & { id?: string }; const old = patch.id ? await findCharacter(store, { id: patch.id }) : null; const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('char'), name: patch.name ?? '未命名人物', aliases: patch.aliases ?? [], role: patch.role ?? '', faction: patch.faction ?? '', gender: patch.gender ?? '', age: patch.age ?? '', tags: patch.tags ?? [], summary: patch.summary ?? '', content: patch.content ?? '' }) as CharacterDoc
     sim = { entityId: after.id, title: `${old ? '更新' : '新建'}人物卡：${after.name}`, beforeText: old ? serializeCharacter(old) : '', afterText: serializeCharacter(after), commit: async () => `已保存人物卡「${(await saveCharacter(store, { ...patch, id: after.id })).name}」` }
   } else if (name === 'save_event') {
-    validateAgentEventWrite(a.event); const patch = a.event as Partial<StoryEvent> & { id?: string }; const all = await listEvents(store); const old = patch.id ? all.find((e) => e.id === patch.id) : null; const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('evt'), title: patch.title ?? '未命名事件', storyTime: patch.storyTime ?? '', order: patch.order ?? (all.length ? Math.max(...all.map((e) => e.order)) + 1 : 1), location: patch.location ?? '', tags: patch.tags ?? [], characterIds: patch.characterIds ?? [], prevIds: patch.prevIds ?? [], nextIds: patch.nextIds ?? [], content: patch.content ?? '' }) as StoryEvent
+    validateAgentEventWrite(a.event); const patch = a.event as Partial<StoryEvent> & { id?: string }; const all = await listEvents(store); const old = patch.id ? all.find((e) => e.id === patch.id) : null; const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('evt'), title: patch.title ?? '未命名事件', volumeId: patch.volumeId ?? 'vol_default', storyTime: patch.storyTime ?? '', order: patch.order ?? (all.length ? Math.max(...all.map((e) => e.order)) + 1 : 1), location: patch.location ?? '', tags: patch.tags ?? [], characterIds: patch.characterIds ?? [], prevIds: patch.prevIds ?? [], nextIds: patch.nextIds ?? [], branchIds: patch.branchIds ?? [], branchFromId: patch.branchFromId, content: patch.content ?? '' }) as StoryEvent
     sim = { entityId: after.id, title: `${old ? '更新' : '新建'}事件：${after.title}`, beforeText: old ? serializeEvent(old) : '', afterText: serializeEvent(after), commit: async () => `已保存事件「${(await saveEvent(store, { ...patch, id: after.id })).title}」` }
   } else if (name === 'save_outline_doc') {
     const patch = a.doc as Partial<OutlineDoc> & { id?: string }; validateAgentOutlineWrite(patch); const all = await listOutline(store); const old = patch.id ? all.find((o) => o.id === patch.id) : null; if (patch.kind === 'chapter' && !(await listChapters(store)).some((chapter) => chapter.id === patch.chapterId)) throw new Error(`未找到章纲关联的章节：${patch.chapterId}`); const after = (old ? { ...old, ...patch } : { id: patch.id ?? genId('out'), title: patch.title ?? '未命名大纲', order: patch.order ?? (all.length ? Math.max(...all.map((o) => o.order)) + 1 : 1), kind: patch.kind, chapterId: patch.chapterId, content: patch.content ?? '' }) as OutlineDoc
@@ -142,6 +171,12 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
 export async function executeTool(store: FileStore, name: string, argsJson: string): Promise<ToolOutcome> {
   try {
     const args = argsOf(argsJson)
+    if (name === 'delete_event') {
+      const outcome = await executeDeleteEntityTool(store, { kind: 'event', id: args.eventId })
+      return outcome.kind === 'pending'
+        ? { ...outcome, change: { ...outcome.change, toolName: 'delete_event' } }
+        : outcome
+    }
     if (name === 'delete_entity') return await executeDeleteEntityTool(store, args)
     if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc') return await executeProjectDocTool(store, name, args)
     return WRITE_TOOLS.has(name) ? await writeTool(store, name, args) : await readTool(store, name, args)

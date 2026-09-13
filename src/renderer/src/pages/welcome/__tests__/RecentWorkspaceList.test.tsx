@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceListItem } from '../../../../../shared/types'
 import { RecentWorkspaceList, triggerRecentWorkspaceOpen, triggerRecentWorkspaceRetry } from '../RecentWorkspaceList'
-import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, SERVER_DEPLOYMENT_ENABLED, shouldAutoLoadRecentWorkspaces, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker } from '../WelcomePage'
+import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, SERVER_DEPLOYMENT_ENABLED, shouldAutoLoadRecentWorkspaces, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker, shouldResetRecentWorkspaces } from '../WelcomePage'
 
 const item = (index: number, overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem => ({
   name: `工作区 ${index}`,
@@ -111,6 +111,12 @@ describe('RecentWorkspaceList', () => {
     expect(key).toBe(createRecentConfigKey(false, false, 'remote', 'https://example.test', 'secret'))
     expect(key).not.toBe(createRecentConfigKey(false, false, 'local', '', ''))
     expect(key).not.toBe(createRecentConfigKey(false, false, 'remote', 'https://example.test', 'other-secret'))
+  })
+
+  it('does not cancel the initial recent-workspace load before its result arrives', () => {
+    expect(shouldResetRecentWorkspaces(null, 'local-config')).toBe(false)
+    expect(shouldResetRecentWorkspaces('local-config', 'local-config')).toBe(false)
+    expect(shouldResetRecentWorkspaces('old-config', 'new-config')).toBe(true)
   })
 
   it('shows recent opened times in the user local timezone', () => {

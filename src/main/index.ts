@@ -45,7 +45,11 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  win.on('ready-to-show', () => {
+    win.show()
+    win.focus()
+    win.moveTop()
+  })
 
   win.webContents.on('will-navigate', (event, url) => {
     if (isAllowedRendererNavigation(url, rendererUrl)) return
@@ -75,7 +79,9 @@ if (!gotLock) {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) {
       if (win.isMinimized()) win.restore()
+      if (!win.isVisible()) win.show()
       win.focus()
+      win.moveTop()
     }
   })
 

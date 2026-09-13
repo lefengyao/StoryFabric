@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
-import { deleteChapter, deleteCharacter, getNote, getSetting, listCharacters, listChapters, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveNote, saveRelationships, saveSetting } from '../entityStore'
+import { deleteChapter, deleteCharacter, getNote, getSetting, listCharacters, listChapters, listEvents, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveNote, saveRelationships, saveSetting } from '../entityStore'
 import { initializeWorkspace, listVolumes, moveChapter, saveVolume } from '../workspaceService'
 import { listTrash, restoreFromTrash } from '../trash'
 import { stringifyFrontMatter } from '../frontMatter'
@@ -50,6 +50,25 @@ describe('writing structure', () => {
     const chapter = (await listChapters(store))[0]
     expect(chapter.box).toBe('main')
     expect(chapter.volumeId).toBe('vol_default')
+  })
+
+  it('migrates legacy events into the first workspace volume', async () => {
+    const store = new MemoryFileStore()
+    await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '旧事件项目' }))
+    await store.writeText('chapters/volumes.json', JSON.stringify([{ id: 'vol_two', title: '第二卷', order: 2 }]))
+    await store.writeText('events/旧事件.md', stringifyFrontMatter('事件内容', {
+      id: 'evt_legacy',
+      title: '旧事件',
+      order: 1,
+      prevIds: [],
+      nextIds: []
+    }))
+
+    await initializeWorkspace(store, '旧事件项目')
+
+    const migrated = (await listEvents(store))[0]
+    expect(migrated.volumeId).toBe('vol_two')
+    expect(migrated.branchIds).toEqual([])
   })
 
   it('persists a new primary character under the primary tier', async () => {

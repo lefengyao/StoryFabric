@@ -13,7 +13,7 @@ describe('agent workspace policy', () => {
   })
 
   it('requires explicit consent before using delete_note and explains its pending semantics', () => {
-    expect(CORE_PROMPT).toContain('对应写入工具：save_character / save_relationship / save_event / save_outline_doc / save_chapter / save_setting / save_note / delete_note / delete_entity / move_chapter / restore_from_trash')
+    expect(CORE_PROMPT).toContain('对应写入工具：save_character / save_relationship / save_event / save_outline_doc / save_chapter / save_setting / save_note / delete_note / delete_event / delete_entity / move_chapter / restore_from_trash')
     expect(CORE_PROMPT).toContain('只有当前对话明确关联某便签且用户明确表示任务完成时才询问是否删除')
     expect(CORE_PROMPT).toContain('便签只是任务记录，不代表任务已经完成')
     expect(CORE_PROMPT).toContain('普通聊天中的“完成”不触发')
@@ -25,5 +25,8 @@ describe('agent workspace policy', () => {
     expect(CORE_PROMPT).toContain('成功只能说移入回收站')
     expect(CORE_PROMPT).toContain('删除人物、大纲、事件、章节、设定、便签或项目文档时统一使用 delete_entity')
     expect(CORE_PROMPT).toContain('projectDoc 因没有回收站在确认后直接删除')
+    expect(CORE_PROMPT).toContain('全局只有一条主线')
+    expect(CORE_PROMPT).toContain('分支不允许合流')
+    expect(CORE_PROMPT).toContain('删除事件优先使用 delete_event')
   })
 })

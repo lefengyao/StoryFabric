@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Download, FileText, FolderSync, ListTree, Network, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
+import { BarChart3, BookOpen, Download, FileText, FolderSync, Home, ListTree, Network, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { BrandMark } from '../components/icons/BrandMark'
@@ -214,6 +214,17 @@ export function AppLayout(): React.ReactElement {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel/[0.92] px-3 py-2 backdrop-blur-xl sm:h-14 sm:flex-nowrap sm:px-5 sm:py-0">
             <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void close()}
+                disabled={importBusy}
+                title="返回主界面"
+                aria-label="返回主界面"
+                className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 text-xs text-muted transition hover:border-accent/40 hover:text-fg disabled:opacity-50"
+              >
+                <Home size={14} />
+                <span className="hidden sm:inline">主界面</span>
+              </button>
               <div className="min-w-0">
                 <h1 className="truncate font-serif text-[17px] font-semibold">{title}</h1>
                 <p className="hidden truncate text-[10px] text-faint sm:block">{summary?.name ?? 'StoryFabric'}</p>

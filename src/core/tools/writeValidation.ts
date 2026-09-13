@@ -40,7 +40,16 @@ export function validateAgentCharacterWrite(value: unknown): void {
 }
 
 export function validateAgentEventWrite(value: unknown): void {
-  asRecord(value, 'event')
+  const event = asRecord(value, 'event')
+  if (!nonEmptyString(event.id) && !nonEmptyString(event.volumeId)) {
+    throw new Error('新建事件必须明确指定有效的 volumeId；请先用 list_volumes 获取卷 id')
+  }
+  if (Array.isArray(event.nextIds) && event.nextIds.length > 1) {
+    throw new Error('同一主线或分支最多只能有一个后续事件，分支不允许合流')
+  }
+  if (Array.isArray(event.prevIds) && event.prevIds.length > 1) {
+    throw new Error('同一事件最多只能有一个前置事件，分支不允许合流')
+  }
 }
 
 export function validateAgentRelationshipWrite(value: unknown): void {

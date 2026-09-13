@@ -84,6 +84,13 @@ export function shouldClearRecentWorkspaceOpening(
   return mounted && expectedRequestId === currentRequestId
 }
 
+export function shouldResetRecentWorkspaces(
+  loadedConfigKey: string | null,
+  currentConfigKey: string
+): boolean {
+  return loadedConfigKey !== null && loadedConfigKey !== currentConfigKey
+}
+
 export function shouldCloseWorkspacePicker(
   nextOpen: boolean,
   _workspaceLoading: boolean,
@@ -266,7 +273,7 @@ export function WelcomePage(): React.ReactElement {
     recentWorkspaceRequest.current = null
     recentOpeningRequestId.current += 1
     setRecentOpeningPath(null)
-    if (recentItemsConfigKey !== currentConfigKey) {
+    if (shouldResetRecentWorkspaces(recentItemsConfigKey, currentConfigKey)) {
       recentLoadId.current += 1
       setRecentItems([])
       setRecentItemsConfigKey(null)

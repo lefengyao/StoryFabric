@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../../core/storage/fileStore'
 import { NodeFileStore } from '../../../core/storage/nodeFileStore'
 import { initializeWorkspace } from '../../../core/workspace/workspaceService'
-import { saveCharacter, saveChapter, saveNote } from '../../../core/workspace/entityStore'
+import { saveCharacter, saveChapter, saveEvent, saveNote } from '../../../core/workspace/entityStore'
 import { executeTool as executeCoreTool, TOOL_DEFS as CORE_TOOL_DEFS } from '../../../core/tools/registry'
 import { executeTool as executeMainTool, TOOL_DEFS as MAIN_TOOL_DEFS } from '../registry'
 
@@ -54,6 +54,32 @@ describe('desktop tool registry parity', () => {
       expect(await new NodeFileStore(root).readText('docs/plan.md')).toBe('旧计划')
       await mainOutcome.apply()
       expect(await new NodeFileStore(root).readText('docs/plan.md')).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('exposes delete_event on both runtimes as a pending confirmed deletion', async () => {
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '事件删除工具')
+    const root = await mkdtemp(join(tmpdir(), 'sf-delete-event-'))
+    try {
+      const store = new NodeFileStore(root)
+      await initializeWorkspace(store, '事件删除工具')
+      const coreEvent = await saveEvent(memory, { title: '待删除事件', volumeId: 'vol_default' })
+      const mainEvent = await saveEvent(store, { title: '待删除事件', volumeId: 'vol_default' })
+
+      const core = await executeCoreTool(memory, 'delete_event', JSON.stringify({ eventId: coreEvent.id }))
+      const main = await executeMainTool(root, 'delete_event', JSON.stringify({ eventId: mainEvent.id }))
+
+      expect(core.kind).toBe('pending')
+      expect(main.kind).toBe('pending')
+      if (core.kind !== 'pending' || main.kind !== 'pending') throw new Error('未生成待确认事件删除')
+      expect(core.change.toolName).toBe('delete_event')
+      expect(main.change.toolName).toBe('delete_event')
+      expect((await memory.readText(`events/${coreEvent.title}.md`))).not.toBeNull()
+      await main.apply()
+      expect(await store.readText(`events/${mainEvent.title}.md`)).toBeNull()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

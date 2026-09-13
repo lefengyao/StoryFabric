@@ -1,5 +1,5 @@
 /** 主进程 IPC 装配：把服务注册到 ipcMain */
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron'
 import { promises as fs } from 'node:fs'
 import {
   deleteChapter,
@@ -93,6 +93,12 @@ function finishRequest(requestId?: string): void {
 }
 
 export function registerIpc(ctx: AppContext): void {
+  /* ---------- 剪贴板 ---------- */
+  ipcMain.handle(IPC.ClipboardReadText, async () => clipboard.readText())
+  ipcMain.handle(IPC.ClipboardWriteText, async (_event, text: unknown) => {
+    clipboard.writeText(typeof text === 'string' ? text : '')
+  })
+
   /* ---------- 工作区 ---------- */
   ipcMain.handle(IPC.PickFolder, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })

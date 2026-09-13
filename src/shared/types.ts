@@ -53,6 +53,8 @@ export interface OutlineDoc {
 export interface StoryEvent {
   id: string
   title: string
+  /** 所属卷；旧工作区缺失时迁移到第一卷。 */
+  volumeId?: string
   /** 故事内时间的展示文案，如「第三年·春」 */
   storyTime: string
   /** 时间线排序值（小在前） */
@@ -64,6 +66,10 @@ export interface StoryEvent {
   /** 因果链：前置/后续事件 id */
   prevIds: string[]
   nextIds: string[]
+  /** 从当前事件直接分出的分支起点事件 id。 */
+  branchIds?: string[]
+  /** 当前事件所属分支的起点父事件；主线事件为空。 */
+  branchFromId?: string
   content: string
 }
 
