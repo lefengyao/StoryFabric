@@ -13,6 +13,7 @@ import { HttpPlatformApi } from '../platform/httpApi'
 import { ChatSidebar } from '../components/chat/ChatSidebar'
 import { useUi } from '../stores/uiStore'
 import { WorkspaceViewport } from '../components/layout/WorkspaceViewport'
+import { sidebarLabelClass } from '../lib/sidebarPresentation'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
@@ -163,7 +164,7 @@ export function AppLayout(): React.ReactElement {
             }
           >
             <Icon size={18} />
-            <span className={cn('text-sm', sidebarExpanded && 'inline')}>
+            <span className={sidebarLabelClass(sidebarExpanded)}>
               {label}
             </span>
             <span className={cn('pointer-events-none absolute bottom-14 z-30 hidden whitespace-nowrap rounded-md border border-white/10 bg-[#182346] px-2 py-1 text-xs text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block', sidebarExpanded && 'sm:hidden')}>
@@ -195,7 +196,7 @@ export function AppLayout(): React.ReactElement {
           }
         >
           <SettingsIcon size={18} />
-              <span className={cn('text-sm', sidebarExpanded && 'inline')}>设置</span>
+              <span className={sidebarLabelClass(sidebarExpanded)}>设置</span>
         </NavLink>
         <button
           type="button"
