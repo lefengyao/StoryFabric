@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sidebarLabelClass } from '../sidebarPresentation'
+import { sidebarLabelClass, sidebarWidthClass } from '../sidebarPresentation'
 
 describe('sidebarPresentation', () => {
   it('hides navigation labels in the thumbnail state', () => {
@@ -9,5 +9,10 @@ describe('sidebarPresentation', () => {
 
   it('shows navigation labels when the sidebar is expanded', () => {
     expect(sidebarLabelClass(true)).toContain('sm:inline')
+  })
+
+  it('uses only the compact width in the thumbnail state', () => {
+    expect(sidebarWidthClass(false)).toBe('w-[68px]')
+    expect(sidebarWidthClass(false)).not.toContain('w-[204px]')
   })
 })

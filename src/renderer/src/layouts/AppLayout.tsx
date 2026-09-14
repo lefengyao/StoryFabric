@@ -13,7 +13,7 @@ import { HttpPlatformApi } from '../platform/httpApi'
 import { ChatSidebar } from '../components/chat/ChatSidebar'
 import { useUi } from '../stores/uiStore'
 import { WorkspaceViewport } from '../components/layout/WorkspaceViewport'
-import { sidebarLabelClass } from '../lib/sidebarPresentation'
+import { sidebarLabelClass, sidebarWidthClass } from '../lib/sidebarPresentation'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
@@ -132,8 +132,8 @@ export function AppLayout(): React.ReactElement {
       <aside
         data-sidebar-preference-key={SIDEBAR_EXPANDED_KEY}
         className={cn(
-          'app-sidebar-scroll order-none flex h-full w-[204px] shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none',
-          sidebarExpanded ? 'w-[204px]' : 'w-[68px]'
+          'app-sidebar-scroll order-none flex h-full shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none',
+          sidebarWidthClass(sidebarExpanded)
         )}
       >
         <NavLink to="/chat" title="织章 · StoryFabric" className="flex items-center gap-3 px-1 pb-5">
