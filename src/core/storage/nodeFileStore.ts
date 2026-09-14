@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, normalize as normalizePath, parse, relative, resolve, sep } from 'path'
-import { normalizeRelativePath, type FileStore } from './fileStore'
+import { normalizeRelativePath, type FileStore, type SourceReadResult } from './fileStore'
 
 /** Node/Electron 工作区文件适配器。共享核心只看到 FileStore。 */
 export class NodeFileStore implements FileStore {
@@ -96,6 +96,18 @@ export class NodeFileStore implements FileStore {
     } catch (error) {
       if (this.isBoundaryError(error)) throw error
       return null
+    }
+  }
+
+  async readTextStrict(path: string): Promise<SourceReadResult> {
+    try {
+      return { ok: true, text: await fs.readFile(await this.secureResolve(path), 'utf-8') }
+    } catch (error) {
+      if (this.isBoundaryError(error)) throw error
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        return { ok: false, code: 'NOT_FOUND' }
+      }
+      return { ok: false, code: 'IO_ERROR' }
     }
   }
 

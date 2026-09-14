@@ -18,6 +18,8 @@ import { playCompletionSound, shouldPlayCompletionSound } from '../lib/completio
 import { createRafBatcher } from '../lib/rafBatcher'
 import { useSettings } from './settingsStore'
 import { sessionScopePatch, shouldKeepStreamingAfterAcceptance, workspaceScopePatch } from './chatScope'
+import { chatDraftScope, chatDraftStore, type DraftSendTransaction } from './chatDraftStore'
+import { getPlatformUiSource } from '../platform/platformApi'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
@@ -80,10 +82,23 @@ type SetFn = (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatS
 let runningSessionId: string | null = null
 let finishingSessionId: string | null = null
 let completedSessionId: string | null = null
+let pendingDraftSend: (DraftSendTransaction & { sessionId: string | null; beforeMessageIds: Set<string>; confirmed: boolean }) | null = null
+let workspaceGeneration = 0
+let sessionLoadGeneration = 0
 
-async function reloadSessions(set: (p: Partial<ChatState>) => void): Promise<SessionMeta[]> {
+function currentDraftScope(activeId: string | null): ReturnType<typeof chatDraftScope> {
+  const workspace = useWorkspace.getState()
+  return chatDraftScope({
+    source: workspace.uiSource ?? getPlatformUiSource(),
+    path: workspace.summary?.path ?? ''
+  }, activeId)
+}
+
+async function reloadSessions(set: (p: Partial<ChatState>) => void, generation = workspaceGeneration): Promise<SessionMeta[]> {
+  const platform = getPlatformApi()
   try {
-    const sessions = await getPlatformApi().listSessions()
+    const sessions = await platform.listSessions()
+    if (generation !== workspaceGeneration || getPlatformApi() !== platform) return []
     set({ sessions })
     return sessions
   } catch {
@@ -110,14 +125,21 @@ export const useChat = create<ChatState>((set, get) => ({
   error: null,
 
   initSessions: async () => {
-    await reloadSessions(set)
+    const generation = workspaceGeneration
+    await reloadSessions(set, generation)
+    if (generation !== workspaceGeneration) return
     const first = get().sessions[0]
-    if (first && !get().activeId) await get().openSession(first.id)
+    const pendingDraft = chatDraftStore.getText(currentDraftScope(null))
+    if (first && !get().activeId && !pendingDraft) await get().openSession(first.id)
   },
 
   openSession: async (id) => {
     if (get().streaming) return
-    const s = await getPlatformApi().loadSession(id)
+    const generation = workspaceGeneration
+    const request = ++sessionLoadGeneration
+    const platform = getPlatformApi()
+    const s = await platform.loadSession(id)
+    if (generation !== workspaceGeneration || request !== sessionLoadGeneration || getPlatformApi() !== platform) return
     if (!s) return
     applySession(set, s)
     set({ contextCompression: null })
@@ -125,18 +147,25 @@ export const useChat = create<ChatState>((set, get) => ({
 
   newSession: async () => {
     if (get().streaming) return
+    const generation = workspaceGeneration
+    ++sessionLoadGeneration
+    const platform = getPlatformApi()
     try {
-      const session = await getPlatformApi().createSession()
+      const session = await platform.createSession()
+      if (generation !== workspaceGeneration || getPlatformApi() !== platform) return
       set({ ...sessionScopePatch(session), contextCompression: null, error: null })
-      await reloadSessions(set)
+      await reloadSessions(set, generation)
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
     }
   },
 
   removeSession: async (id) => {
-    await getPlatformApi().deleteSession(id)
-    await reloadSessions(set)
+    const generation = workspaceGeneration
+    const platform = getPlatformApi()
+    await platform.deleteSession(id)
+    if (generation !== workspaceGeneration || getPlatformApi() !== platform) return
+    await reloadSessions(set, generation)
     if (get().activeId === id) get().newSession()
   },
 
@@ -148,8 +177,11 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setArchived: async (id, archived) => {
-    await getPlatformApi().updateSession(id, { archived })
-    await reloadSessions(set)
+    const generation = workspaceGeneration
+    const platform = getPlatformApi()
+    await platform.updateSession(id, { archived })
+    if (generation !== workspaceGeneration || getPlatformApi() !== platform) return
+    await reloadSessions(set, generation)
     if (archived && get().activeId === id) get().newSession()
   },
 
@@ -164,14 +196,25 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   resetWorkspace: () => {
+    workspaceGeneration += 1
+    sessionLoadGeneration += 1
     runningSessionId = null
     finishingSessionId = null
     completedSessionId = null
+    pendingDraftSend = null
     set(workspaceScopePatch())
   },
 
   send: async (text, reqBase) => {
     if (get().streaming || (!text.trim() && !get().messageFiles.length && !get().attachments.length)) return
+    const draftScope = currentDraftScope(get().activeId)
+    const draft = chatDraftStore.beginSend(draftScope, text)
+    pendingDraftSend = {
+      ...draft,
+      sessionId: get().activeId,
+      beforeMessageIds: new Set(get().messages.map((message) => message.id)),
+      confirmed: false
+    }
     set({ streaming: true, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false, contextCompression: null, error: null })
     completedSessionId = null
     const req: RunAgentRequest = {
@@ -191,10 +234,13 @@ export const useChat = create<ChatState>((set, get) => ({
         set({ streaming: false })
       }
     } catch (err) {
+      const transaction = pendingDraftSend
+      if (transaction && !transaction.confirmed) chatDraftStore.restoreAfterFailure(transaction)
       set({ error: err instanceof Error ? err.message : String(err) })
       flushStreamingDelta()
       set({ streaming: false, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false })
       runningSessionId = null
+      pendingDraftSend = null
     }
   },
 
@@ -271,6 +317,15 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
   const ev = envelope.event
   switch (ev.type) {
     case 'session': {
+      const transaction = pendingDraftSend
+      if (transaction && !transaction.confirmed && transaction.scope.workspaceKey === currentDraftScope(get().activeId).workspaceKey && (!transaction.sessionId || transaction.sessionId === envelope.sessionId)) {
+        const hasNewUserMessage = ev.session.messages.some((message) => message.role === 'user' && !transaction.beforeMessageIds.has(message.id))
+        if (hasNewUserMessage) {
+          chatDraftStore.clearAfterAccepted(transaction)
+          transaction.confirmed = true
+          transaction.sessionId = envelope.sessionId
+        }
+      }
       const patch = sessionEventPatch(get().activeId, envelope)
       if (patch) set({ ...patch, attachments: [], messageFiles: [] })
       break
@@ -317,6 +372,14 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       if (get().pendingChange?.id === ev.changeId) set({ pendingChange: null })
       if (ev.approved && get().lastPendingChange?.id === ev.changeId) {
         set({ lastAppliedChange: get().lastPendingChange })
+      }
+      break
+    case 'change-result':
+      if (get().pendingChange?.id === ev.changeId) set({ pendingChange: null })
+      if (ev.status === 'applied' && get().lastPendingChange?.id === ev.changeId) {
+        set({ lastAppliedChange: get().lastPendingChange, error: null })
+      } else if (ev.status === 'conflict' || ev.status === 'failed') {
+        set({ error: ev.message })
       }
       break
     case 'context-compression-start':

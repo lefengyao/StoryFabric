@@ -1,6 +1,7 @@
 import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, OutlineDoc, Relationship, RunAgentRequest, SettingDoc, StoryEvent, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
+import { normalizeHttpSource } from '../lib/workspaceUiScope'
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 export type HttpAuth = { kind: 'cookie' } | { kind: 'bearer'; token: string }
@@ -17,6 +18,8 @@ export class HttpPlatformApi implements StoryFabricApi {
   constructor(private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis), private readonly baseUrl = '', auth: HttpAuth = { kind: 'cookie' }) {
     this.auth = auth
   }
+
+  getUiSource(): string { return normalizeHttpSource(this.baseUrl) }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return this.auth.kind === 'bearer' ? { authorization: `Bearer ${this.auth.token}`, ...extra } : extra

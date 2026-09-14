@@ -171,6 +171,15 @@ export interface TrashEntry {
   trashPath?: string
   /** 删除人物时一并保存的关系边，恢复人物时回填。 */
   relatedRelationships?: Relationship[]
+  /** 删除事件时保存的目标事件与邻居连接快照，用于无冲突恢复。 */
+  eventConnections?: {
+    event: StoryEvent
+    neighbors: Array<{
+      id: string
+      before: Pick<StoryEvent, 'prevIds' | 'nextIds' | 'branchIds' | 'branchFromId'>
+      after: Pick<StoryEvent, 'prevIds' | 'nextIds' | 'branchIds' | 'branchFromId'>
+    }>
+  }
 }
 
 /* ---------------- 应用设置 ---------------- */
@@ -384,6 +393,7 @@ export type AgentEvent =
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }
+  | { type: 'change-result'; changeId: string; status: 'applied' | 'rejected' | 'conflict' | 'failed'; message: string }
   | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
   | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
   | { type: 'error'; message: string }
@@ -395,6 +405,31 @@ export interface ToolDefJson {
   name: string
   description: string
   parameters: Record<string, unknown>
+}
+
+export type ToolFailureCode =
+  | 'INVALID_ARGUMENT'
+  | 'INVALID_CURSOR'
+  | 'NOT_FOUND'
+  | 'AMBIGUOUS_TARGET'
+  | 'SOURCE_CHANGED'
+  | 'PROJECT_CHANGED'
+  | 'CONFLICT'
+  | 'IO_ERROR'
+  | 'INVALID_EVENT_GRAPH'
+  | 'HAS_BRANCHES'
+  | 'RESTORE_CONFLICT'
+  | 'RESTORE_REQUIRES_PLACEMENT'
+  | 'RECOVERY_REQUIRED'
+
+export interface ToolFailure {
+  schemaVersion: 2
+  error: {
+    code: ToolFailureCode
+    message: string
+    retryable: boolean
+    details?: Record<string, unknown>
+  }
 }
 
 /* ---------------- 模型用量 ---------------- */

@@ -1,13 +1,14 @@
 import { create } from 'zustand'
 import type { WorkspaceRequestOptions } from '../../../shared/api'
 import type { WorkspaceSummary } from '../../../shared/types'
-import { getPlatformApi } from '../platform/platformApi'
+import { getPlatformApi, getPlatformUiSource } from '../platform/platformApi'
 
 type Status = 'booting' | 'empty' | 'ready'
 
 interface WorkspaceState {
   status: Status
   summary: WorkspaceSummary | null
+  uiSource: string | null
   error: string | null
 
   init: () => Promise<void>
@@ -21,15 +22,17 @@ interface WorkspaceState {
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   status: 'booting',
   summary: null,
+  uiSource: null,
   error: null,
 
   init: async () => {
+    const platform = getPlatformApi()
     try {
-      const s = await getPlatformApi().getCurrentWorkspace()
-      if (s) set({ status: 'ready', summary: s })
-      else set({ status: 'empty' })
+      const s = await platform.getCurrentWorkspace()
+      if (s) set({ status: 'ready', summary: s, uiSource: getPlatformUiSource(platform) })
+      else set({ status: 'empty', uiSource: null })
     } catch {
-      set({ status: 'empty' })
+      set({ status: 'empty', uiSource: null })
     }
   },
 
@@ -42,7 +45,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (isCurrent?.() === false) return
       const s = options ? await platform.openWorkspace(path, options) : await platform.openWorkspace(path)
       if (isCurrent?.() === false) return
-      set({ status: 'ready', summary: s })
+      set({ status: 'ready', summary: s, uiSource: getPlatformUiSource(platform) })
     } catch (err) {
       if (isCurrent?.() === false) return
       set({ error: err instanceof Error ? err.message : String(err) })
@@ -66,7 +69,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const platform = getPlatformApi()
       const s = options ? await platform.importWorkspace(bytes, fileName, target, options) : await platform.importWorkspace(bytes, fileName, target)
-      if (isCurrent?.() !== false) set({ status: 'ready', summary: s, error: null })
+      if (isCurrent?.() !== false) set({ status: 'ready', summary: s, uiSource: getPlatformUiSource(platform), error: null })
     } catch (err) {
       if (isCurrent?.() !== false) set({ error: err instanceof Error ? err.message : String(err) })
       throw err
@@ -75,7 +78,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   close: async () => {
     await getPlatformApi().closeWorkspace()
-    set({ status: 'empty', summary: null })
+    set({ status: 'empty', summary: null, uiSource: null })
   },
 
   refresh: async () => {

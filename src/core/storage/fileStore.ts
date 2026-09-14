@@ -7,6 +7,8 @@ export interface FileStore {
   exists(path: string): Promise<boolean>
   ensureDir(path: string): Promise<void>
   readText(path: string): Promise<string | null>
+  /** Strict source read for retrieval; distinguishes missing files from IO/decoding failures. */
+  readTextStrict(path: string): Promise<SourceReadResult>
   writeText(path: string, text: string): Promise<void>
   readBytes(path: string): Promise<Uint8Array | null>
   writeBytes(path: string, bytes: Uint8Array): Promise<void>
@@ -17,6 +19,10 @@ export interface FileStore {
   listFiles(dir: string, extension?: string): Promise<string[]>
   listDirs(dir: string): Promise<string[]>
 }
+
+export type SourceReadResult =
+  | { ok: true; text: string }
+  | { ok: false; code: 'NOT_FOUND' | 'IO_ERROR' | 'TEXT_DECODE_ERROR' }
 
 export function normalizeRelativePath(path: string, allowRoot = false): string {
   const raw = String(path).replace(/\\/g, '/')
@@ -54,6 +60,13 @@ export class MemoryFileStore implements FileStore {
 
   async readText(path: string): Promise<string | null> {
     return this.files.get(normalizeRelativePath(path)) ?? null
+  }
+
+  async readTextStrict(path: string): Promise<SourceReadResult> {
+    const normalized = normalizeRelativePath(path)
+    if (this.files.has(normalized)) return { ok: true, text: this.files.get(normalized) ?? '' }
+    if (this.binary.has(normalized)) return { ok: false, code: 'TEXT_DECODE_ERROR' }
+    return { ok: false, code: 'NOT_FOUND' }
   }
 
   async readBytes(path: string): Promise<Uint8Array | null> {

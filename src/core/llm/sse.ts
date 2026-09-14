@@ -5,12 +5,21 @@ export async function* sseLines(res: Response, signal?: AbortSignal): AsyncGener
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  let aborted = Boolean(signal?.aborted)
-  const onAbort = () => { aborted = true; void reader.cancel().catch(() => undefined) }
+  let aborted = false
+  let rejectAbort!: (reason: unknown) => void
+  const abortPromise = new Promise<never>((_resolve, reject) => { rejectAbort = reject })
+  const abortError = (): DOMException => new DOMException('The operation was aborted.', 'AbortError')
+  const onAbort = () => {
+    if (aborted) return
+    aborted = true
+    void reader.cancel().catch(() => undefined)
+    rejectAbort(abortError())
+  }
   signal?.addEventListener('abort', onAbort, { once: true })
+  if (aborted) onAbort()
   try {
     for (;;) {
-      const { done, value } = await reader.read()
+      const { done, value } = await Promise.race([reader.read(), abortPromise])
       if (aborted) throw new DOMException('The operation was aborted.', 'AbortError')
       if (done) break
       buf += decoder.decode(value, { stream: true })

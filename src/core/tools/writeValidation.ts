@@ -17,6 +17,9 @@ function nonEmptyString(value: unknown): boolean {
  */
 export function validateAgentChapterWrite(value: unknown): void {
   const chapter = asRecord(value, 'chapter')
+  if (!nonEmptyString(chapter.id) && !nonEmptyString(chapter.title)) {
+    throw new Error('新建章节必须提供 title；更新章节必须提供有效 id')
+  }
   if (chapter.box !== 'draft' && chapter.box !== 'main') {
     throw new Error('save_chapter 必须明确指定 box：draft（草稿箱）或 main（正文箱），不能省略')
   }
@@ -36,11 +39,17 @@ export function validateAgentChapterMove(value: unknown): void {
 }
 
 export function validateAgentCharacterWrite(value: unknown): void {
-  asRecord(value, 'character')
+  const character = asRecord(value, 'character')
+  if (!nonEmptyString(character.id) && !nonEmptyString(character.name)) {
+    throw new Error('新建人物必须提供 name；更新人物必须提供有效 id')
+  }
 }
 
 export function validateAgentEventWrite(value: unknown): void {
   const event = asRecord(value, 'event')
+  if (!nonEmptyString(event.id) && !nonEmptyString(event.title)) {
+    throw new Error('新建事件必须提供 title；更新事件必须提供有效 id')
+  }
   if (!nonEmptyString(event.id) && !nonEmptyString(event.volumeId)) {
     throw new Error('新建事件必须明确指定有效的 volumeId；请先用 list_volumes 获取卷 id')
   }
@@ -60,11 +69,17 @@ export function validateAgentRelationshipWrite(value: unknown): void {
 }
 
 export function validateAgentSettingWrite(value: unknown): void {
-  asRecord(value, 'setting')
+  const setting = asRecord(value, 'setting')
+  if (!nonEmptyString(setting.id) && !nonEmptyString(setting.title)) {
+    throw new Error('新建设定必须提供 title；更新设定必须提供有效 id')
+  }
 }
 
 export function validateAgentNoteWrite(value: unknown): void {
-  asRecord(value, 'note')
+  const note = asRecord(value, 'note')
+  if (!nonEmptyString(note.id) && !nonEmptyString(note.title)) {
+    throw new Error('新建便签必须提供 title；更新便签必须提供有效 id')
+  }
 }
 
 /**
@@ -73,6 +88,9 @@ export function validateAgentNoteWrite(value: unknown): void {
  */
 export function validateAgentOutlineWrite(value: unknown): void {
   const doc = asRecord(value, 'doc')
+  if (!nonEmptyString(doc.id) && !nonEmptyString(doc.title)) {
+    throw new Error('新建大纲必须提供 title；更新大纲必须提供有效 id')
+  }
   if (doc.kind !== 'total' && doc.kind !== 'chapter') {
     throw new Error('save_outline_doc 必须明确指定 kind：total（总纲）或 chapter（章纲），不能省略')
   }

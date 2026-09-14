@@ -38,6 +38,7 @@ import { prepareMessageFiles } from '../../lib/prepareMessageFiles'
 import { AttachmentMenu } from '../../components/chat/AttachmentMenu'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
+import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -57,8 +58,8 @@ const ATTACH_ICONS: Record<string, React.ReactElement> = {
 export function ChatPage(): React.ReactElement {
   const chat = useChat()
   const summary = useWorkspace((s) => s.summary)
+  const uiSource = useWorkspace((s) => s.uiSource)
   const settings = useSettings((s) => s.settings)
-  const [input, setInput] = useState('')
   const [attachOpen, setAttachOpen] = useState(false)
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [tab, setTab] = useState<'recent' | 'archived'>('recent')
@@ -67,6 +68,8 @@ export function ChatPage(): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sessionImportRef = useRef<HTMLInputElement | null>(null)
   const [sessionTransferBusy, setSessionTransferBusy] = useState(false)
+  const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
+  const input = useChatDraft(draftScope)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -101,13 +104,12 @@ export function ChatPage(): React.ReactElement {
   const archivedCount = useMemo(() => chat.sessions.filter((s) => s.archived).length, [chat.sessions])
 
   const send = async (): Promise<void> => {
-    const text = input.trim()
+    const text = input.text
     if ((!text && !chat.messageFiles.length && !chat.attachments.length) || chat.streaming) return
     if (!defaultModel) {
       useChat.setState({ error: '请先在“设置”中配置供应商、API Key 和默认模型' })
       return
     }
-    setInput('')
     await chat.send(text, {
       providerId: defaultModel.providerId,
       model: defaultModel.model,
@@ -352,7 +354,7 @@ export function ChatPage(): React.ReactElement {
                 {QUICK_ACTIONS.map((q) => (
                   <button
                     key={q}
-                    onClick={() => setInput(q)}
+                    onClick={() => input.setText(q)}
                     className="w-full cursor-pointer rounded-lg border border-line bg-panel px-4 py-2.5 text-left text-xs text-muted transition hover:border-accent hover:text-fg"
                   >
                     {q}
@@ -421,8 +423,8 @@ export function ChatPage(): React.ReactElement {
             )}
             <div className="relative rounded-xl border border-line bg-panel focus-within:border-accent transition">
               <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
+                value={input.text}
+                onChange={(e) => input.setText(e.target.value)}
                 onKeyDown={(e) => {
                   if (shouldSendOnKey(settings?.sendShortcut ?? 'enter', {
                     key: e.key,
@@ -470,7 +472,7 @@ export function ChatPage(): React.ReactElement {
                     <Square size={13} /> 停止
                   </Button>
                 ) : (
-                  <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.trim() && !chat.messageFiles.length && !chat.attachments.length}>
+                  <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length}>
                     <Send size={13} /> 发送
                   </Button>
                 )}

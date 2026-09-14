@@ -23,6 +23,8 @@ import {
   serializeSetting
 } from '../workspace/entityStore'
 import { normalizeProjectDocPath } from '../workspace/projectDocs'
+import { contentRevision } from '../workspace/resourceRevision'
+import { coordinatorFor } from '../workspace/mutationCoordinator'
 import type { ToolOutcome } from './registry'
 
 export type DeleteEntityKind = Exclude<EntityKind, 'projectDoc'> | 'projectDoc'
@@ -80,8 +82,11 @@ async function resolveTarget(store: FileStore, kind: DeleteEntityKind, id: strin
     return { id: value.id, kind, title: value.title, beforeText: serializeOutlineDoc(value), commit: async () => { await deleteOutlineDoc(store, value.id); return { ok: true, text: `已将大纲「${value.title}」移入回收站` } } }
   }
   if (kind === 'event') {
-    const value = (await listEvents(store)).find((item) => item.id === id)
+    const events = await listEvents(store)
+    const value = events.find((item) => item.id === id)
     if (!value) fail(`未找到事件：${id}`)
+    const branches = events.filter((event) => event.branchFromId === id || (event.branchIds ?? []).includes(id))
+    if (branches.length) fail(`事件包含直属分支，不能直接删除；请先迁移或逐条处理分支：${branches.map((event) => event.id).join('、')}`)
     return { id: value.id, kind, title: value.title, beforeText: serializeEvent(value), commit: async () => { await deleteEvent(store, value.id); return { ok: true, text: `已将事件「${value.title}」移入回收站` } } }
   }
   if (kind === 'chapter') {
@@ -121,6 +126,9 @@ async function resolveTarget(store: FileStore, kind: DeleteEntityKind, id: strin
 export async function executeDeleteEntityTool(store: FileStore, rawArgs: Record<string, unknown>): Promise<ToolOutcome> {
   const { kind, id } = validateArgs(rawArgs)
   const target = await resolveTarget(store, kind, id)
+  if (typeof rawArgs.baseRevision === 'string' && contentRevision(target.beforeText) !== rawArgs.baseRevision) {
+    fail('资料版本已变化，请重新读取后再删除')
+  }
   const trashBacked = TRASH_KINDS.has(kind as Exclude<EntityKind, 'projectDoc'>)
   const change: PendingChange = {
     id: genId('chg'),
@@ -131,5 +139,19 @@ export async function executeDeleteEntityTool(store: FileStore, rawArgs: Record<
     beforeText: target.beforeText,
     afterText: trashBacked ? '确认后移入回收站' : '确认后直接删除（此类型没有回收站）'
   }
-  return { kind: 'pending', change, apply: target.commit }
+  return {
+    kind: 'pending',
+    change,
+    apply: () => coordinatorFor(store).run(`delete:${kind}:${id}`, async () => {
+      try {
+        const latest = await resolveTarget(store, kind, id)
+        if (contentRevision(latest.beforeText) !== contentRevision(target.beforeText)) {
+          return { ok: false, text: '资料已在等待期间修改，请重新读取后生成变更' }
+        }
+      } catch {
+        return { ok: false, text: '资料已不存在，请重新读取回收站或项目资料' }
+      }
+      return target.commit()
+    })
+  }
 }

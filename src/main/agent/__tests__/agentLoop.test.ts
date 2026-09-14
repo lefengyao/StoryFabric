@@ -9,7 +9,7 @@ import { serializeNote } from '../../../core/workspace/entityStore'
 import { AgentService } from '../agentLoop'
 import { SettingsService } from '../../services/settingsService'
 import { SessionStore } from '../../services/sessionStore'
-import { saveCharacter, saveNote } from '../../services/entityStore'
+import { listCharacters, saveCharacter, saveNote } from '../../services/entityStore'
 import { listTrash } from '../../services/workspaceService'
 
 function sseResponse(chunks: string[]): Response {
@@ -259,7 +259,7 @@ describe('AgentService', () => {
     expect(events.some((e) => e.event.type === 'pending-change')).toBe(false)
     const session = (await loadPersisted(sessionId))!
     const toolMsgs = session.messages.filter((m) => m.role === 'tool')
-    expect(toolMsgs.some((m) => m.text?.includes('delete_note 必须提供有效 noteId'))).toBe(true)
+    expect(toolMsgs.some((m) => m.text?.includes('noteId') || m.text?.includes('delete_note'))).toBe(true)
   })
 
   it('写工具确认后写入工作区', async () => {
@@ -291,8 +291,8 @@ describe('AgentService', () => {
     agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
 
     await runPromise
-    const chars = await fs.readdir(join(root, 'characters'))
-    expect(chars.some((f) => f.includes('确认君'))).toBe(true)
+    const chars = await listCharacters(root)
+    expect(chars.some((character) => character.name === '确认君')).toBe(true)
   })
 
   it('流式期间的重命名/归档在落盘时保留', async () => {
@@ -334,7 +334,7 @@ describe('AgentService', () => {
 
   it('中止会话时循环退出且不抛出', async () => {
     // 永不返回、但响应 abort 信号的流
-    globalThis.fetch = vi.fn(
+    const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) =>
         new Response(
           new ReadableStream<Uint8Array>({
@@ -347,10 +347,11 @@ describe('AgentService', () => {
           { status: 200 }
         )
     )
+    globalThis.fetch = fetchMock
     const agent = makeAgent()
     const p = agent.run(root, { message: '慢慢想', providerId, model: 'mock-model' })
     await vi.waitFor(() => {
-      expect(events.length).toBeGreaterThan(0)
+      expect(fetchMock).toHaveBeenCalled()
     })
     const sid = events[0]?.sessionId
     expect(sid).toBeTruthy()

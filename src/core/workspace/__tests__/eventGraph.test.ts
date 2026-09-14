@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StoryEvent } from '../../../shared/types'
-import { buildEventGraph, removeEventFromGraph } from '../eventGraph'
+import { buildEventGraph, diagnoseEventGraph, normalizeEventGraphChange, removeEventFromGraph } from '../eventGraph'
 
 function event(id: string, order: number, overrides: Partial<StoryEvent> = {}): StoryEvent {
   return {
@@ -70,5 +70,21 @@ describe('event graph', () => {
     expect(promoted?.branchFromId).toBe('main')
     expect(promoted?.prevIds).toEqual(['main'])
     expect(parent?.branchIds).toEqual(['branch_2'])
+  })
+
+  it('diagnoses cycles, merges, missing references and asymmetric links', () => {
+    const issues = diagnoseEventGraph([
+      event('a', 1, { nextIds: ['b'] }),
+      event('b', 2, { prevIds: ['a'], nextIds: ['a'] }),
+      event('c', 3, { prevIds: ['missing'], characterIds: ['char_missing'], volumeId: 'vol_missing' })
+    ], { volumeIds: new Set(['vol_a']), characterIds: new Set(['char_a']) })
+    expect(issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['CYCLE', 'ASYMMETRIC_LINK', 'MISSING_EVENT', 'MISSING_CHARACTER', 'MISSING_VOLUME']))
+  })
+
+  it('normalizes symmetric links and appends a new mainline event at the tail', () => {
+    const events = [event('a', 1), event('b', 2)]
+    const normalized = normalizeEventGraphChange(events.map((item, index) => index === 0 ? { ...item, nextIds: ['b'] } : { ...item, prevIds: ['a'] }), event('c', 3))
+    expect(normalized.find((item) => item.id === 'b')?.nextIds).toEqual(['c'])
+    expect(normalized.find((item) => item.id === 'c')?.prevIds).toEqual(['b'])
   })
 })

@@ -4,6 +4,7 @@ import { initializeWorkspace } from '../../workspace/workspaceService'
 import { listEvents, saveEvent, saveNote } from '../../workspace/entityStore'
 import { listTrash } from '../../workspace/trash'
 import { executeDeleteEntityTool } from '../deleteEntityTool'
+import { executeTool } from '../registry'
 
 describe('delete_entity tool', () => {
   it('creates a pending deletion and moves supported entities to trash only after approval', async () => {
@@ -54,5 +55,36 @@ describe('delete_entity tool', () => {
     expect(remaining.map((event) => event.id)).not.toContain('evt_middle')
     expect(remaining.find((event) => event.id === first.id)?.nextIds).toEqual(['evt_end'])
     expect(remaining.find((event) => event.id === 'evt_end')?.prevIds).toEqual([first.id])
+  })
+
+  it('refuses to delete an event that owns branches', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '分支删除')
+    const parent = await saveEvent(store, { title: '父事件', volumeId: 'vol_default' })
+    await saveEvent(store, { title: '分支事件', volumeId: 'vol_default', branchFromId: parent.id, prevIds: [parent.id] })
+
+    await expect(executeDeleteEntityTool(store, { kind: 'event', id: parent.id })).rejects.toThrow('直属分支')
+  })
+
+  it('restores a deleted middle event only when its neighbors are unchanged', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '事件恢复')
+    const a = await saveEvent(store, { id: 'a', title: 'A', volumeId: 'vol_default', nextIds: ['b'] })
+    const b = await saveEvent(store, { id: 'b', title: 'B', volumeId: 'vol_default', prevIds: ['a'], nextIds: ['c'] })
+    await saveEvent(store, { id: 'c', title: 'C', volumeId: 'vol_default', prevIds: ['b'] })
+
+    const deleted = await executeDeleteEntityTool(store, { kind: 'event', id: b.id })
+    if (deleted.kind !== 'pending') throw new Error('expected pending delete')
+    expect((await deleted.apply()).ok).toBe(true)
+    expect((await listEvents(store)).find((event) => event.id === 'c')?.prevIds).toEqual(['a'])
+
+    const restored = await executeTool(store, 'restore_from_trash', JSON.stringify({ id: b.id }))
+    if (restored.kind !== 'pending') throw new Error('expected pending restore')
+    expect((await restored.apply()).ok).toBe(true)
+    const events = await listEvents(store)
+    expect(events.find((event) => event.id === a.id)?.nextIds).toEqual(['b'])
+    expect(events.find((event) => event.id === 'b')?.prevIds).toEqual(['a'])
+    expect(events.find((event) => event.id === 'b')?.nextIds).toEqual(['c'])
+    expect(events.find((event) => event.id === 'c')?.prevIds).toEqual(['b'])
   })
 })

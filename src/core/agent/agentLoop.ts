@@ -287,19 +287,22 @@ export class CoreAgentService {
 
           this.options.emit(sid, { type: 'pending-change', change: outcome.change })
           const approved = await this.waitConfirm(outcome.change, sid, controller.signal)
-          this.options.emit(sid, { type: 'change-applied', changeId: outcome.change.id, approved })
           let ok = approved
           let text = '用户拒绝了此变更。请勿原样重复提交。'
+          let status: 'applied' | 'rejected' | 'conflict' | 'failed' = 'rejected'
           if (approved) {
             try {
               const applied = await outcome.apply()
               ok = applied.ok
               text = applied.text
+              status = applied.ok ? 'applied' : text.includes('等待期间修改') ? 'conflict' : 'failed'
             } catch (error) {
               ok = false
               text = `写入失败：${error instanceof Error ? error.message : String(error)}`
+              status = 'failed'
             }
           }
+          this.options.emit(sid, { type: 'change-result', changeId: outcome.change.id, status, message: text })
           this.options.emit(sid, { type: 'tool-done', callId: toolCall.id, ok, resultPreview: ok ? '变更已写入' : approved ? '写入失败' : '用户已拒绝' })
           session.messages.push({ id: `msg_${Date.now().toString(36)}`, role: 'tool', toolCallId: toolCall.id, toolName: toolCall.name, text, isError: !ok })
         }

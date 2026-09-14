@@ -17,6 +17,7 @@ import { PendingChangeDialog } from './PendingChangeDialog'
 import { resolveContextWindow } from '../../lib/modelCapability'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
+import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
 
 const QUICK_QUESTIONS = [
   '检查当前章节与前文的设定冲突。',
@@ -28,13 +29,15 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const chat = useChat()
   const settings = useSettings((s) => s.settings)
   const summary = useWorkspace((s) => s.summary)
+  const uiSource = useWorkspace((s) => s.uiSource)
   const close = useUi((s) => s.closeChatPanel)
-  const [input, setInput] = useState('')
   const [attachOpen, setAttachOpen] = useState(false)
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [referenceQuery, setReferenceQuery] = useState('')
   const [detailsOpen, setDetailsOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
+  const input = useChatDraft(draftScope)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((provider) => provider.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -82,13 +85,12 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   }, [chat.pendingChange, close, detailsOpen, open])
 
   const send = async (): Promise<void> => {
-    const text = input.trim()
+    const text = input.text
     if ((!text && !chat.messageFiles.length && !chat.attachments.length) || chat.streaming) return
     if (!defaultModel) {
       useChat.setState({ error: '请先配置默认对话模型' })
       return
     }
-    setInput('')
     await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model })
   }
 
@@ -254,7 +256,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               <p className="mt-2 text-xs leading-5 text-muted">智能体会按需查阅章节、前后文、人物、事件与设定，写回前仍由你确认。</p>
               <div className="mt-6 w-full space-y-2">
                 {QUICK_QUESTIONS.map((question) => (
-                  <button key={question} type="button" onClick={() => setInput(question)} className="w-full cursor-pointer rounded-xl border border-line bg-panel px-4 py-3 text-left text-xs leading-5 text-muted transition hover:border-accent hover:text-fg">
+                  <button key={question} type="button" onClick={() => input.setText(question)} className="w-full cursor-pointer rounded-xl border border-line bg-panel px-4 py-3 text-left text-xs leading-5 text-muted transition hover:border-accent hover:text-fg">
                     {question}
                   </button>
                 ))}
@@ -303,8 +305,8 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
           )}
           <div className="relative rounded-xl border border-line bg-panel shadow-sm transition focus-within:border-accent">
             <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
+              value={input.text}
+              onChange={(event) => input.setText(event.target.value)}
               onKeyDown={(event) => {
                 if (shouldSendOnKey(settings?.sendShortcut ?? 'enter', {
                   key: event.key,
@@ -347,7 +349,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               {chat.streaming ? (
                 <Button variant="outline" size="sm" onClick={() => void chat.abort()} title="中止生成"><Square size={12} /></Button>
               ) : (
-                <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.trim() && !chat.messageFiles.length && !chat.attachments.length}><Send size={12} /></Button>
+                <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length}><Send size={12} /></Button>
               )}
             </div>
             {referenceOpen && (

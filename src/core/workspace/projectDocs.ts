@@ -1,4 +1,5 @@
 import type { FileStore } from '../storage/fileStore'
+import { contentRevision } from './resourceRevision'
 
 export const PROJECT_DOC_MAX_BYTES = 256 * 1024
 export const PROJECT_DOC_DEFAULT_CHARS = 20_000
@@ -12,7 +13,7 @@ const RESERVED_NAMES = /^(con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\.[^.]*)?
 
 export interface ProjectDocEntry { path: string; size: number }
 export interface ProjectDocList { files: ProjectDocEntry[]; nextOffset?: number }
-export interface ProjectDocRead { sourcePath: string; content: string; nextOffset?: number; truncated: boolean }
+export interface ProjectDocRead { sourcePath: string; revision: string; content: string; nextOffset?: number; truncated: boolean }
 
 function fail(message: string): never { throw new Error(message) }
 
@@ -59,7 +60,7 @@ export async function readProjectDoc(store: FileStore, rawPath: unknown, offset 
   try { content = decoder.decode(raw) } catch { fail(`项目文档不是有效的 UTF-8 文本：${path}`) }
   const slice = content.slice(offset, offset + maxChars)
   const nextOffset = offset + slice.length < content.length ? offset + slice.length : undefined
-  return { sourcePath: path, content: slice, ...(nextOffset === undefined ? {} : { nextOffset }), truncated: nextOffset !== undefined }
+  return { sourcePath: path, revision: contentRevision(content), content: slice, ...(nextOffset === undefined ? {} : { nextOffset }), truncated: nextOffset !== undefined }
 }
 
 export interface ProjectDocSnapshot { path: string; beforeText: string; afterText: string; existed: boolean }

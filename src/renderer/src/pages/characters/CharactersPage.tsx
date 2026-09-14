@@ -17,6 +17,7 @@ function emptyCharacter(): CharacterDoc {
 
 export function CharactersPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
+  const uiSource = useWorkspace((s) => s.uiSource)
   const refresh = useWorkspace((s) => s.refresh)
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -80,7 +81,7 @@ export function CharactersPage(): React.ReactElement {
   )
 
   const selected = characters.find((c) => c.id === selectedId) ?? null
-  const workspaceKey = summary?.path ?? ''
+  const workspaceKey = useMemo(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : '', [summary?.path, uiSource])
   const characterListRef = useRef<HTMLDivElement | null>(null)
   const characterReadOnlyRef = useRef<HTMLDivElement | null>(null)
   const characterEditorRef = useRef<HTMLDivElement | null>(null)

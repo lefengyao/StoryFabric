@@ -1,5 +1,5 @@
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
-import { normalizeRelativePath, type FileStore } from '../../../core/storage/fileStore'
+import { normalizeRelativePath, type FileStore, type SourceReadResult } from '../../../core/storage/fileStore'
 import { base64ToBytes, bytesToBase64 } from './archiveTransfer'
 
 /** Capacitor Android 应用私有目录适配器；所有路径均相对于一个工作区根目录。 */
@@ -41,6 +41,17 @@ export class CapacitorFileStore implements FileStore {
       return typeof result.data === 'string' ? result.data : null
     } catch {
       return null
+    }
+  }
+
+  async readTextStrict(path: string): Promise<SourceReadResult> {
+    try {
+      const result = await Filesystem.readFile({ path: this.path(path), directory: Directory.Data, encoding: Encoding.UTF8 })
+      if (typeof result.data !== 'string') return { ok: false, code: 'TEXT_DECODE_ERROR' }
+      return { ok: true, text: result.data }
+    } catch {
+      const exists = await this.exists(path).catch(() => false)
+      return { ok: false, code: exists ? 'IO_ERROR' : 'NOT_FOUND' }
     }
   }
 

@@ -27,4 +27,21 @@ describe('bounded project retrieval', () => {
     expect((await lookupTerm(store, '星门'))[0].kind).toBe('chapter')
     expect((await searchIndex(store, '星门')).every((hit) => !hit.snippet.includes('第1章正文 第1章正文'))).toBe(true)
   })
+
+  it('keeps draft and mainline context separate and rejects invalid limits', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '上下文')
+    await saveChapter(store, { id: 'cha_a', title: '正文 A', box: 'main', volumeId: 'vol_default', order: 1, content: 'A' })
+    await saveChapter(store, { id: 'cha_x', title: '草稿 X', box: 'draft', order: 2, content: 'X' })
+    await saveChapter(store, { id: 'cha_b', title: '正文 B', box: 'main', volumeId: 'vol_default', order: 3, content: 'B' })
+
+    const main = await getChapterContext(store, 'cha_a', { radius: 1, maxChars: 1200 })
+    expect(main.next.map((item) => item.id)).toEqual(['cha_b'])
+    const draft = await getChapterContext(store, 'cha_x', { radius: 2, maxChars: 1200 })
+    expect(draft.previous).toEqual([])
+    expect(draft.next).toEqual([])
+
+    await expect(getChapterContext(store, 'cha_a', { radius: 1.5 })).rejects.toThrow('radius')
+    await expect(getChapterContext(store, 'cha_a', { maxChars: 20001 })).rejects.toThrow('maxChars')
+  })
 })

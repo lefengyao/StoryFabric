@@ -2,17 +2,18 @@ import type { FileStore } from '../storage/fileStore'
 import type { EntityKind, PendingChange, ToolDefJson } from '../../shared/types'
 import { applyProjectDocSnapshot, listProjectDocs, readProjectDoc, snapshotProjectDoc } from '../workspace/projectDocs'
 import type { ToolOutcome } from './registry'
+import { contentRevision } from '../workspace/resourceRevision'
 
 export const PROJECT_DOC_TOOL_DEFS: ToolDefJson[] = [
   { name: 'list_project_docs', description: '列出 docs 中的项目规划和临时参考文档，不返回正文。', parameters: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } } } },
   { name: 'read_project_doc', description: '按需读取 docs 中的一篇 Markdown 或 TXT 文档，支持分段读取。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 50000 } }, required: ['path'] } },
-  { name: 'save_project_doc', description: '保存 docs 中的一篇 Markdown 或 TXT 文档；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } }
+  { name: 'save_project_doc', description: '保存 docs 中的一篇 Markdown 或 TXT 文档；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['path', 'content'] } }
 ]
 
 const known: Record<string, string[]> = {
   list_project_docs: ['offset', 'limit'],
   read_project_doc: ['path', 'offset', 'maxChars'],
-  save_project_doc: ['path', 'content']
+  save_project_doc: ['path', 'content', 'baseRevision']
 }
 
 function clip(text: string, max = 160): string { return text.length > max ? `${text.slice(0, max)}…` : text }
@@ -31,6 +32,10 @@ export async function executeProjectDocTool(store: FileStore, name: string, args
   }
   if (name !== 'save_project_doc') throw new Error(`未知项目文档工具：${name}`)
   const snapshot = await snapshotProjectDoc(store, args.path, args.content)
+  if (snapshot.existed && (typeof args.baseRevision !== 'string' || contentRevision(snapshot.beforeText) !== args.baseRevision)) {
+    throw new Error('更新项目文档必须提供当前 baseRevision；请重新读取后提交')
+  }
+  if (!snapshot.existed && args.baseRevision !== undefined) throw new Error('新建项目文档不能提供 baseRevision')
   const change: PendingChange = {
     id: `chg_${Date.now().toString(36)}`,
     toolName: name,

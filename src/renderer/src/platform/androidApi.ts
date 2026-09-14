@@ -105,6 +105,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
   private settings: PublicAppSettings = { ...DEFAULT_PUBLIC }
   private agent: CoreAgentService | null = null
 
+  getUiSource(): string { return 'android-local' }
+
   private keyName(providerId: string): string { return `provider-api-key:${providerId}` }
 
   private async keyOf(providerId: string): Promise<string> {

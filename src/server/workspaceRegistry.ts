@@ -94,6 +94,7 @@ export class RevalidatedFileStore implements FileStore {
   async exists(path: string): Promise<boolean> { return (await this.loadStore()).exists(path) }
   async ensureDir(path: string): Promise<void> { return (await this.loadStore()).ensureDir(path) }
   async readText(path: string): Promise<string | null> { return (await this.loadStore()).readText(path) }
+  async readTextStrict(path: string): Promise<import('../core/storage/fileStore').SourceReadResult> { return (await this.loadStore()).readTextStrict(path) }
   async writeText(path: string, text: string): Promise<void> { return (await this.loadStore()).writeText(path, text) }
   async readBytes(path: string): Promise<Uint8Array | null> { return (await this.loadStore()).readBytes(path) }
   async writeBytes(path: string, bytes: Uint8Array): Promise<void> { return (await this.loadStore()).writeBytes(path, bytes) }

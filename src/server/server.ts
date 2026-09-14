@@ -347,7 +347,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const session = existing ?? await runtime.sessions.create()
         if (!existing) await runtime.sessions.save(session)
         const next = { ...request, sessionId: session.id }
-        void serializeWorkspace(runtime, () => runtime.agent.run(next)).catch((error) => {
+        void runtime.agent.run(next).catch((error) => {
           events.emit({ workspaceId, sessionId: session.id, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
           events.emit({ workspaceId, sessionId: session.id, event: { type: 'done' } })
         })

@@ -82,6 +82,8 @@ export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
 }
 
 export interface StoryFabricApi {
+  /** Renderer-only, non-sensitive source identity used for UI state partitioning. */
+  getUiSource?(): string
   /* 剪贴板 */
   clipboardReadText?(): Promise<string>
   clipboardWriteText?(text: string): Promise<void>

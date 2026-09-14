@@ -19,6 +19,13 @@ export function installPlatformApi(api: StoryFabricApi): void {
   installedApi = api
 }
 
+export function getPlatformUiSource(api: StoryFabricApi = getPlatformApi()): string {
+  if (api.getUiSource) return api.getUiSource()
+  if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.()) return 'android-local'
+  if (typeof window !== 'undefined' && window.api) return 'electron-local'
+  return 'http:same-origin'
+}
+
 /** Returns the native/local implementation even after a remote API was installed. */
 export function getLocalPlatformApi(): StoryFabricApi {
   if (typeof window !== 'undefined' && window.api) return window.api

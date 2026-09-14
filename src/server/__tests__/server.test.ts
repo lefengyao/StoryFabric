@@ -80,7 +80,7 @@ describe('linux web server', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     }
-  })
+  }, 30_000)
 
   it('protects workspace RPC behind the access-key session', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-server-'))

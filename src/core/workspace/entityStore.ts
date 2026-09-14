@@ -13,6 +13,7 @@ import type {
   SettingDoc,
   SettingMeta,
   StoryEvent,
+  TrashEntry,
   NoteDoc,
   NoteMeta,
   TermAnnotation
@@ -24,6 +25,7 @@ import { searchIndex } from '../retrieval/projectIndex'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 import { normalizeChapterContent } from './chapterFormatting'
 import { removeEventFromGraph } from './eventGraph'
+import { commitTextChanges, type JournalTextChange } from './mutationJournal'
 
 export function genId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8)
@@ -108,6 +110,10 @@ export async function listCharacters(store: FileStore): Promise<CharacterDoc[]> 
   return (await loadCharacters(store)).map((x) => x.doc)
 }
 
+export async function loadCharacterDocuments(store: FileStore): Promise<Array<{ doc: CharacterDoc; fileName: string }>> {
+  return loadCharacters(store)
+}
+
 function characterFrontmatter(c: CharacterDoc): Record<string, unknown> {
   const { content: _content, ...metadata } = c as CharacterDoc & Record<string, unknown>
   return { ...metadata, id: c.id, name: c.name, aliases: c.aliases, tier: c.tier ?? 'secondary', role: c.role, faction: c.faction, gender: c.gender, age: c.age, tags: c.tags, summary: c.summary }
@@ -160,6 +166,11 @@ export async function loadRelationships(store: FileStore): Promise<Relationship[
   }
 }
 
+export async function loadRelationshipDocuments(store: FileStore): Promise<{ doc: Relationship[]; fileName: string } | null> {
+  if (!(await store.exists('relationships.json'))) return null
+  return { doc: await loadRelationships(store), fileName: 'relationships.json' }
+}
+
 export async function saveRelationships(store: FileStore, list: Relationship[]): Promise<void> {
   await store.ensureDir('')
   const seen = new Set<string>()
@@ -188,6 +199,7 @@ async function loadOutlines(store: FileStore): Promise<Stored<OutlineDoc>[]> {
 }
 
 export async function listOutline(store: FileStore): Promise<OutlineDoc[]> { return (await loadOutlines(store)).map((x) => x.doc) }
+export async function loadOutlineDocuments(store: FileStore): Promise<Array<{ doc: OutlineDoc; fileName: string }>> { return loadOutlines(store) }
 export function serializeOutlineDoc(d: OutlineDoc): string { const { content: _content, ...metadata } = d as OutlineDoc & Record<string, unknown>; return stringifyFrontMatter(d.content ?? '', { ...metadata, id: d.id, title: d.title, order: d.order, kind: d.kind ?? 'total', ...(d.chapterId ? { chapterId: d.chapterId } : {}) }) }
 
 export async function saveOutlineDoc(store: FileStore, input: Partial<OutlineDoc> & { id?: string }): Promise<OutlineDoc> {
@@ -226,6 +238,7 @@ async function loadEvents(store: FileStore): Promise<Stored<StoryEvent>[]> {
 }
 
 export async function listEvents(store: FileStore): Promise<StoryEvent[]> { return (await loadEvents(store)).map((x) => x.doc) }
+export async function loadEventDocuments(store: FileStore): Promise<Array<{ doc: StoryEvent; fileName: string }>> { return loadEvents(store) }
 export function serializeEvent(e: StoryEvent): string { const { content: _content, ...metadata } = e as StoryEvent & Record<string, unknown>; return stringifyFrontMatter(e.content ?? '', { ...metadata, id: e.id, title: e.title, volumeId: e.volumeId ?? 'vol_default', storyTime: e.storyTime, order: e.order, location: e.location, tags: e.tags, characterIds: e.characterIds, prevIds: e.prevIds, nextIds: e.nextIds, branchIds: e.branchIds ?? [], ...(e.branchFromId ? { branchFromId: e.branchFromId } : {}) }) }
 
 export async function saveEvent(store: FileStore, input: Partial<StoryEvent> & { id?: string }): Promise<StoryEvent> {
@@ -252,18 +265,46 @@ export async function deleteEvent(store: FileStore, id: string): Promise<void> {
   if (!hit) return
   const healed = removeEventFromGraph(all.map((item) => item.doc), id)
   const healedById = new Map(healed.map((event) => [event.id, event]))
+  const neighbors: NonNullable<TrashEntry['eventConnections']>['neighbors'] = []
+  const changes: JournalTextChange[] = []
   for (const item of all) {
     if (item.doc.id === id) continue
     const next = healedById.get(item.doc.id)
     if (next && JSON.stringify(next) !== JSON.stringify(item.doc)) {
-      await store.writeText(`events/${item.fileName}`, serializeEvent(next))
+      neighbors.push({
+        id: item.doc.id,
+        before: {
+          prevIds: item.doc.prevIds,
+          nextIds: item.doc.nextIds,
+          branchIds: item.doc.branchIds ?? [],
+          branchFromId: item.doc.branchFromId
+        },
+        after: {
+          prevIds: next.prevIds,
+          nextIds: next.nextIds,
+          branchIds: next.branchIds ?? [],
+          branchFromId: next.branchFromId
+        }
+      })
+      changes.push({
+        path: `events/${item.fileName}`,
+        beforeText: serializeEvent(item.doc),
+        afterText: serializeEvent(next)
+      })
     }
   }
-  await moveToTrash(store, makeTrashEntry({ id, kind: 'event', originalPath: `events/${hit.fileName}`, title: hit.doc.title }))
+  const transaction = await commitTextChanges(store, `delete-event-${id}-${Date.now()}`, changes, () => moveToTrash(store, makeTrashEntry({
+      id,
+      kind: 'event',
+      originalPath: `events/${hit.fileName}`,
+      title: hit.doc.title,
+      eventConnections: { event: hit.doc, neighbors }
+    })))
+  if (!transaction.ok) throw new Error(transaction.text)
   await invalidateProjectIndex(store)
 }
 
-interface StoredSetting { fileName: string; doc: SettingDoc }
+export interface StoredSetting { fileName: string; doc: SettingDoc }
 
 async function loadSettings(store: FileStore): Promise<StoredSetting[]> {
   const out: StoredSetting[] = []
@@ -281,6 +322,10 @@ async function loadSettings(store: FileStore): Promise<StoredSetting[]> {
 
 export async function listSettings(store: FileStore): Promise<SettingMeta[]> {
   return (await loadSettings(store)).map(({ doc: { content: _content, ...meta } }) => meta)
+}
+
+export async function loadSettingDocuments(store: FileStore): Promise<StoredSetting[]> {
+  return loadSettings(store)
 }
 
 export async function getSetting(store: FileStore, id: string): Promise<SettingDoc | null> {
@@ -314,7 +359,7 @@ export async function deleteSetting(store: FileStore, id: string): Promise<void>
   await invalidateProjectIndex(store)
 }
 
-interface StoredNote { fileName: string; doc: NoteDoc }
+export interface StoredNote { fileName: string; doc: NoteDoc }
 
 async function loadNotes(store: FileStore): Promise<StoredNote[]> {
   const out: StoredNote[] = []
@@ -340,6 +385,10 @@ async function loadNotes(store: FileStore): Promise<StoredNote[]> {
 
 export async function listNotes(store: FileStore): Promise<NoteMeta[]> {
   return (await loadNotes(store)).map(({ doc: { content: _content, ...meta } }) => meta)
+}
+
+export async function loadNoteDocuments(store: FileStore): Promise<StoredNote[]> {
+  return loadNotes(store)
 }
 
 export async function getNote(store: FileStore, id: string): Promise<NoteDoc | null> {
@@ -392,6 +441,7 @@ async function loadChapters(store: FileStore): Promise<Stored<ChapterDoc>[]> {
 }
 
 export async function listChapters(store: FileStore): Promise<ChapterMeta[]> { return (await loadChapters(store)).map(({ doc: { content: _content, ...meta } }) => meta) }
+export async function loadChapterDocuments(store: FileStore): Promise<Array<{ doc: ChapterDoc; fileName: string }>> { return loadChapters(store) }
 export async function getChapterBody(store: FileStore, id: string): Promise<string | null> { return (await loadChapters(store)).find((x) => x.doc.id === id)?.doc.content ?? null }
 export function serializeChapter(c: ChapterDoc): string { const { content: _content, ...metadata } = c as ChapterDoc & Record<string, unknown>; return stringifyFrontMatter(normalizeChapterContent(c.content ?? ''), { ...metadata, id: c.id, title: c.title, volume: c.volume, volumeId: c.volumeId ?? 'vol_default', box: c.box ?? 'main', terms: c.terms ?? [], order: c.order, status: c.status }) }
 

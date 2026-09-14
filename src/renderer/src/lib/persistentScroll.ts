@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import type { MutableRefObject } from 'react'
+import type { UiWorkspaceIdentity } from './workspaceUiScope'
 
 export type ScrollPosition = { top: number; left: number }
 
@@ -7,6 +8,15 @@ const SCROLL_STORAGE_PREFIX = 'storyfabric.ui.scroll-position.v1'
 
 export function scrollStorageKey(workspaceId: string, scope: string): string {
   return `${SCROLL_STORAGE_PREFIX}:${encodeURIComponent(workspaceId)}:${encodeURIComponent(scope)}`
+}
+
+type ScrollWorkspace = string | UiWorkspaceIdentity
+
+function workspaceKey(workspace: ScrollWorkspace): { current: string; legacy: string | null } {
+  if (typeof workspace === 'string') return { current: workspace, legacy: null }
+  const current = JSON.stringify([workspace.source, workspace.path])
+  const legacy = workspace.source === 'electron-local' || workspace.source === 'android-local' ? workspace.path : null
+  return { current, legacy }
 }
 
 export function readScrollPosition(storage: Storage | null, key: string): ScrollPosition | null {
@@ -57,18 +67,19 @@ function getLocalStorage(): Storage | null {
 
 export function usePersistentScrollPosition(
   ref: MutableRefObject<HTMLElement | null>,
-  workspaceId: string,
+  workspace: ScrollWorkspace,
   scope: string,
   enabled = true
 ): void {
   useEffect(() => {
-    if (!enabled || !workspaceId) return
+    const resolvedWorkspace = workspaceKey(workspace)
+    if (!enabled || !resolvedWorkspace.current) return
 
     let element: HTMLElement | null
     let key: string
     try {
       element = ref.current
-      key = scrollStorageKey(workspaceId, scope)
+      key = scrollStorageKey(resolvedWorkspace.current, scope)
     } catch {
       return
     }
@@ -76,14 +87,17 @@ export function usePersistentScrollPosition(
 
     const storage = getLocalStorage()
     let timer: ReturnType<typeof setTimeout> | null = null
-    let pending = false
+    let pending: ScrollPosition | null = null
     let disposed = false
+    let restoring = true
+    let frame: number | null = null
 
     const flush = () => {
       if (!pending) return
-      pending = false
+      const position = pending
+      pending = null
       try {
-        writeScrollPosition(storage, key, { top: element.scrollTop, left: element.scrollLeft })
+        writeScrollPosition(storage, key, position)
       } catch {
         // DOM access errors must not affect the page.
       }
@@ -91,7 +105,7 @@ export function usePersistentScrollPosition(
 
     const onScroll = () => {
       if (disposed) return
-      pending = true
+      pending = { top: element.scrollTop, left: element.scrollLeft }
       if (timer !== null) {
         try {
           clearTimeout(timer)
@@ -117,14 +131,22 @@ export function usePersistentScrollPosition(
 
     try {
       if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          frame = null
           if (disposed) return
           try {
-            const position = readScrollPosition(storage, key)
+            const position = readScrollPosition(storage, key) ?? (resolvedWorkspace.legacy ? readScrollPosition(storage, scrollStorageKey(resolvedWorkspace.legacy, scope)) : null)
             if (position) {
-              element.scrollTop = position.top
-              element.scrollLeft = position.left
+              const maxTop = Number.isFinite(element.scrollHeight) && Number.isFinite(element.clientHeight) ? Math.max(0, element.scrollHeight - element.clientHeight) : position.top
+              const maxLeft = Number.isFinite(element.scrollWidth) && Number.isFinite(element.clientWidth) ? Math.max(0, element.scrollWidth - element.clientWidth) : position.left
+              element.scrollTop = Math.min(position.top, maxTop)
+              element.scrollLeft = Math.min(position.left, maxLeft)
+            } else {
+              element.scrollTop = 0
+              element.scrollLeft = 0
             }
+            pending = null
+            restoring = false
           } catch {
             // DOM/storage errors must not affect the page.
           }
@@ -144,6 +166,11 @@ export function usePersistentScrollPosition(
         }
         timer = null
       }
+      if (frame !== null && typeof cancelAnimationFrame === 'function') {
+        try { cancelAnimationFrame(frame) } catch { /* best effort */ }
+        frame = null
+      }
+      restoring = false
       flush()
       try {
         element.removeEventListener('scroll', onScroll)
@@ -151,5 +178,5 @@ export function usePersistentScrollPosition(
         // A detached or unusual element may reject event removal.
       }
     }
-  }, [enabled, ref, scope, workspaceId])
+  }, [enabled, ref, scope, workspace])
 }

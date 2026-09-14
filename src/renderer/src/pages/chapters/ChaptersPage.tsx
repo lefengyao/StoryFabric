@@ -8,6 +8,8 @@ import { createAutosave } from '../../lib/autosave'
 import { copyPlainText } from '../../lib/clipboard'
 import { canSwitchDocument } from '../../lib/documentSwitch'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
+import { chapterReadingStorageKey, readChapterReadingState, resolveChapterTarget, writeChapterReadingState, type ChapterReadingState } from '../../lib/chapterReadingState'
+import type { UiWorkspaceIdentity } from '../../lib/workspaceUiScope'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
 import { useChat } from '../../stores/chatStore'
@@ -23,6 +25,7 @@ const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
 
 export function ChaptersPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
+  const uiSource = useWorkspace((s) => s.uiSource)
   const refresh = useWorkspace((s) => s.refresh)
   const setAttachments = useChat((s) => s.setAttachments)
   const openChatPanel = useUi((s) => s.openChatPanel)
@@ -30,7 +33,7 @@ export function ChaptersPage(): React.ReactElement {
   const [box, setBox] = useState<ChapterBox>('main')
   const [trashItems, setTrashItems] = useState<TrashEntry[]>([])
   const chapters = useMemo(() => [...(summary?.chapters ?? [])].filter((c) => (c.box ?? 'main') === box).sort((a, b) => a.order - b.order), [summary?.chapters, box])
-  const [selectedId, setSelectedId] = useState<string | null>(chapters[0]?.id ?? null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<(Partial<ChapterDoc> & { id?: string }) | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -42,41 +45,131 @@ export function ChaptersPage(): React.ReactElement {
   /** 打开（或最近一次同步）时的磁盘内容，用于检测智能体等外部修改 */
   const baseRef = useRef<string>('')
   const openRequestRef = useRef(0)
+  const initialWorkspaceRef = useRef<string | null>(null)
+  const readingStateRef = useRef<ChapterReadingState | null>(null)
+  const [chapterError, setChapterError] = useState<string | null>(null)
+  const [failedChapterId, setFailedChapterId] = useState<string | null>(null)
+  const [editorReady, setEditorReady] = useState(false)
   const lastApplied = useChat((s) => s.lastAppliedChange)
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
   const volumes = summary?.volumes ?? []
-  const workspaceKey = summary?.path ?? ''
+  const workspaceIdentity = useMemo<UiWorkspaceIdentity | null>(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : null, [summary?.path, uiSource])
+  const workspaceKey = workspaceIdentity ?? ''
   const chapterListRef = useRef<HTMLDivElement | null>(null)
   const chapterReadOnlyRef = useRef<HTMLDivElement | null>(null)
   const chapterEditorRef = useRef<HTMLDivElement | null>(null)
   const chapterReaderRef = draft ? chapterEditorRef : chapterReadOnlyRef
 
   usePersistentScrollPosition(chapterListRef, workspaceKey, `chapters:list:${box}`)
-  usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`)
+  usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`, Boolean(draft && editorReady))
 
   useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
 
-  const openChapter = async (meta: { id: string }): Promise<void> => {
-    const target = chapters.find((chapter) => chapter.id === meta.id)
+  const persistReading = (patch: Partial<ChapterReadingState>): void => {
+    if (!workspaceIdentity) return
+    const storage = (() => { try { return globalThis.localStorage } catch { return null } })()
+    const current = readingStateRef.current ?? { version: 1 as const, activeBox: box === 'trash' ? 'trash' : box, lastChapterByBox: {}, updatedAt: 0 }
+    const next = { ...current, ...patch, updatedAt: Date.now() }
+    readingStateRef.current = next
+    writeChapterReadingState(storage, chapterReadingStorageKey(JSON.stringify([workspaceIdentity.source, workspaceIdentity.path])), next)
+  }
+
+  const loadChapter = async (id: string, requestedBox: Exclude<ChapterBox, 'trash'>, force = false): Promise<void> => {
+    const target = [...(summary?.chapters ?? [])].filter((chapter) => (chapter.box ?? 'main') === requestedBox).find((chapter) => chapter.id === id)
     if (!target) return
+    if (!force && draft?.id === target.id) return
     if (!canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: target.id, dirty, confirmDiscard: () => window.confirm('当前章节有未保存的修改，放弃并切换？') })) return
     const requestId = ++openRequestRef.current
-    const body = await api.getChapterBody(meta.id)
+    setChapterError(null)
+    setFailedChapterId(null)
+    setEditorReady(false)
+    let body: string | null
+    try {
+      body = await api.getChapterBody(id)
+    } catch (error) {
+      if (requestId === openRequestRef.current) { setChapterError(error instanceof Error ? error.message : String(error)); setFailedChapterId(id) }
+      return
+    }
     if (requestId !== openRequestRef.current) return
-    baseRef.current = body ?? ''
+    if (body === null) {
+      setChapterError('章节正文不存在或无法读取，请重试。')
+      setFailedChapterId(id)
+      return
+    }
+    baseRef.current = body
+    setBox(requestedBox)
     setSelectedId(target.id)
-    setDraft({ ...target, content: body ?? '' })
+    setDraft({ ...target, content: body })
     setDirty(false)
     setReloadHint(false)
+    persistReading({ activeBox: requestedBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [requestedBox]: target.id } })
   }
+
+  const openChapter = async (meta: { id: string }): Promise<void> => { await loadChapter(meta.id, box === 'trash' ? 'main' : box) }
+
+  const changeBox = (next: ChapterBox): void => {
+    if (next === box) return
+    if (!canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: null, dirty, confirmDiscard: () => window.confirm('当前章节有未保存的修改，放弃并切换？') })) return
+    openRequestRef.current += 1
+    setBox(next)
+    setSelectedId(null)
+    setDraft(null)
+    setDirty(false)
+    setChapterError(null)
+    setFailedChapterId(null)
+    setEditorReady(false)
+    persistReading({ activeBox: next })
+    if (next !== 'trash') {
+      const target = resolveChapterTarget(readingStateRef.current, {
+        main: [...(summary?.chapters ?? [])].filter((chapter) => (chapter.box ?? 'main') === 'main'),
+        draft: [...(summary?.chapters ?? [])].filter((chapter) => (chapter.box ?? 'main') === 'draft')
+      })
+      if (target.box === next && target.chapterId) void loadChapter(target.chapterId, next, true)
+    }
+  }
+
+  useEffect(() => {
+    if (!summary || !workspaceIdentity) return
+    const key = JSON.stringify([workspaceIdentity.source, workspaceIdentity.path])
+    if (initialWorkspaceRef.current === key) return
+    initialWorkspaceRef.current = key
+    openRequestRef.current += 1
+    const storage = (() => { try { return globalThis.localStorage } catch { return null } })()
+    const remembered = readChapterReadingState(storage, chapterReadingStorageKey(key))
+    readingStateRef.current = remembered
+    const target = resolveChapterTarget(remembered, {
+      main: [...summary.chapters].filter((chapter) => (chapter.box ?? 'main') === 'main'),
+      draft: [...summary.chapters].filter((chapter) => (chapter.box ?? 'main') === 'draft')
+    })
+    setBox(target.box)
+    setSelectedId(null)
+    setDraft(null)
+    setDirty(false)
+    setEditorReady(false)
+    if (target.box === 'trash' || !target.chapterId) return
+    void loadChapter(target.chapterId, target.box, true)
+    // Initial restoration is intentionally keyed only by the opened workspace.
+    // Metadata refreshes must not replace an editor the user is already working in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary?.path, uiSource])
 
   /** 拉取当前打开章节的最新磁盘内容并同步到草稿 */
   const reloadOpen = async (): Promise<void> => {
     if (!draft?.id) return
-    const body = await api.getChapterBody(draft.id)
-    baseRef.current = body ?? ''
-    setDraft((d) => (d ? { ...d, content: body ?? '' } : d))
+    let body: string | null
+    try {
+      body = await api.getChapterBody(draft.id)
+    } catch (error) {
+      setChapterError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (body === null) {
+      setChapterError('章节正文不存在或无法读取，请重试。')
+      return
+    }
+    baseRef.current = body
+    setDraft((d) => (d ? { ...d, content: body } : d))
     setDirty(false)
     setReloadHint(false)
   }
@@ -206,9 +299,9 @@ export function ChaptersPage(): React.ReactElement {
         <div className="shrink-0 border-b border-line px-3 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <div role="tablist" aria-label="章节箱" className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
-              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'draft' ? 'soft' : 'ghost'} onClick={() => { setBox('draft'); setSelectedId(null); setDraft(null) }}>草稿箱</Button>
-              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'main' ? 'soft' : 'ghost'} onClick={() => { setBox('main'); setSelectedId(null); setDraft(null) }}>正文箱</Button>
-              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'trash' ? 'soft' : 'ghost'} onClick={() => { setBox('trash'); setSelectedId(null); setDraft(null) }}>
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'draft' ? 'soft' : 'ghost'} onClick={() => changeBox('draft')}>草稿箱</Button>
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'main' ? 'soft' : 'ghost'} onClick={() => changeBox('main')}>正文箱</Button>
+              <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'trash' ? 'soft' : 'ghost'} onClick={() => changeBox('trash')}>
                 <ArchiveRestore size={13} className="shrink-0" />
                 <span className="hidden min-[420px]:inline">回收站</span>
                 <span className="min-[420px]:hidden">回收</span>
@@ -265,7 +358,12 @@ export function ChaptersPage(): React.ReactElement {
       {/* 编辑区 */}
       {!draft ? (
         <div ref={chapterReaderRef} className="flex-1 overflow-y-auto">
-          {selected ? (
+          {chapterError ? (
+            <div className="mx-auto flex max-w-xl flex-col items-center gap-3 p-10 text-center">
+              <EmptyState icon={<BookOpen size={28} />} title="章节正文加载失败" hint={chapterError} />
+              {failedChapterId && box !== 'trash' && <Button variant="outline" onClick={() => void loadChapter(failedChapterId, box)}>重试</Button>}
+            </div>
+          ) : selected ? (
             <div className="mx-auto max-w-3xl p-8">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">{selected.title}</h2>
@@ -363,7 +461,13 @@ export function ChaptersPage(): React.ReactElement {
           )}
 
           <div className="min-h-0 flex-1 p-4">
-            <MarkdownEditor value={draft.content ?? ''} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} scrollRef={chapterReaderRef} />
+            <MarkdownEditor
+              value={draft.content ?? ''}
+              documentId={draft.id}
+              onLayoutReady={(documentId) => { if (documentId === draft.id) setEditorReady(true) }}
+              onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }}
+              scrollRef={chapterReaderRef}
+            />
           </div>
 
           <div className="flex h-8 shrink-0 items-center border-t border-line px-4 text-xs text-faint">

@@ -3,10 +3,11 @@ import type { AgentEvent, ChatSession, ModelSettings, UsageRecord } from '../../
 import type { LlmAdapter, LlmAdapterFactory, StreamRequest, StreamResult } from '../../llm/types'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
-import { deleteNote, listNotes, saveNote } from '../../workspace/entityStore'
+import { deleteNote, findCharacter, listNotes, saveCharacter, saveNote } from '../../workspace/entityStore'
 import { listTrash } from '../../workspace/trash'
 import { CoreSessionStore } from '../../workspace/sessionStore'
 import { CoreAgentService } from '../agentLoop'
+import { searchProjectPage } from '../../retrieval/projectIndex'
 
 const providerId = 'prov_openai'
 
@@ -99,6 +100,93 @@ describe('CoreAgentService', () => {
     expect(requests).toHaveLength(3)
     expect(session.messages.at(-1)?.text).toContain('连续 3 轮调用完全相同的工具和参数')
     expect(session.messages.at(-1)?.text).not.toContain('上限（10 轮）')
+  })
+
+  it('emits applied only after the write promise resolves', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const scripted = scriptedFactory([call('w1', 'save_note', { note: { title: '确认', content: 'x' } }), text('完成')])
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const service = new CoreAgentService({
+      store,
+      sessions: new CoreSessionStore(store),
+      settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+      getAdapter: scripted.factory,
+      emit: (_sid, event) => events.push(event),
+      executeTool: async (name, argsJson) => {
+        if (name !== 'save_note') throw new Error(`unexpected tool: ${name}`)
+        return {
+          kind: 'pending',
+          change: {
+            id: 'chg_gate',
+            toolName: name,
+            entityKind: 'note',
+            entityId: 'note_gate',
+            title: '保存便签',
+            beforeText: '',
+            afterText: JSON.parse(argsJson).note.content
+          },
+          apply: async () => {
+            await gate
+            return { ok: true, text: '已写入' }
+          }
+        }
+      }
+    })
+
+    const run = service.run({ message: '写一条', providerId, model: 'mock-model' })
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'pending-change')).toBe(true))
+    service.confirmChange('chg_gate', true)
+    await Promise.resolve()
+    expect(events.some((event) => event.type === 'change-result')).toBe(false)
+    release()
+    await run
+    expect(events.some((event) => event.type === 'change-result' && event.status === 'applied')).toBe(true)
+    expect(events.some((event) => event.type === 'change-applied')).toBe(false)
+  })
+
+  it('runs a complete search-read-update-verify tool loop with a fake model', async () => {
+    const store = await createStore()
+    const character = await saveCharacter(store, { name: '旧名', content: `${'铺垫'.repeat(800)}旧名` })
+    const events: AgentEvent[] = []
+    let service: CoreAgentService
+    const adapter: LlmAdapter = {
+      stream: async (_model, request) => {
+        const toolMessages = request.messages.filter((message) => message.role === 'tool')
+        if (toolMessages.length === 0) return call('s1', 'search_project', { query: '旧名', limit: 20 })
+        if (toolMessages.length === 1) {
+          const page = JSON.parse(toolMessages[0].text ?? '{}') as { hits: Array<{ id: string }> }
+          return call('c1', 'get_character', { characterId: page.hits[0].id })
+        }
+        if (toolMessages.length === 2) {
+          const current = JSON.parse(toolMessages[1].text ?? '{}') as { id: string; revision: string; content: string }
+          return call('w1', 'save_character', {
+            character: { id: current.id, baseRevision: current.revision, name: '新名', content: current.content.replaceAll('旧名', '新名') }
+          })
+        }
+        if (toolMessages.length === 3) return call('s2', 'search_project', { query: '旧名', limit: 100 })
+        return text('已修改并复核。')
+      }
+    }
+    service = new CoreAgentService({
+      store,
+      sessions: new CoreSessionStore(store),
+      settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+      getAdapter: () => adapter,
+      emit: (_sid, event) => {
+        events.push(event)
+        if (event.type === 'pending-change') queueMicrotask(() => service.confirmChange(event.change.id, true))
+      }
+    })
+
+    await service.run({ message: '把旧名改为新名并复查', providerId, model: 'mock-model' })
+    const oldNamePage = await searchProjectPage(store, { query: '旧名', limit: 100 })
+    const newNamePage = await searchProjectPage(store, { query: '新名', limit: 100 })
+    expect(oldNamePage.totalMatches).toBe(0)
+    expect(newNamePage.totalMatches).toBeGreaterThan(0)
+    expect((await findCharacter(store, { id: character.id }))?.content).toContain('新名')
+    expect(events.some((event) => event.type === 'change-result' && event.status === 'applied')).toBe(true)
   })
 
   it('上下文接近上限时先压缩较早对话，再携带摘要继续请求', async () => {

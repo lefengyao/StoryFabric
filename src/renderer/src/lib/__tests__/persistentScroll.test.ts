@@ -180,5 +180,42 @@ describe('persistentScroll', () => {
 
       expect(() => runEffect?.()).not.toThrow()
     })
+
+    it('reads legacy path positions only for local workspace identities', () => {
+      const storage = createStorage()
+      const localKey = scrollStorageKey('workspace', 'outline')
+      storage.values.set(localKey, JSON.stringify({ top: 18, left: 2 }))
+      Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+      const frames: FrameRequestCallback[] = []
+      Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, value: (callback: FrameRequestCallback) => { frames.push(callback); return 1 } })
+      const localElement = { scrollTop: 0, scrollLeft: 0, addEventListener: vi.fn(), removeEventListener: vi.fn(), scrollHeight: 1000, clientHeight: 100, scrollWidth: 100, clientWidth: 10 } as unknown as HTMLElement
+      usePersistentScrollPosition({ current: localElement } as MutableRefObject<HTMLElement | null>, { source: 'electron-local', path: 'workspace' }, 'outline')
+      runEffect?.()
+      frames[0](0)
+      expect(localElement.scrollTop).toBe(18)
+
+      const remoteElement = { ...localElement, scrollTop: 0, scrollLeft: 0 } as unknown as HTMLElement
+      usePersistentScrollPosition({ current: remoteElement } as MutableRefObject<HTMLElement | null>, { source: 'http:https://server.example', path: 'workspace' }, 'outline')
+      runEffect?.()
+      frames[1](0)
+      expect(remoteElement.scrollTop).toBe(0)
+    })
+
+    it('stores the position captured by the scroll event, not a later DOM value', () => {
+      const storage = createStorage()
+      Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+      Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, value: (callback: FrameRequestCallback) => { callback(0); return 1 } })
+      const listeners = new Map<string, EventListener>()
+      const element = { scrollTop: 20, scrollLeft: 3, addEventListener: (type: string, listener: EventListener) => listeners.set(type, listener), removeEventListener: vi.fn() } as unknown as HTMLElement
+      usePersistentScrollPosition({ current: element } as MutableRefObject<HTMLElement | null>, 'workspace', 'outline')
+      const cleanup = runEffect?.()
+      element.scrollTop = 20
+      element.scrollLeft = 3
+      listeners.get('scroll')?.({} as Event)
+      element.scrollTop = 900
+      element.scrollLeft = 900
+      cleanup?.()
+      expect(readScrollPosition(storage, scrollStorageKey('workspace', 'outline'))).toEqual({ top: 20, left: 3 })
+    })
   })
 })

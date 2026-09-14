@@ -12,6 +12,7 @@ import { useWorkspace } from '../../stores/workspaceStore'
 
 export function OutlinePage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
+  const uiSource = useWorkspace((s) => s.uiSource)
   const refresh = useWorkspace((s) => s.refresh)
   const docs = summary?.outline ?? []
   const chapters = summary?.chapters ?? []
@@ -36,7 +37,7 @@ export function OutlinePage(): React.ReactElement {
     return !chapterId || doc.chapterId === chapterId
   }), [chapterById, chapterId, docs, kind, volumeId])
   const selected = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0] ?? null
-  const workspaceKey = summary?.path ?? ''
+  const workspaceKey = useMemo(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : '', [summary?.path, uiSource])
   const outlineListRef = useRef<HTMLDivElement | null>(null)
   const outlineReadOnlyRef = useRef<HTMLDivElement | null>(null)
   const outlineEditorRef = useRef<HTMLDivElement | null>(null)

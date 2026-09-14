@@ -14,6 +14,34 @@ describe('desktop tool registry parity', () => {
     expect(MAIN_TOOL_DEFS).toEqual(CORE_TOOL_DEFS)
   })
 
+  it('uses the same validation and failure text for empty create payloads', async () => {
+    const memory = new MemoryFileStore()
+    await initializeWorkspace(memory, '空创建参数测试')
+    const root = await mkdtemp(join(tmpdir(), 'sf-empty-create-'))
+    try {
+      const store = new NodeFileStore(root)
+      await initializeWorkspace(store, '空创建参数测试')
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['save_character', { character: {} }],
+        ['save_setting', { setting: {} }],
+        ['save_note', { note: {} }],
+        ['save_chapter', { chapter: { box: 'draft' } }],
+        ['save_outline_doc', { doc: { kind: 'total' } }],
+        ['save_event', { event: { volumeId: 'vol_default' } }]
+      ]
+
+      for (const [name, args] of cases) {
+        const core = await executeCoreTool(memory, name, JSON.stringify(args))
+        const main = await executeMainTool(root, name, JSON.stringify(args))
+        expect(main).toEqual(core)
+        expect(core.kind).toBe('result')
+        if (core.kind === 'result') expect(core.ok).toBe(false)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   // 核心与桌面端共享同一份 delete_note 契约：名称、描述、参数 schema 必须逐字一致。
   it('keeps the delete_note definition identical to core', () => {
     const core = CORE_TOOL_DEFS.find((tool) => tool.name === 'delete_note')

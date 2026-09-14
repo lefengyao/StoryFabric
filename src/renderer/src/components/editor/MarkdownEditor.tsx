@@ -25,12 +25,16 @@ export function MarkdownEditor({
   value,
   onChange,
   className,
-  scrollRef
+  scrollRef,
+  documentId,
+  onLayoutReady
 }: {
   value: string
   onChange: (v: string) => void
   className?: string
   scrollRef?: React.MutableRefObject<HTMLElement | null>
+  documentId?: string
+  onLayoutReady?: (documentId?: string) => void
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -38,6 +42,8 @@ export function MarkdownEditor({
   onChangeRef.current = onChange
   // 外部值与编辑器当前内容一致时跳过替换，避免光标跳动
   const externalValue = useRef(value)
+  const onLayoutReadyRef = useRef(onLayoutReady)
+  onLayoutReadyRef.current = onLayoutReady
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -62,6 +68,7 @@ export function MarkdownEditor({
     })
     viewRef.current = view
     if (scrollRef) scrollRef.current = view.scrollDOM
+    view.requestMeasure({ read: () => null, write: () => onLayoutReadyRef.current?.(documentId) })
     return () => {
       view.destroy()
       if (scrollRef?.current === view.scrollDOM) scrollRef.current = null
@@ -69,6 +76,12 @@ export function MarkdownEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !documentId) return
+    view.requestMeasure({ read: () => null, write: () => onLayoutReadyRef.current?.(documentId) })
+  }, [documentId])
 
   useEffect(() => {
     const view = viewRef.current

@@ -55,8 +55,8 @@ describe('minimal workspace example', () => {
 
     const context = await getChapterContext(store, 'cha_dawn', { radius: 1, maxChars: 2000 })
     expect(context.target.content).toContain('潮汐塔')
-    expect(context.next.map((item) => item.id)).toContain('cha_draft')
-    expect(context.sourceIds).toContain('cha_draft')
+    expect(context.next.map((item) => item.id)).not.toContain('cha_draft')
+    expect(context.sourceIds).not.toContain('cha_draft')
 
     const hits = await lookupTerm(store, '星门')
     expect(hits.map((hit) => `${hit.kind}:${hit.id}`)).toEqual(expect.arrayContaining([

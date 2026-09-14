@@ -3,6 +3,8 @@ import type { AgentEventEnvelope, StoryFabricApi } from '../../../../shared/api'
 import type { ChatMessage, ChatSession } from '../../../../shared/types'
 import { installPlatformApi } from '../../platform/platformApi'
 import { useChat } from '../chatStore'
+import { chatDraftScope, chatDraftStore } from '../chatDraftStore'
+import { useWorkspace } from '../workspaceStore'
 
 const userMessage: ChatMessage = { id: 'user_1', role: 'user', text: '继续写第七章' }
 
@@ -19,6 +21,8 @@ function staleSession(): ChatSession {
 
 afterEach(() => {
   useChat.getState().resetWorkspace()
+  useWorkspace.setState({ status: 'booting', summary: null, uiSource: null, error: null })
+  chatDraftStore.dispose()
   vi.restoreAllMocks()
 })
 
@@ -144,5 +148,59 @@ describe('chat completion', () => {
     expect(useChat.getState().messages).toEqual(finalSession.messages)
     expect(useChat.getState().streamingText).toBe('')
     unsubscribe()
+  })
+
+  it('clears only the sent draft when the session event arrives before agentRun resolves', async () => {
+    let emit: (envelope: AgentEventEnvelope) => void = () => { throw new Error('event listener was not bound') }
+    let resolveRun: ((value: { sessionId: string }) => void) | undefined
+    const initial: ChatSession = { ...staleSession(), messages: [] }
+    const accepted: ChatSession = { ...initial, messages: [{ id: 'new_user', role: 'user', text: '原问题' }] }
+    const api = {
+      agentRun: vi.fn(() => new Promise<{ sessionId: string }>((resolve) => { resolveRun = resolve })),
+      onAgentEvent: vi.fn((callback: (envelope: AgentEventEnvelope) => void) => { emit = callback; return () => undefined })
+    }
+    installPlatformApi(api as unknown as StoryFabricApi)
+    useWorkspace.setState({ status: 'ready', summary: { name: 'A', path: '/A', characters: [], relationships: [], outline: [], events: [], chapters: [] }, uiSource: 'electron-local', error: null })
+    useChat.setState({ activeId: null, messages: [], streaming: false, liveTimeline: [], liveTools: [], error: null })
+    const draftScope = chatDraftScope({ source: 'electron-local', path: '/A' }, null)
+    chatDraftStore.setText(draftScope, '原问题')
+    const unsubscribe = useChat.getState().bindEvents()
+    const sending = useChat.getState().send('原问题', { providerId: 'p', model: 'm' })
+    emit({ sessionId: 'session_new', event: { type: 'session', session: accepted } })
+    expect(chatDraftStore.getText(chatDraftScope({ source: 'electron-local', path: '/A' }, 'session_new'))).toBe('')
+    resolveRun?.({ sessionId: 'session_new' })
+    await sending
+    unsubscribe()
+  })
+
+  it('restores the original draft on a request-start failure without overwriting the next draft', async () => {
+    const api = { agentRun: vi.fn(async () => { throw new Error('启动失败') }) }
+    installPlatformApi(api as unknown as StoryFabricApi)
+    useWorkspace.setState({ status: 'ready', summary: { name: 'A', path: '/A', characters: [], relationships: [], outline: [], events: [], chapters: [] }, uiSource: 'electron-local', error: null })
+    const draftScope = chatDraftScope({ source: 'electron-local', path: '/A' }, 'session_1')
+    useChat.setState({ activeId: 'session_1', messages: [], streaming: false, liveTimeline: [], liveTools: [], error: null })
+    chatDraftStore.setText(draftScope, '原问题')
+    await useChat.getState().send('原问题', { providerId: 'p', model: 'm' })
+    expect(chatDraftStore.getText(draftScope)).toBe('原问题')
+    chatDraftStore.setText(draftScope, '下一条')
+    await useChat.getState().send('下一条', { providerId: 'p', model: 'm' })
+    expect(chatDraftStore.getText(draftScope)).toBe('下一条')
+  })
+
+  it('does not let an older session load win a rapid session switch', async () => {
+    const resolvers = new Map<string, (session: ChatSession) => void>()
+    const api = {
+      loadSession: vi.fn((id: string) => new Promise<ChatSession>((resolve) => { resolvers.set(id, resolve) }))
+    }
+    installPlatformApi(api as unknown as StoryFabricApi)
+    useWorkspace.setState({ status: 'ready', summary: { name: 'A', path: '/A', characters: [], relationships: [], outline: [], events: [], chapters: [] }, uiSource: 'electron-local', error: null })
+    useChat.setState({ activeId: null, messages: [], streaming: false, liveTimeline: [], liveTools: [], error: null })
+    const first = useChat.getState().openSession('one')
+    const second = useChat.getState().openSession('two')
+    resolvers.get('one')?.({ ...staleSession(), id: 'one', messages: [{ ...userMessage, id: 'one-user' }] })
+    resolvers.get('two')?.({ ...staleSession(), id: 'two', messages: [{ ...userMessage, id: 'two-user' }] })
+    await Promise.all([first, second])
+    expect(useChat.getState().activeId).toBe('two')
+    expect(useChat.getState().messages[0]?.id).toBe('two-user')
   })
 })

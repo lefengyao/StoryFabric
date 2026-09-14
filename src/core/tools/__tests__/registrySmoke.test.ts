@@ -95,7 +95,8 @@ describe('audit: 29 个工具端到端可用性', () => {
     expect(unknown.ok).toBe(false)
     expect(unknown.text).toContain('未知工具')
     const badJson = asResult(await executeTool(store, 'list_characters', '{oops'))
-    expect(badJson.ok).toBe(true)
+    expect(badJson.ok).toBe(false)
+    expect(badJson.text).toContain('参数不是有效 JSON')
 
     // ---- 写入类（10 个） ----
     await write('save_character', { character: { name: '新人物', content: '简介' } })
