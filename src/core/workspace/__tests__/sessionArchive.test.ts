@@ -7,11 +7,13 @@ describe('session archive', () => {
     const session: ChatSession = {
       id: 'sess_1', title: '测试', createdAt: 1, updatedAt: 2, archived: false,
       modelPreferences: [{ providerId: 'p1', model: 'vision', reasoning: 'high' }],
+      creativePreferences: { mode: 'basic', orchestrationEnabled: false, subagentsEnabled: false, intensity: 'light', selectedSkillIds: ['storyfabric.natural-prose'], selectedRuleSetIds: [] },
       messages: [{ id: 'm1', role: 'user', text: '看看', files: [{ kind: 'text', id: 'f1', name: '说明.txt', mimeType: 'text/plain', size: 6, text: '你好' }] }]
     }
     const decoded = decodeSessionArchive(exportSessionArchive(session).base64)
     expect(decoded.messages[0].files).toEqual(session.messages[0].files)
     expect(decoded.modelPreferences).toEqual(session.modelPreferences)
+    expect(decoded.creativePreferences).toEqual(session.creativePreferences)
   })
 
   it('rejects invalid attachment archives', () => {

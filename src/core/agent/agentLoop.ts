@@ -8,6 +8,7 @@ import { resolveModelSettings } from '../llm/modelCatalog'
 import { SYSTEM_PROMPT } from './prompts'
 import { validateMessageFiles } from '../attachments/validation'
 import { profileForModel } from '../llm/modelCatalog'
+import { normalizeCreativePreferences } from '../../shared/creative'
 import {
   estimateTextTokens,
   fallbackContextSummary,
@@ -202,6 +203,9 @@ export class CoreAgentService {
   async run(req: RunAgentRequest): Promise<{ sessionId: string }> {
     const session = (req.sessionId ? await this.options.sessions.load(req.sessionId) : null) ?? await this.options.sessions.create()
     const sid = session.id
+    if (req.creative !== undefined) {
+      session.creativePreferences = normalizeCreativePreferences(req.creative)
+    }
     const message = req.message.trim() || (req.files?.length ? '请分析所附资料。' : '')
     const files = validateMessageFiles(req.files ?? [])
     const user: ChatMessage = { id: `msg_${Date.now().toString(36)}`, role: 'user', text: userTextForRequest({ ...req, message }), ...(files.length ? { files } : {}) }

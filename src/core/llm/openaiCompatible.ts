@@ -77,7 +77,7 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
     let text = ''
     let stopReason: StreamResult['stopReason'] = 'stop'
     let usage: TokenUsage | undefined
-    const calls = new Map<number, { id: string; name: string; args: string }>()
+    const calls = new Map<number, { id: string; name: string; args: string; started?: boolean }>()
 
     for await (const line of sseLines(res, req.signal)) {
       const data = sseData(line)
@@ -109,7 +109,11 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
         const cur = calls.get(idx) ?? { id: '', name: '', args: '' }
         if (tc.id) cur.id = tc.id
         if (tc.function?.name) cur.name = tc.function.name
-        if (tc.function?.arguments) cur.args += tc.function.arguments
+        if (!cur.started && cur.id && cur.name) { cur.started = true; handlers.onToolCallStart?.(cur.id, cur.name, idx) }
+        if (tc.function?.arguments) {
+          cur.args += tc.function.arguments
+          handlers.onToolArgsDelta?.(cur.id || `call_${idx}`, tc.function.arguments, idx)
+        }
         calls.set(idx, cur)
       }
       if (choice.finish_reason === 'tool_calls') stopReason = 'tool_calls'
@@ -118,7 +122,12 @@ export class OpenAICompatibleAdapter implements LlmAdapter {
 
     const toolCalls = [...calls.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([i, c]) => ({ id: c.id || `call_${i}`, name: c.name, argsJson: c.args || '{}' }))
+      .map(([i, c]) => {
+        const id = c.id || `call_${i}`
+        const argsJson = c.args || '{}'
+        handlers.onToolCallComplete?.(id, c.name, argsJson, i)
+        return { id, name: c.name, argsJson }
+      })
     return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : stopReason, usage }
   }
 }

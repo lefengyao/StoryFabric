@@ -131,7 +131,9 @@ export class AnthropicAdapter implements LlmAdapter {
         case 'content_block_start': {
           const b = json.content_block
           if (b?.type === 'tool_use') {
-            toolBlocks.set(json.index ?? toolBlocks.size, { id: b.id, name: b.name, args: '' })
+            const index = json.index ?? toolBlocks.size
+            toolBlocks.set(index, { id: b.id, name: b.name, args: '' })
+            handlers.onToolCallStart?.(b.id, b.name, index)
           } else if (b?.type === 'thinking') {
             thinkingBlocks.push({ index: json.index ?? 0, block: { type: 'thinking', thinking: b.thinking ?? '', signature: b.signature ?? '' } })
           } else if (b?.type === 'redacted_thinking') {
@@ -146,7 +148,10 @@ export class AnthropicAdapter implements LlmAdapter {
             handlers.onText(d.text)
           } else if (d?.type === 'input_json_delta' && d.partial_json) {
             const tb = toolBlocks.get(json.index)
-            if (tb) tb.args += d.partial_json
+            if (tb) {
+              tb.args += d.partial_json
+              handlers.onToolArgsDelta?.(tb.id, d.partial_json, json.index)
+            }
           } else if (d?.type === 'thinking_delta') {
             const entry = thinkingBlocks.find((item) => item.index === json.index)
             if (entry) entry.block.thinking = (entry.block.thinking ?? '') + (d.thinking ?? '')
@@ -174,11 +179,12 @@ export class AnthropicAdapter implements LlmAdapter {
       }
     }
 
-    const toolCalls = [...toolBlocks.values()].map((tb, i) => ({
-      id: tb.id || `call_${i}`,
-      name: tb.name,
-      argsJson: tb.args || '{}'
-    }))
+    const toolCalls = [...toolBlocks.entries()].map(([index, tb], i) => {
+      const id = tb.id || `call_${i}`
+      const argsJson = tb.args || '{}'
+      handlers.onToolCallComplete?.(id, tb.name, argsJson, index)
+      return { id, name: tb.name, argsJson }
+    })
     const orderedThinking = thinkingBlocks.sort((a, b) => a.index - b.index).map((item) => item.block)
     return {
       text,

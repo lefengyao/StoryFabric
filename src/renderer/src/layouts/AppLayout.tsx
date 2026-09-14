@@ -12,6 +12,7 @@ import { getPlatformApi } from '../platform/platformApi'
 import { HttpPlatformApi } from '../platform/httpApi'
 import { ChatSidebar } from '../components/chat/ChatSidebar'
 import { useUi } from '../stores/uiStore'
+import { WorkspaceViewport } from '../components/layout/WorkspaceViewport'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
@@ -125,15 +126,16 @@ export function AppLayout(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-app sm:flex-row" data-app-shell>
+    <WorkspaceViewport>
+    <div className="flex h-full min-h-0 flex-row bg-app" data-app-shell>
       <aside
         data-sidebar-preference-key={SIDEBAR_EXPANDED_KEY}
         className={cn(
-          'app-sidebar-scroll mobile-bottom-nav order-2 flex min-h-[74px] w-full shrink-0 items-center justify-start gap-1 overflow-x-auto border-t border-white/10 bg-[#101936] px-1 pb-[max(env(safe-area-inset-bottom),22px)] text-white/65 shadow-[0_-8px_24px_rgba(7,12,30,0.16)] sm:order-none sm:min-h-0 sm:h-full sm:flex-col sm:justify-start sm:gap-1.5 sm:overflow-x-hidden sm:overflow-y-auto sm:border-r sm:border-t-0 sm:px-3 sm:py-4 sm:pb-4 sm:shadow-none',
-          sidebarExpanded ? 'sm:w-[204px]' : 'sm:w-[68px]'
+          'app-sidebar-scroll order-none flex h-full w-[204px] shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none',
+          sidebarExpanded ? 'w-[204px]' : 'w-[68px]'
         )}
       >
-        <NavLink to="/chat" title="织章 · StoryFabric" className="hidden items-center gap-3 px-1 pb-5 sm:flex">
+        <NavLink to="/chat" title="织章 · StoryFabric" className="flex items-center gap-3 px-1 pb-5">
           <BrandMark variant="flat" size={38} className="shrink-0 rounded-[10px] shadow-[0_10px_24px_rgba(0,0,0,0.22)]" />
           {sidebarExpanded && (
             <span className="min-w-0">
@@ -143,7 +145,7 @@ export function AppLayout(): React.ReactElement {
           )}
         </NavLink>
 
-        {sidebarExpanded && <div className="mb-2 hidden px-3 text-[10px] font-semibold tracking-[0.16em] text-white/[0.28] sm:block">故事工作区</div>}
+        {sidebarExpanded && <div className="mb-2 px-3 text-[10px] font-semibold tracking-[0.16em] text-white/[0.28]">故事工作区</div>}
         {NAV_ITEMS.map(({ to, icon: Icon, label, load }) => (
           <NavLink
             key={to}
@@ -161,7 +163,7 @@ export function AppLayout(): React.ReactElement {
             }
           >
             <Icon size={18} />
-            <span className={cn('hidden text-sm', sidebarExpanded && 'sm:inline')}>
+            <span className={cn('text-sm', sidebarExpanded && 'inline')}>
               {label}
             </span>
             <span className={cn('pointer-events-none absolute bottom-14 z-30 hidden whitespace-nowrap rounded-md border border-white/10 bg-[#182346] px-2 py-1 text-xs text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block', sidebarExpanded && 'sm:hidden')}>
@@ -172,7 +174,7 @@ export function AppLayout(): React.ReactElement {
 
         <div className="hidden flex-1 sm:block" />
         {sidebarExpanded && summary && (
-          <div className="mb-2 hidden rounded-xl border border-white/[0.08] bg-white/[0.05] p-3 sm:block">
+          <div className="mb-2 rounded-xl border border-white/[0.08] bg-white/[0.05] p-3">
             <span className="block text-[9px] text-white/[0.36]">当前工作区</span>
             <strong className="mt-1 block w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-white/[0.84]" title={summary.name}>{summary.name}</strong>
             <span className="mt-1 block text-[9px] text-white/[0.34]">{summary.chapters.length} 章 · {summary.characters.length} 人</span>
@@ -193,7 +195,7 @@ export function AppLayout(): React.ReactElement {
           }
         >
           <SettingsIcon size={18} />
-          <span className={cn('hidden text-sm', sidebarExpanded && 'sm:inline')}>设置</span>
+              <span className={cn('text-sm', sidebarExpanded && 'inline')}>设置</span>
         </NavLink>
         <button
           type="button"
@@ -302,5 +304,6 @@ export function AppLayout(): React.ReactElement {
         <ChatSidebar open={chatPanelOpen && seg !== 'chat'} />
       </div>
     </div>
+    </WorkspaceViewport>
   )
 }

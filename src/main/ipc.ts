@@ -37,6 +37,7 @@ import type {
 import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
 import { fetchProviderModels } from '../core/llm'
 import { decryptApiKey } from './services/settingsService'
+import type { PlatformCapabilities } from '../shared/platformCapabilities'
 import { SessionStore } from './services/sessionStore'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { exportWorkspaceArchive } from '../core/workspace/archive'
@@ -264,6 +265,7 @@ export function registerIpc(ctx: AppContext): void {
     const provider = await ctx.settings.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   })
+  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
 
   /* ---------- 智能体 ---------- */
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))

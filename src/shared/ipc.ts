@@ -52,6 +52,7 @@ export const IPC = {
   SaveProvider: 'settings:save-provider',
   DeleteProvider: 'settings:delete-provider',
   FetchModels: 'settings:fetch-models',
+  GetCapabilities: 'runtime:capabilities',
 
   /* 剪贴板 */
   ClipboardReadText: 'clipboard:read-text',

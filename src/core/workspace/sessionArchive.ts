@@ -1,5 +1,6 @@
 import type { ChatSession } from '../../shared/types'
 import { validateMessageFiles } from '../attachments/validation'
+import { validateCreativePreferences } from '../../shared/creative'
 
 export interface SessionArchive {
   fileName: string
@@ -50,6 +51,7 @@ export function decodeSessionArchive(base64: string): ChatSession {
   if (modelPreferences !== undefined && (!Array.isArray(modelPreferences) || modelPreferences.some((item) => !item || typeof item !== 'object' || typeof (item as any).providerId !== 'string' || typeof (item as any).model !== 'string' || !['inherit', 'off', 'low', 'medium', 'high'].includes((item as any).reasoning)))) {
     throw new Error('会话思考设置无效')
   }
+  const creativePreferences = value.creativePreferences === undefined ? undefined : validateCreativePreferences(value.creativePreferences)
   return {
     id: typeof value.id === 'string' ? value.id : '',
     title: value.title,
@@ -60,6 +62,7 @@ export function decodeSessionArchive(base64: string): ChatSession {
     ...(modelPreferences === undefined ? {} : { modelPreferences }),
     ...(typeof value.contextSummary === 'string' ? { contextSummary: value.contextSummary } : {}),
     ...(typeof value.contextSummaryThrough === 'string' ? { contextSummaryThrough: value.contextSummaryThrough } : {}),
-    ...(typeof value.contextSummaryUpdatedAt === 'number' ? { contextSummaryUpdatedAt: value.contextSummaryUpdatedAt } : {})
+    ...(typeof value.contextSummaryUpdatedAt === 'number' ? { contextSummaryUpdatedAt: value.contextSummaryUpdatedAt } : {}),
+    ...(creativePreferences ? { creativePreferences } : {})
   } as ChatSession
 }

@@ -44,6 +44,12 @@ export interface TokenUsage {
 export interface StreamHandlers {
   /** 增量文本回调 */
   onText: (delta: string) => void
+  /** 工具调用开始；供应商只提供完整调用时在完整对象到达时触发。 */
+  onToolCallStart?: (callId: string, name: string, index: number) => void
+  /** 工具参数 JSON 的真实增量；调用方不得在此时执行工具。 */
+  onToolArgsDelta?: (callId: string, delta: string, index: number) => void
+  /** 工具参数完整收集结束。 */
+  onToolCallComplete?: (callId: string, name: string, argsJson: string, index: number) => void
 }
 
 export interface LlmAdapter {
@@ -72,4 +78,3 @@ export async function httpError(res: Response): Promise<Error> {
   }
   return new Error(`请求失败 HTTP ${res.status}${detail ? `：${detail.slice(0, 400)}` : ''}`)
 }
-

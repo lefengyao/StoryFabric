@@ -42,6 +42,20 @@ describe('workspace archive', () => {
     expect(await target.readText('.storyfabric/index.json')).toBeNull()
   })
 
+  it('round-trips creative configuration and validated package files but excludes run data', async () => {
+    const source = new MemoryFileStore()
+    await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '创作扩展' }))
+    await source.writeText('.storyfabric/creative/config.json', '{"enabled":true}')
+    await source.writeText('.storyfabric/creative/packages/storyfabric.demo/1.0.0/manifest.json', '{"schemaVersion":1}')
+    await source.writeText('.storyfabric/runs/r1/snapshot.json', '{"status":"completed"}')
+    const archive = await exportWorkspaceArchive(source, '创作扩展')
+    const target = new MemoryFileStore()
+    await importWorkspaceArchive(target, archive.bytes)
+    expect(await target.readText('.storyfabric/creative/config.json')).toBe('{"enabled":true}')
+    expect(await target.readText('.storyfabric/creative/packages/storyfabric.demo/1.0.0/manifest.json')).toBe('{"schemaVersion":1}')
+    expect(await target.readText('.storyfabric/runs/r1/snapshot.json')).toBeNull()
+  })
+
   it('keeps docs backup files byte-for-byte', async () => {
     const source = new MemoryFileStore()
     await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '文档备份' }))

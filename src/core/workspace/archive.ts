@@ -33,7 +33,13 @@ function safeEntry(path: string): string | null {
 
 function isPortablePath(path: string): boolean {
   if (ROOT_FILES.has(path)) return true
-  if (path.startsWith('.storyfabric/')) return path === '.storyfabric/layout.json'
+  if (path.startsWith('.storyfabric/')) {
+    if (path === '.storyfabric/layout.json') return true
+    if (!path.startsWith('.storyfabric/creative/')) return false
+    const relative = path.slice('.storyfabric/creative/'.length)
+    if (!relative || relative.startsWith('runs/') || relative.startsWith('usage') || relative.startsWith('secrets/')) return false
+    return !relative.toLowerCase().endsWith('.tmp') && !relative.toLowerCase().endsWith('.bak')
+  }
   const [root] = path.split('/', 1)
   if (!root || !ROOT_DIRS.has(root)) return false
   if (DERIVED_PATHS.has(path) || path.startsWith('.storyfabric/tmp/')) return false

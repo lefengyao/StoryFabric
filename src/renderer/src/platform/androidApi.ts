@@ -21,6 +21,7 @@ import { fetchProviderModels, getAdapter } from '../../../core/llm'
 import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 import { keyPreview } from '../../../shared/keyPreview'
 import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
+import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
 
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
@@ -106,6 +107,9 @@ export class AndroidPlatformApi implements StoryFabricApi {
   private agent: CoreAgentService | null = null
 
   getUiSource(): string { return 'android-local' }
+  getCapabilities(): Promise<PlatformCapabilities> {
+    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
+  }
 
   private keyName(providerId: string): string { return `provider-api-key:${providerId}` }
 

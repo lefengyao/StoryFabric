@@ -120,10 +120,15 @@ export class GeminiAdapter implements LlmAdapter {
           handlers.onText(part.text)
         }
         if (part.functionCall?.name) {
+          const index = toolCalls.length
+          const id = `call_${index}`
+          handlers.onToolCallStart?.(id, part.functionCall.name, index)
+          const argsJson = JSON.stringify(part.functionCall.args ?? {})
+          handlers.onToolCallComplete?.(id, part.functionCall.name, argsJson, index)
           toolCalls.push({
-            id: `call_${toolCalls.length}`,
+            id,
             name: part.functionCall.name,
-            argsJson: JSON.stringify(part.functionCall.args ?? {})
+            argsJson
           })
         }
       }

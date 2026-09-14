@@ -341,6 +341,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const provider = await settings.providerInput(input)
         return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
       }
+      case 'getCapabilities': return { protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }
       case 'agentRun': {
         const request = arg<RunAgentRequest>()
         const existing = request.sessionId ? await runtime.sessions.load(request.sessionId) : null

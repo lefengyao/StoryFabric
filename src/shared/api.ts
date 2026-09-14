@@ -27,11 +27,16 @@ import type {
 } from './types'
 import type { WorkspaceArchive } from '../core/workspace/archive'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
+import type { RunEventEnvelope } from './agentRuntime'
+import type { PlatformCapabilities } from './platformCapabilities'
 
 export interface AgentEventEnvelope {
   sessionId: string
   event: AgentEvent
 }
+
+/** 新运行协议的事件外壳；旧 AgentEvent 通过 agentRuntime 的适配器进入此协议。 */
+export type RuntimeAgentEventEnvelope = RunEventEnvelope
 
 export type SettingsPatch = Partial<
   Pick<
@@ -82,6 +87,7 @@ export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
 }
 
 export interface StoryFabricApi {
+  getCapabilities?(): Promise<PlatformCapabilities>
   /** Renderer-only, non-sensitive source identity used for UI state partitioning. */
   getUiSource?(): string
   /* 剪贴板 */

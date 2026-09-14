@@ -182,6 +182,8 @@ export interface TrashEntry {
   }
 }
 
+import type { CreativePreferences } from './creative'
+
 /* ---------------- 应用设置 ---------------- */
 
 export type Protocol = 'openai' | 'anthropic' | 'gemini'
@@ -351,6 +353,8 @@ export interface ChatSession {
   /** 摘要覆盖到的最后一条消息 id。 */
   contextSummaryThrough?: string
   contextSummaryUpdatedAt?: number
+  /** 本会话的创作模式与扩展选择；缺省时按基础模式读取。 */
+  creativePreferences?: CreativePreferences
 }
 
 /** @引用：显式附带的项目实体 */
@@ -369,6 +373,8 @@ export interface RunAgentRequest {
   files?: MessageFile[]
   reasoning?: ReasoningLevel
   clientRunId?: string
+  /** 本次运行的创作模式；缺省时必须按基础模式处理。 */
+  creative?: CreativePreferences
 }
 
 /* ---------------- 待确认写变更 ---------------- */
@@ -448,6 +454,16 @@ export interface UsageRecord {
   cachedTokens: number
   /** 为建立缓存而写入的输入 token（仅 Anthropic） */
   cacheWriteTokens: number
+  /** 可选的运行归属字段；旧记录缺失时仍可读取。 */
+  callId?: string
+  runId?: string
+  stageId?: string
+  agentId?: string
+  parentAgentId?: string
+  purpose?: 'basic' | 'stage' | 'child' | 'compression' | 'retry'
+  attempt?: number
+  status?: 'completed' | 'failed' | 'cancelled' | 'missing'
+  usageSource?: 'actual' | 'estimated' | 'missing'
 }
 
 /** 防止模型进入病态循环的安全上限；正常批量改稿远低于此值。 */
