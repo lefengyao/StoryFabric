@@ -17,11 +17,17 @@ import { genId } from '../../../core/workspace/entityStore'
 import { listTrash, purgeTrashEntry, restoreFromTrash } from '../../../core/workspace/trash'
 import { CoreSessionStore } from '../../../core/workspace/sessionStore'
 import { CoreAgentService } from '../../../core/agent/agentLoop'
+import { PortableUsageStore } from '../../../core/usage/portableUsageStore'
 import { fetchProviderModels, getAdapter } from '../../../core/llm'
 import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 import { keyPreview } from '../../../shared/keyPreview'
 import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
+import type { CreativePackageSummary } from '../../../shared/creative'
+import { ContentPackageStore, summarizeContentPackage } from '../../../core/skills/packageStore'
+import { builtinPackages } from '../../../core/skills/builtin'
+import type { RuleLayer } from '../../../core/rules/types'
+import { RuleStore } from '../../../core/rules/ruleStore'
 
 const SETTINGS_KEY = 'storyfabric.settings'
 const WORKSPACE_PREFIX = 'workspaces'
@@ -105,11 +111,31 @@ export class AndroidPlatformApi implements StoryFabricApi {
   private currentStore: CapacitorFileStore | null = null
   private settings: PublicAppSettings = { ...DEFAULT_PUBLIC }
   private agent: CoreAgentService | null = null
+  private usage: PortableUsageStore | null = null
 
   getUiSource(): string { return 'android-local' }
   getCapabilities(): Promise<PlatformCapabilities> {
-    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
+    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
   }
+
+  async listCreativePackages(): Promise<CreativePackageSummary[]> {
+    const packageStore = new ContentPackageStore(this.requireStore())
+    const installed = await packageStore.list()
+    const builtins = builtinPackages.map((pkg) => {
+      const saved = installed.find((item) => item.manifest.id === pkg.manifest.id && item.manifest.version === pkg.manifest.version)
+      return { id: pkg.manifest.id, version: pkg.manifest.version, name: pkg.manifest.name, description: pkg.manifest.description, enabled: saved?.enabled ?? true, skills: pkg.manifest.skills.map((item) => item.id), ruleSets: pkg.manifest.ruleSets.map((item) => item.id) }
+    })
+    return [...builtins, ...installed.filter((item) => !builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version)).map(summarizeContentPackage)]
+  }
+
+  async setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary> {
+    const packageStore = new ContentPackageStore(this.requireStore())
+    const builtin = builtinPackages.find((pkg) => pkg.manifest.id === id && pkg.manifest.version === version)
+    return summarizeContentPackage(await (builtin ? packageStore.save(builtin, enabled) : packageStore.setEnabled(id, version, enabled)))
+  }
+
+  listCreativeRules(): Promise<RuleLayer[]> { return new RuleStore(this.requireStore()).load() }
+  saveCreativeRules(layers: RuleLayer[]): Promise<void> { return new RuleStore(this.requireStore()).save(layers) }
 
   private keyName(providerId: string): string { return `provider-api-key:${providerId}` }
 
@@ -165,15 +191,18 @@ export class AndroidPlatformApi implements StoryFabricApi {
   private async installWorkspace(path: string, store: CapacitorFileStore): Promise<void> {
     this.currentPath = path
     this.currentStore = store
+    this.usage = new PortableUsageStore(store)
     this.agent = new CoreAgentService({
       store,
+      workspaceId: path,
       sessions: new CoreSessionStore(store),
       getAdapter,
       settings: async () => {
         const s = await this.loadSettings()
         return { customPrompt: s.customPrompt, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
       },
-      emit: (sessionId, event) => this.emitAgentEvent(sessionId, event)
+      emit: (sessionId, event, runId) => this.emitAgentEvent(sessionId, event, runId),
+      onUsage: (record) => { void this.usage?.append(record).catch(() => undefined) }
     })
   }
 
@@ -234,7 +263,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const normalizedPath = normalizeAndroidWorkspacePath(path)
     const store = new CapacitorFileStore(normalizedPath)
-    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent }
+    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent, usage: this.usage }
     throwIfWorkspaceRequestAborted(options?.signal)
     const valid = await validateWorkspace(store)
     if (!valid.ok) throw new Error(valid.reason)
@@ -249,6 +278,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       this.currentPath = previous.path
       this.currentStore = previous.store
       this.agent = previous.agent
+      this.usage = previous.usage
       throw error
     }
   }
@@ -281,7 +311,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return this.openWorkspace(normalizeAndroidWorkspacePath(path), options)
   }
 
-  async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null }
+  async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null; this.agent = null; this.usage = null }
 
   async getCurrentWorkspace(): Promise<WorkspaceSummary | null> {
     if (!this.currentStore || !this.currentPath) {
@@ -301,7 +331,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   private eventListeners = new Set<(envelope: AgentEventEnvelope) => void>()
-  private emitAgentEvent(sessionId: string, event: AgentEventEnvelope['event']): void { for (const listener of this.eventListeners) listener({ sessionId, event }) }
+  private emitAgentEvent(sessionId: string, event: AgentEventEnvelope['event'], runId?: string): void { for (const listener of this.eventListeners) listener({ sessionId, ...(runId ? { runId } : {}), event }) }
 
   getChapterBody(id: string): Promise<string | null> { return getChapterBody(this.requireStore(), id) }
   searchProject(query: string) { return searchProject(this.requireStore(), query) }
@@ -419,8 +449,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
 
   async getSettings(): Promise<PublicAppSettings> { return this.loadSettings() }
 
-  /** Android 端暂不落盘用量统计 */
-  async getUsageRecords(): Promise<UsageRecord[]> { return [] }
+  async getUsageRecords(): Promise<UsageRecord[]> { return this.usage?.list() ?? [] }
 
   async updateSettings(patch: SettingsPatch): Promise<PublicAppSettings> {
     return withAndroidSettingsLock(async () => {
@@ -477,7 +506,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const provider = await this.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   }
-  async agentRun(req: RunAgentRequest): Promise<{ sessionId: string }> {
+  async agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId: string }> {
     if (!this.agent) throw new Error('尚未打开工作区')
     return this.agent.run(req)
   }

@@ -53,6 +53,10 @@ export const IPC = {
   DeleteProvider: 'settings:delete-provider',
   FetchModels: 'settings:fetch-models',
   GetCapabilities: 'runtime:capabilities',
+  ListCreativePackages: 'creative:packages:list',
+  SetCreativePackageEnabled: 'creative:packages:enabled',
+  ListCreativeRules: 'creative:rules:list',
+  SaveCreativeRules: 'creative:rules:save',
 
   /* 剪贴板 */
   ClipboardReadText: 'clipboard:read-text',

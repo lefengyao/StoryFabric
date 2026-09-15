@@ -82,8 +82,17 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
     case 'text-delta':
       runtime = { type: 'text-delta', messageId: event.messageId, delta: event.delta }
       break
+    case 'stage-start':
+      runtime = { type: 'stage-start', payload: { stageId: event.stageId } }
+      break
+    case 'stage-complete':
+      runtime = { type: 'stage-complete', payload: { stageId: event.stageId, artifactId: event.artifactId } }
+      break
     case 'tool-start':
       runtime = { type: 'tool-generating', payload: { callId: event.callId, name: event.name, argsJson: event.argsJson } }
+      break
+    case 'tool-args-delta':
+      runtime = { type: 'tool-generating', payload: { callId: event.callId, argsDelta: event.delta } }
       break
     case 'tool-done':
       runtime = { type: 'tool-complete', payload: { callId: event.callId, ok: event.ok, resultPreview: event.resultPreview } }

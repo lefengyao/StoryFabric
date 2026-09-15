@@ -44,6 +44,25 @@ function manifest(value: unknown): SkillPackageManifest {
   return result
 }
 
+function ruleSet(value: unknown, expectedId: string): void {
+  const raw = record(value)
+  if (raw.schemaVersion !== 1) throw new Error('不支持的规则集 schema 版本')
+  if (nonEmpty(raw.id, 'ruleSet.id') !== expectedId) throw new Error(`规则集 id 与 manifest 不一致：${expectedId}`)
+  nonEmpty(raw.version, 'ruleSet.version')
+  nonEmpty(raw.name, 'ruleSet.name')
+  nonEmpty(raw.description, 'ruleSet.description')
+  const rules = list(raw.rules, 'ruleSet.rules')
+  for (const value of rules) {
+    const item = record(value)
+    const kind = item.kind
+    const severity = item.severity
+    if (!nonEmpty(item.id, 'rule.id') || (kind !== 'constraint' && kind !== 'guidance') || (severity !== 'must' && severity !== 'prefer')) throw new Error('规则字段无效')
+    nonEmpty(item.target, 'rule.target')
+    nonEmpty(item.key, 'rule.key')
+    if (typeof item.enabled !== 'boolean') throw new Error('rule.enabled 必须是布尔值')
+  }
+}
+
 function safePath(path: string): string {
   const normalized = path.replace(/\\/g, '/')
   if (!normalized || normalized.startsWith('/') || normalized.includes('..') || !PATH.test(normalized) || normalized.split('/').some((part) => !part || part === '.')) throw new Error(`内容包路径越界或无效：${path}`)
@@ -77,10 +96,11 @@ export function validateContentPackage(input: { manifest: unknown; files: Conten
   })
   if (expandedBytes > PACKAGE_LIMITS.expandedBytes) throw new Error('内容包展开大小超过限制')
   const fileMap = new Map(files.map((file) => [file.path, file]))
+  const skillPaths = new Set(validatedManifest.skills.map((entry) => safePath(entry.path)))
   for (const entry of [...validatedManifest.skills, ...validatedManifest.ruleSets]) {
     const path = safePath(entry.path)
     if (!fileMap.has(path)) throw new Error(`manifest 引用的文件不存在：${path}`)
-    if (validatedManifest.skills.includes(entry as never) && new TextEncoder().encode(fileMap.get(path)!.content).byteLength > PACKAGE_LIMITS.skillBytes) throw new Error('Skill 内容超过大小限制')
+    if (skillPaths.has(path) && new TextEncoder().encode(fileMap.get(path)!.content).byteLength > PACKAGE_LIMITS.skillBytes) throw new Error('Skill 内容超过大小限制')
   }
   for (const entry of validatedManifest.skills) {
     const parsed = parseSkillMarkdown(fileMap.get(safePath(entry.path))!.content)
@@ -89,7 +109,9 @@ export function validateContentPackage(input: { manifest: unknown; files: Conten
   for (const entry of validatedManifest.ruleSets) {
     const size = new TextEncoder().encode(fileMap.get(safePath(entry.path))!.content).byteLength
     if (size > PACKAGE_LIMITS.ruleSetBytes) throw new Error('规则集内容超过大小限制')
-    try { JSON.parse(fileMap.get(safePath(entry.path))!.content) } catch { throw new Error(`规则集 JSON 无效：${entry.id}`) }
+    let parsed: unknown
+    try { parsed = JSON.parse(fileMap.get(safePath(entry.path))!.content) } catch { throw new Error(`规则集 JSON 无效：${entry.id}`) }
+    try { ruleSet(parsed, entry.id) } catch (error) { throw new Error(`规则集无效：${entry.id}：${error instanceof Error ? error.message : String(error)}`) }
   }
   return { manifest: validatedManifest, files }
 }

@@ -53,7 +53,7 @@ export class ModelCallGateway {
       throw cause
     } finally {
       const settlement = this.budget.settle({ callId: input.callId, usage: result?.usage, status: error ? 'failed' : 'completed' })
-      this.onUsage?.({
+      if (result?.usage || error) this.onUsage?.({
         at: Date.now(),
         providerId: input.providerId ?? 'unknown',
         providerName: input.providerName ?? input.providerId ?? 'unknown',

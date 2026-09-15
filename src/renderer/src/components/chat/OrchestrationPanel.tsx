@@ -7,7 +7,7 @@ import { BudgetSummary } from './BudgetSummary'
 export interface OrchestrationPanelProps { capabilities?: PlatformCapabilities; running: boolean; onStart: (stageIds: StageId[]) => void; onStop: () => void; maxCalls?: number; maxTokens?: number }
 
 export function orchestrationStartEnabled(capabilities: Pick<PlatformCapabilities, 'orchestration'> | undefined, running: boolean): boolean {
-  return !running && capabilities?.orchestration !== false
+  return !running && capabilities?.orchestration === true
 }
 
 export function OrchestrationPanel({ capabilities, running, onStart, onStop, maxCalls = 24, maxTokens = 100000 }: OrchestrationPanelProps): React.ReactElement {

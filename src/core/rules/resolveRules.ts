@@ -40,12 +40,17 @@ export function resolveRules(inputLayers: RuleLayer[], options: { customPrompt?:
     const byKey = new Map<string, Rule[]>()
     for (const rule of active) byKey.set(rule.key, [...(byKey.get(rule.key) ?? []), rule])
     for (const [key, rules] of byKey) {
-      const must = rules.filter((rule) => rule.kind === 'constraint' && rule.severity === 'must')
+      const targetGroups = new Map<string, Rule[]>()
+      for (const rule of rules) targetGroups.set(rule.target, [...(targetGroups.get(rule.target) ?? []), rule])
+      for (const [target, targetRules] of targetGroups) {
+        const targetKey = `${target}\u0000${key}`
+      const must = targetRules.filter((rule) => rule.kind === 'constraint' && rule.severity === 'must')
       if (must.length > 1 && new Set(must.map((rule) => stable(rule.value))).size > 1) conflicts.push({ source: layer.source, key, rules: must })
-      for (const rule of rules) {
-        const prior = effective.get(key)
+      for (const rule of targetRules) {
+        const prior = effective.get(targetKey)
         if (prior) overridden.push({ rule: prior, overriddenBy: rule, source: prior.source })
-        effective.set(key, { ...rule, source: layer.source })
+        effective.set(targetKey, { ...rule, source: layer.source })
+      }
       }
     }
   }

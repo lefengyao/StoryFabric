@@ -101,8 +101,8 @@ if (!gotLock) {
 
     const agent = new AgentService(
       settings,
-      (sessionId, event) => {
-        const envelope: AgentEventEnvelope = { sessionId, event }
+      (sessionId, event, runId) => {
+        const envelope: AgentEventEnvelope = { sessionId, ...(runId ? { runId } : {}), event }
         for (const w of BrowserWindow.getAllWindows()) {
           w.webContents.send(IPC.AgentEvent, envelope)
         }

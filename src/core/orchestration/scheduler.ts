@@ -1,9 +1,9 @@
 import { DraftOverlay } from './draftOverlay'
 import { SEVEN_STAGE_TEMPLATE } from './templates'
 import { runStage, type StageRunnerOptions } from './stageRunner'
-import type { Artifact, StageId, StageState } from './types'
+import type { Artifact, StageId, StageState, SourceRevision } from './types'
 
-export interface OrchestrationInput { runId: string; workspaceId: string; sourceRevision: number; goal: string; originalText: string; enabledStageIds?: StageId[] }
+export interface OrchestrationInput { runId: string; workspaceId: string; sourceRevision: SourceRevision; goal: string; originalText: string; enabledStageIds?: StageId[] }
 export interface OrchestrationResult { stages: StageState[]; artifacts: Artifact[]; overlay: DraftOverlay; businessText: string }
 
 export class OrchestrationScheduler {
@@ -14,15 +14,20 @@ export class OrchestrationScheduler {
     const stages: StageState[] = []
     const artifacts: Artifact[] = []
     const overlay = new DraftOverlay()
+    const disabledRequired = SEVEN_STAGE_TEMPLATE.filter((stage) => stage.required && !enabled.has(stage.stageId))
     for (const stage of SEVEN_STAGE_TEMPLATE) {
       if (!enabled.has(stage.stageId)) {
         stages.push({ stageId: stage.stageId, status: 'skipped', reason: '用户在启动前停用' })
         continue
       }
+      if (stage.dependsOn.some((dependency) => disabledRequired.some((item) => item.stageId === dependency))) {
+        stages.push({ stageId: stage.stageId, status: 'stale', reason: '上游必需阶段未启用' })
+        continue
+      }
       const missingRequiredDependency = stage.dependsOn.some((dependency) => {
         const dependencyState = stages.find((state) => state.stageId === dependency)
         const dependencyDefinition = SEVEN_STAGE_TEMPLATE.find((item) => item.stageId === dependency)
-        return dependencyState?.status === 'failed' || (dependencyState?.status === 'skipped' && dependencyDefinition?.required)
+        return dependencyState?.status === 'failed' || dependencyState?.status === 'stale' || (dependencyState?.status === 'skipped' && dependencyDefinition?.required)
       })
       if (missingRequiredDependency) {
         stages.push({ stageId: stage.stageId, status: 'stale', reason: '上游必需阶段不可用' })

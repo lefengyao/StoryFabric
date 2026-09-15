@@ -12,6 +12,8 @@ import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
 import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
+import { CreativeExtensionsView } from './CreativeExtensionsView'
+import { RuleSetEditor } from './RuleSetEditor'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
 
@@ -252,6 +254,8 @@ export function SettingsPage(): React.ReactElement {
                   在会话顶部显示会话长度（消息数与约计字数）
                 </label>
               </Card>
+              <CreativeExtensionsView />
+              <RuleSetEditor />
             </section>
           )}
 

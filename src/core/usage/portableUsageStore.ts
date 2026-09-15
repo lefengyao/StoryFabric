@@ -12,6 +12,8 @@ function isUsageRecord(value: unknown): value is UsageRecord {
 }
 
 export class PortableUsageStore {
+  private writeQueue: Promise<void> = Promise.resolve()
+
   constructor(private readonly store: FileStore, private readonly path = USAGE_PATH) {}
 
   async list(): Promise<UsageRecord[]> {
@@ -24,7 +26,11 @@ export class PortableUsageStore {
   }
 
   async append(record: UsageRecord): Promise<void> {
-    const next = appendUsage(await this.list(), record, USAGE_LIMIT)
-    await this.store.writeText(this.path, JSON.stringify(next, null, 2))
+    const operation = this.writeQueue.catch(() => undefined).then(async () => {
+      const next = appendUsage(await this.list(), record, USAGE_LIMIT)
+      await this.store.writeText(this.path, JSON.stringify(next, null, 2))
+    })
+    this.writeQueue = operation
+    await operation
   }
 }

@@ -67,6 +67,10 @@ const api: StoryFabricApi = {
   deleteProvider: (id) => ipcRenderer.invoke(IPC.DeleteProvider, id),
   fetchModels: (input: FetchModelsInput) => ipcRenderer.invoke(IPC.FetchModels, input),
   getCapabilities: () => ipcRenderer.invoke(IPC.GetCapabilities),
+  listCreativePackages: () => ipcRenderer.invoke(IPC.ListCreativePackages),
+  setCreativePackageEnabled: (id, version, enabled) => ipcRenderer.invoke(IPC.SetCreativePackageEnabled, id, version, enabled),
+  listCreativeRules: () => ipcRenderer.invoke(IPC.ListCreativeRules),
+  saveCreativeRules: (layers) => ipcRenderer.invoke(IPC.SaveCreativeRules, layers),
 
   agentRun: (req: RunAgentRequest) => ipcRenderer.invoke(IPC.AgentRun, req),
   agentConfirm: (changeId, approved) => ipcRenderer.invoke(IPC.AgentConfirm, changeId, approved),

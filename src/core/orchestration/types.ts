@@ -1,4 +1,5 @@
 export type StageId = 'plan' | 'setting' | 'prompt' | 'anti-ai' | 'write' | 'polish' | 'review'
+export type SourceRevision = string | number
 export type ArtifactKind = 'plan' | 'setting-proposal' | 'writing-brief' | 'style-guidance' | 'draft' | 'polished' | 'review'
 export type StageStatus = 'pending' | 'running' | 'waiting_user' | 'completed' | 'skipped' | 'failed' | 'cancelled' | 'stale'
 
@@ -13,7 +14,7 @@ export interface Artifact {
   kind: ArtifactKind
   status: 'candidate' | 'accepted' | 'stale'
   inputArtifactIds: string[]
-  sourceRevisions: Record<string, number>
+  sourceRevisions: Record<string, SourceRevision>
   text?: string
   payload?: unknown
   contentHash: string

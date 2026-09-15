@@ -5,7 +5,7 @@ import type { LiveTurnItem } from '../../stores/chatStore'
 
 export function shouldShowThinking(items: LiveTurnItem[]): boolean {
   const last = items.at(-1)
-  return !last || (last.kind === 'tool' && (last.status === 'ok' || last.status === 'error'))
+  return !last || (last.kind === 'tool' && (last.status === 'ok' || last.status === 'error')) || (last.kind === 'stage' && last.status === 'completed')
 }
 
 export function ContextUsageMeter({

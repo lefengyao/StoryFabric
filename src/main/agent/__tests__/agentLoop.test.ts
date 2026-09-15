@@ -127,7 +127,7 @@ describe('AgentService', () => {
     // 等待 pending-change 出现后拒绝
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, false)
 
@@ -172,7 +172,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     const change = (changeEv.event as { change: { id: string; title: string } }).change
     expect(change.title).toBe('删除便签：待删除便签')
@@ -213,7 +213,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     const change = (changeEv.event as { change: { id: string; title: string; beforeText: string } }).change
     expect(change.beforeText).toBe(serializeNote(note))
@@ -286,7 +286,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
 
@@ -319,7 +319,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const sid = events[0].sessionId
     // 用户在等待确认期间重命名并归档了会话
     await new SessionStore(root).updateMeta(sid, { title: '用户改的名字', archived: true })

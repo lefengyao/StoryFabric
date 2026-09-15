@@ -3,12 +3,12 @@ export interface Change {
   path: string
   before: string
   after: string
-  baseRevision: number
+  baseRevision: string | number
   dependsOn?: string[]
 }
 
 export interface ChangeSet { id: string; workspaceId: string; runId: string; changes: Change[] }
-export interface DocumentState { text: string; revision: number }
+export interface DocumentState { text: string; revision: string | number }
 export interface CommitResult { status: 'applied' | 'rejected' | 'conflict' | 'failed'; changeSetId: string; appliedIds: string[]; message: string }
 
 export class CommitCoordinator {
@@ -23,7 +23,7 @@ export class CommitCoordinator {
     const current = this.documents.get(path)
     if (!current) throw new Error('文档不存在')
     current.text = text
-    current.revision += 1
+    current.revision = nextRevision(current.revision)
   }
 
   get(path: string): DocumentState | undefined {
@@ -47,10 +47,14 @@ export class CommitCoordinator {
     for (const change of selectedChanges) {
       const current = this.documents.get(change.path)!
       current.text = change.after
-      current.revision += 1
+      current.revision = nextRevision(current.revision)
     }
     return this.remember(changeSet.id, { status: 'applied', changeSetId: changeSet.id, appliedIds: selectedChanges.map((change) => change.id), message: '候选变更已应用' })
   }
 
   private remember(id: string, result: CommitResult): CommitResult { this.results.set(id, result); return { ...result, appliedIds: [...result.appliedIds] } }
+}
+
+function nextRevision(value: string | number): string | number {
+  return typeof value === 'number' ? value + 1 : `${value}:${Date.now().toString(36)}`
 }

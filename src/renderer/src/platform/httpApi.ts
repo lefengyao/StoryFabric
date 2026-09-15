@@ -3,6 +3,8 @@ import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, Outlin
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import { normalizeHttpSource } from '../lib/workspaceUiScope'
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
+import type { CreativePackageSummary } from '../../../shared/creative'
+import type { RuleLayer } from '../../../core/rules/types'
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 export type HttpAuth = { kind: 'cookie' } | { kind: 'bearer'; token: string }
@@ -22,6 +24,10 @@ export class HttpPlatformApi implements StoryFabricApi {
 
   getUiSource(): string { return normalizeHttpSource(this.baseUrl) }
   getCapabilities(): Promise<PlatformCapabilities> { return this.rpc('getCapabilities') }
+  listCreativePackages(): Promise<CreativePackageSummary[]> { return this.rpc('listCreativePackages') }
+  setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary> { return this.rpc('setCreativePackageEnabled', [id, version, enabled]) }
+  listCreativeRules(): Promise<RuleLayer[]> { return this.rpc('listCreativeRules') }
+  saveCreativeRules(layers: RuleLayer[]): Promise<void> { return this.rpc('saveCreativeRules', [layers]) }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return this.auth.kind === 'bearer' ? { authorization: `Bearer ${this.auth.token}`, ...extra } : extra
@@ -116,7 +122,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   saveProvider(input: Parameters<StoryFabricApi['saveProvider']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('saveProvider', [input]) }
   deleteProvider(id: string): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('deleteProvider', [id]) }
   fetchModels(input: Parameters<StoryFabricApi['fetchModels']>[0]): Promise<string[]> { return this.rpc('fetchModels', [input]) }
-  agentRun(req: RunAgentRequest): Promise<{ sessionId: string }> { return this.rpc('agentRun', [req]) }
+  agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }> { return this.rpc('agentRun', [req]) }
   agentConfirm(changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [changeId, approved]) }
   agentAbort(sessionId: string): Promise<void> { return this.rpc('agentAbort', [sessionId]) }
   listSessions(): Promise<import('../../../shared/types').SessionMeta[]> { return this.rpc('listSessions') }

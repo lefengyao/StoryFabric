@@ -2,14 +2,17 @@ import { validateSubagentTools } from './toolPolicy'
 
 export interface SubagentSourceRef { workspaceId: string; id: string; revision?: number }
 export interface DelegateTaskInput { task: string; role: string; depth: number; sourceRefs: SubagentSourceRef[]; expectedOutput?: string; tokenCap?: number; requestedTools?: string[] }
-export interface ChildTask { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; input: DelegateTaskInput }
+export interface ChildTask { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; input: DelegateTaskInput; result?: { text: string; payload?: unknown }; error?: string }
 
 export class SubagentManager {
   private readonly children = new Map<string, ChildTask>()
   private readonly maxChildren: number
   private readonly maxConcurrent: number
+  private readonly controllers = new Map<string, AbortController>()
 
-  constructor(private readonly options: { workspaceId: string; maxChildren?: number; maxConcurrent?: number }) {
+  private pumpPromise: Promise<void> = Promise.resolve()
+
+  constructor(private readonly options: { workspaceId: string; maxChildren?: number; maxConcurrent?: number; runTask?: (input: DelegateTaskInput, signal: AbortSignal) => Promise<{ text: string; payload?: unknown }> }) {
     this.maxChildren = options.maxChildren ?? 4
     this.maxConcurrent = options.maxConcurrent ?? 2
   }
@@ -24,12 +27,40 @@ export class SubagentManager {
     const id = `child_${this.children.size + 1}`
     const task: ChildTask = { id, status: 'queued', input: { ...input, sourceRefs: input.sourceRefs.map((ref) => ({ ...ref })) } }
     this.children.set(id, task)
+    this.pumpPromise = this.pumpPromise.then(() => this.pump())
     return structuredClone(task)
+  }
+
+  async waitForIdle(): Promise<void> { await this.pumpPromise }
+
+  private async pump(): Promise<void> {
+    while (this.activeCount() < this.maxConcurrent) {
+      const task = [...this.children.values()].find((item) => item.status === 'queued')
+      if (!task) return
+      if (!this.options.runTask) return
+      task.status = 'running'
+      const controller = new AbortController()
+      this.controllers.set(task.id, controller)
+      try {
+        task.result = await this.options.runTask(task.input, controller.signal)
+        if (task.status === 'running') task.status = 'completed'
+      } catch (error) {
+        if (task.status === 'running') {
+          task.status = 'failed'
+          task.error = error instanceof Error ? error.message : String(error)
+        }
+      } finally {
+        this.controllers.delete(task.id)
+      }
+    }
   }
 
   cancel(id: string): void {
     const task = this.children.get(id)
-    if (task && task.status !== 'completed' && task.status !== 'failed') task.status = 'cancelled'
+    if (task && task.status !== 'completed' && task.status !== 'failed') {
+      task.status = 'cancelled'
+      this.controllers.get(id)?.abort()
+    }
   }
 
   list(): ChildTask[] { return [...this.children.values()].map((task) => structuredClone(task)) }

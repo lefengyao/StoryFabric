@@ -394,8 +394,11 @@ export interface PendingChange {
 
 export type AgentEvent =
   | { type: 'session'; session: ChatSession }
+  | { type: 'stage-start'; stageId: string }
+  | { type: 'stage-complete'; stageId: string; artifactId?: string }
   | { type: 'text-delta'; messageId: string; delta: string }
   | { type: 'tool-start'; callId: string; name: string; argsJson: string }
+  | { type: 'tool-args-delta'; callId: string; delta: string }
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }

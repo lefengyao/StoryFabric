@@ -133,6 +133,18 @@ describe('normalizeAndroidWorkspacePath', () => {
   })
 })
 
+describe('AndroidPlatformApi capabilities', () => {
+  it('reports the creative rules and sensor-landscape capabilities it actually implements', async () => {
+    await expect(freshApi().getCapabilities()).resolves.toMatchObject({
+      skills: true,
+      rules: true,
+      orchestration: true,
+      budgets: true,
+      orientation: 'sensor-landscape'
+    })
+  })
+})
+
 describe('AndroidPlatformApi recent workspaces', () => {
   it('并发记录 recent 工作区时串行合并而不丢路径或时间', async () => {
     let preferencesValue = JSON.stringify({ recentWorkspaces: [], recentWorkspaceOpenedAt: {} })

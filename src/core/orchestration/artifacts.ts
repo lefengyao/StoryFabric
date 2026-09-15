@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactKind, StageId } from './types'
+import type { Artifact, ArtifactKind, StageId, SourceRevision } from './types'
 
 function hash(text: string): string {
   let result = 2166136261
@@ -6,7 +6,7 @@ function hash(text: string): string {
   return (result >>> 0).toString(16).padStart(8, '0')
 }
 
-export function createArtifact(input: { runId: string; stageId: StageId; agentId?: string; kind: ArtifactKind; version?: number; inputArtifactIds?: string[]; sourceRevisions?: Record<string, number>; text?: string; payload?: unknown }): Artifact {
+export function createArtifact(input: { runId: string; stageId: StageId; agentId?: string; kind: ArtifactKind; version?: number; inputArtifactIds?: string[]; sourceRevisions?: Record<string, SourceRevision>; text?: string; payload?: unknown }): Artifact {
   const body = input.text ?? JSON.stringify(input.payload ?? null)
   return {
     id: `artifact_${input.runId}_${input.stageId}_${input.version ?? 1}`,

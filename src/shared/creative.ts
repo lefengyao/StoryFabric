@@ -1,6 +1,16 @@
 export type CreativeMode = 'basic' | 'orchestration'
 export type CreativeIntensity = 'light' | 'standard' | 'strong'
 
+export interface CreativePackageSummary {
+  id: string
+  version: string
+  name: string
+  description: string
+  enabled: boolean
+  skills: string[]
+  ruleSets: string[]
+}
+
 export interface OrchestrationPreferences {
   enabled: boolean
   subagentsEnabled: boolean

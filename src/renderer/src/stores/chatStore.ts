@@ -10,6 +10,7 @@ import type {
   SessionMeta,
   SessionModelPreference
 } from '../../../shared/types'
+import type { CreativePreferences } from '../../../shared/creative'
 import { useWorkspace } from './workspaceStore'
 import type { ToolCallData } from '../../../shared/types'
 import { getPlatformApi } from '../platform/platformApi'
@@ -33,6 +34,7 @@ export interface LiveToolRun {
 export type LiveTurnItem =
   | { kind: 'text'; id: string; text: string }
   | { kind: 'tool'; callId: string; name: string; argsJson: string; status: LiveToolRun['status']; preview?: string }
+  | { kind: 'stage'; id: string; stageId: string; status: 'running' | 'completed' | 'failed' }
 
 interface ChatState {
   sessions: SessionMeta[]
@@ -69,7 +71,7 @@ interface ChatState {
   updateModelPreference: (value: SessionModelPreference) => Promise<void>
   resetWorkspace: () => void
 
-  send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'>) => Promise<void>
+  send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'> & { creative?: CreativePreferences }) => Promise<void>
   confirmChange: (approved: boolean) => Promise<void>
   abort: () => Promise<void>
 
@@ -333,11 +335,28 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
     case 'text-delta':
       pushStreamingDelta(set, ev.messageId, ev.delta)
       break
+    case 'stage-start':
+      flushStreamingDelta()
+      set((p) => ({ liveTimeline: [...p.liveTimeline.filter((item) => item.kind !== 'stage' || item.stageId !== ev.stageId), { kind: 'stage', id: `stage_${ev.stageId}`, stageId: ev.stageId, status: 'running' }] }))
+      break
+    case 'stage-complete':
+      set((p) => ({ liveTimeline: p.liveTimeline.map((item) => item.kind === 'stage' && item.stageId === ev.stageId ? { ...item, status: 'completed' as const } : item) }))
+      break
     case 'tool-start':
       flushStreamingDelta()
       set((p) => ({
-        liveTimeline: [...p.liveTimeline, { kind: 'tool', callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }],
-        liveTools: [...p.liveTools, { callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }]
+        liveTimeline: p.liveTimeline.some((item) => item.kind === 'tool' && item.callId === ev.callId)
+          ? p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, name: ev.name, argsJson: ev.argsJson || item.argsJson } : item)
+          : [...p.liveTimeline, { kind: 'tool', callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }],
+        liveTools: p.liveTools.some((item) => item.callId === ev.callId)
+          ? p.liveTools.map((item) => item.callId === ev.callId ? { ...item, name: ev.name, argsJson: ev.argsJson || item.argsJson } : item)
+          : [...p.liveTools, { callId: ev.callId, name: ev.name, argsJson: ev.argsJson, status: 'running' }]
+      }))
+      break
+    case 'tool-args-delta':
+      set((p) => ({
+        liveTimeline: p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, argsJson: `${item.argsJson}${ev.delta}` } : item),
+        liveTools: p.liveTools.map((item) => item.callId === ev.callId ? { ...item, argsJson: `${item.argsJson}${ev.delta}` } : item)
       }))
       break
     case 'tool-done':

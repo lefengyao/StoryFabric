@@ -21,6 +21,9 @@ import {
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ChatDensity, ChatMessage, MessageFile, ReasoningPreference, SessionMeta } from '../../../../shared/types'
+import type { CreativePreferences } from '../../../../shared/creative'
+import type { PlatformCapabilities } from '../../../../shared/platformCapabilities'
+import type { StageId } from '../../../../core/orchestration/types'
 import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
 import { ContextUsageMeter, shouldShowThinking, ThinkingRow, ToolRunRow } from '../../components/chat/AgentActivity'
@@ -39,6 +42,8 @@ import { AttachmentMenu } from '../../components/chat/AttachmentMenu'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
+import { OrchestrationPanel } from '../../components/chat/OrchestrationPanel'
+import { CreativeOptions, type CreativeSelection } from '../../components/chat/CreativeOptions'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -68,8 +73,17 @@ export function ChatPage(): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sessionImportRef = useRef<HTMLInputElement | null>(null)
   const [sessionTransferBusy, setSessionTransferBusy] = useState(false)
+  const [capabilities, setCapabilities] = useState<PlatformCapabilities | undefined>()
+  const [creativeSelection, setCreativeSelection] = useState<CreativeSelection>({ selectedSkillIds: [], selectedRuleSetIds: [] })
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
+
+  useEffect(() => {
+    let active = true
+    const platform = getPlatformApi()
+    void (platform.getCapabilities ? platform.getCapabilities() : Promise.resolve(undefined)).then((value) => { if (active) setCapabilities(value) }).catch(() => { if (active) setCapabilities(undefined) })
+    return () => { active = false }
+  }, [uiSource])
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -103,7 +117,7 @@ export function ChatPage(): React.ReactElement {
   )
   const archivedCount = useMemo(() => chat.sessions.filter((s) => s.archived).length, [chat.sessions])
 
-  const send = async (): Promise<void> => {
+  const send = async (creative?: CreativePreferences): Promise<void> => {
     const text = input.text
     if ((!text && !chat.messageFiles.length && !chat.attachments.length) || chat.streaming) return
     if (!defaultModel) {
@@ -113,8 +127,17 @@ export function ChatPage(): React.ReactElement {
     await chat.send(text, {
       providerId: defaultModel.providerId,
       model: defaultModel.model,
-      reasoning: selectedReasoning === 'inherit' ? undefined : selectedReasoning
+      reasoning: selectedReasoning === 'inherit' ? undefined : selectedReasoning,
+      creative: creative ?? { mode: 'basic', orchestrationEnabled: false, subagentsEnabled: false, intensity: 'standard', ...creativeSelection }
     })
+  }
+
+  const startOrchestration = (stageIds: StageId[]): void => {
+    if (!input.text.trim()) {
+      useChat.setState({ error: '请先在输入框写下本次编排目标' })
+      return
+    }
+    void send({ mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', ...creativeSelection, orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: stageIds, modelByStage: {}, maxCalls: 24, maxEstimatedTokens: 100000 } })
   }
 
   const startRename = (s: SessionMeta): void => {
@@ -380,7 +403,12 @@ export function ChatPage(): React.ReactElement {
                     </div>
                   </div>
                 )
-              : (
+              : item.kind === 'stage' ? (
+                  <div key={item.id} className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-xs text-muted">
+                    <span className={cn('h-2 w-2 rounded-full', item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'completed' ? 'bg-ok' : 'bg-danger')} />
+                    <span>阶段：{item.stageId}</span><span className="ml-auto text-[10px] text-faint">{item.status === 'running' ? '进行中' : item.status === 'completed' ? '已完成' : '失败'}</span>
+                  </div>
+                ) : (
                   <ToolRunRow
                     key={item.callId}
                     name={item.name}
@@ -401,6 +429,7 @@ export function ChatPage(): React.ReactElement {
         {/* 输入区 */}
         <div className="shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] backdrop-blur-xl sm:p-4">
           <div className="relative mx-auto max-w-3xl">
+            <div className="mb-3 space-y-2"><CreativeOptions value={creativeSelection} onChange={setCreativeSelection} /><OrchestrationPanel capabilities={capabilities} running={chat.streaming} onStart={startOrchestration} onStop={() => void chat.abort()} /></div>
             {chat.attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {chat.attachments.map((a) => (

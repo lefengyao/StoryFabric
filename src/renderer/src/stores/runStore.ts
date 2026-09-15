@@ -27,15 +27,18 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
   applyEvent: (event) => set((state) => {
     const current = state.runs[event.runId] ?? { runId: event.runId, status: 'created' as const, events: [], partialByMessage: {} }
     if (current.events.some((item) => item.seq === event.seq)) return state
-    const next = { ...current, events: [...current.events, event].sort((a, b) => a.seq - b.seq) }
+    const nextEvents = [...current.events, event].sort((a, b) => a.seq - b.seq)
+    const next = { ...current, events: nextEvents, partialByMessage: nextEvents.reduce<Record<string, string>>((partials, item) => {
+      if (item.event.type === 'text-delta' && item.event.messageId && item.event.delta) partials[item.event.messageId] = `${partials[item.event.messageId] ?? ''}${item.event.delta}`
+      return partials
+    }, {}) }
     if (event.event.type === 'run-start') next.status = 'running'
     if (event.event.type === 'run-paused') next.status = 'paused'
     if (event.event.type === 'run-error') next.status = 'failed'
     if (event.event.type === 'run-done') {
       const status = (event.event.payload as { status?: string } | undefined)?.status
-      next.status = status === 'cancelled' ? 'cancelled' : 'completed'
+      next.status = status === 'cancelled' || status === 'interrupted' ? 'cancelled' : status === 'failed' ? 'failed' : 'completed'
     }
-    if (event.event.type === 'text-delta' && event.event.messageId && event.event.delta) next.partialByMessage = { ...next.partialByMessage, [event.event.messageId]: `${next.partialByMessage[event.event.messageId] ?? ''}${event.event.delta}` }
     return { runs: { ...state.runs, [event.runId]: next } }
   }),
   clear: (runId) => set((state) => runId ? { runs: Object.fromEntries(Object.entries(state.runs).filter(([id]) => id !== runId)), activeRunId: state.activeRunId === runId ? null : state.activeRunId } : { runs: {}, activeRunId: null })

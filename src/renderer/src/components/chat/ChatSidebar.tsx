@@ -274,7 +274,12 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                       </div>
                     </div>
                   )
-                : (
+                : item.kind === 'stage' ? (
+                    <div key={item.id} className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-[11px] text-muted">
+                      <span className={cn('h-2 w-2 rounded-full', item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'completed' ? 'bg-ok' : 'bg-danger')} />
+                      <span>阶段：{item.stageId}</span>
+                    </div>
+                  ) : (
                     <ToolRunRow
                       key={item.callId}
                       name={item.name}

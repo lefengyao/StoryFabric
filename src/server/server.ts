@@ -19,6 +19,9 @@ import { exportWorkspaceArchive, WORKSPACE_ARCHIVE_MAX_BYTES, WORKSPACE_ARCHIVE_
 import { listVolumes, saveVolume, deleteVolume, moveChapter, readGraphLayout, writeGraphLayout } from '../core/workspace/workspaceService'
 import { listTrash, restoreFromTrash, purgeTrashEntry } from '../core/workspace/trash'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject, genId } from '../core/workspace/entityStore'
+import { ContentPackageStore, summarizeContentPackage } from '../core/skills/packageStore'
+import { builtinPackages } from '../core/skills/builtin'
+import { RuleStore } from '../core/rules/ruleStore'
 
 const MAX_JSON_BODY_BYTES = 16 * 1024 * 1024
 const DEFAULT_SESSION_TTL = 8 * 60 * 60 * 1000
@@ -73,7 +76,7 @@ class EventHub {
 
   emit(envelope: ScopedEnvelope): void {
     for (const listener of this.listeners) {
-      if (listener.workspaceId() === envelope.workspaceId) listener.send({ sessionId: envelope.sessionId, event: envelope.event })
+      if (listener.workspaceId() === envelope.workspaceId) listener.send({ sessionId: envelope.sessionId, ...(envelope.runId ? { runId: envelope.runId } : {}), event: envelope.event })
     }
   }
 }
@@ -248,10 +251,11 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       const sessions = new CoreSessionStore(store)
       const agent = new CoreAgentService({
         store,
+        workspaceId: id,
         sessions,
         settings: () => settings.agentSettings(),
         getAdapter,
-        emit: (sessionId, event) => events.emit({ workspaceId: id, sessionId, event }),
+        emit: (sessionId, event, runId) => events.emit({ workspaceId: id, sessionId, ...(runId ? { runId } : {}), event }),
         onUsage: (record) => void usage.append(record).catch(() => {})
       })
       runtime = { store, sessions, agent, operationQueue: Promise.resolve() }
@@ -341,7 +345,23 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const provider = await settings.providerInput(input)
         return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
       }
-      case 'getCapabilities': return { protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }
+      case 'getCapabilities': return { protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }
+      case 'listCreativePackages': {
+        const installed = await new ContentPackageStore(store).list()
+        const summaries = builtinPackages.map((pkg) => {
+          const saved = installed.find((item) => item.manifest.id === pkg.manifest.id && item.manifest.version === pkg.manifest.version)
+          return { id: pkg.manifest.id, version: pkg.manifest.version, name: pkg.manifest.name, description: pkg.manifest.description, enabled: saved?.enabled ?? true, skills: pkg.manifest.skills.map((item) => item.id), ruleSets: pkg.manifest.ruleSets.map((item) => item.id) }
+        })
+        return [...summaries, ...installed.filter((item) => !builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version)).map(summarizeContentPackage)]
+      }
+      case 'setCreativePackageEnabled': {
+        const id = arg<string>(), version = arg<string>(1), enabled = Boolean(arg<boolean>(2))
+        const packageStore = new ContentPackageStore(store)
+        const builtin = builtinPackages.find((pkg) => pkg.manifest.id === id && pkg.manifest.version === version)
+        return summarizeContentPackage(await (builtin ? packageStore.save(builtin, enabled) : packageStore.setEnabled(id, version, enabled)))
+      }
+      case 'listCreativeRules': return new RuleStore(store).load()
+      case 'saveCreativeRules': await new RuleStore(store).save(arg()); return undefined
       case 'agentRun': {
         const request = arg<RunAgentRequest>()
         const existing = request.sessionId ? await runtime.sessions.load(request.sessionId) : null
@@ -352,7 +372,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
           events.emit({ workspaceId, sessionId: session.id, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
           events.emit({ workspaceId, sessionId: session.id, event: { type: 'done' } })
         })
-        return { sessionId: session.id }
+        return { sessionId: session.id, runId: runtime.agent.getActiveRunId(session.id) }
       }
       case 'agentConfirm': runtime.agent.confirmChange(arg<string>(), Boolean(arg<boolean>(1))); return undefined
       case 'agentAbort': runtime.agent.abort(arg<string>()); return undefined

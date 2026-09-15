@@ -29,9 +29,12 @@ import type { WorkspaceArchive } from '../core/workspace/archive'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
 import type { RunEventEnvelope } from './agentRuntime'
 import type { PlatformCapabilities } from './platformCapabilities'
+import type { CreativePackageSummary } from './creative'
+import type { RuleLayer } from '../core/rules/types'
 
 export interface AgentEventEnvelope {
   sessionId: string
+  runId?: string
   event: AgentEvent
 }
 
@@ -151,12 +154,16 @@ export interface StoryFabricApi {
   updateSettings(patch: SettingsPatch): Promise<PublicAppSettings>
   /** 模型用量记录（最近若干次调用，按时间升序） */
   getUsageRecords(): Promise<UsageRecord[]>
+  listCreativePackages(): Promise<CreativePackageSummary[]>
+  setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary>
+  listCreativeRules(): Promise<RuleLayer[]>
+  saveCreativeRules(layers: RuleLayer[]): Promise<void>
   saveProvider(input: import('./types').ProviderInput): Promise<PublicAppSettings>
   deleteProvider(id: string): Promise<PublicAppSettings>
   fetchModels(input: FetchModelsInput): Promise<string[]>
 
   /* 智能体 */
-  agentRun(req: RunAgentRequest): Promise<{ sessionId: string }>
+  agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }>
   agentConfirm(changeId: string, approved: boolean): Promise<void>
   agentAbort(sessionId: string): Promise<void>
   listSessions(): Promise<SessionMeta[]>

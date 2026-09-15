@@ -265,7 +265,11 @@ export function registerIpc(ctx: AppContext): void {
     const provider = await ctx.settings.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   })
-  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
+  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
+  ipcMain.handle(IPC.ListCreativePackages, async () => ctx.agent.listCreativePackages(requireRoot()))
+  ipcMain.handle(IPC.SetCreativePackageEnabled, async (_e, id: string, version: string, enabled: boolean) => ctx.agent.setCreativePackageEnabled(requireRoot(), id, version, enabled))
+  ipcMain.handle(IPC.ListCreativeRules, async () => ctx.agent.listCreativeRules(requireRoot()))
+  ipcMain.handle(IPC.SaveCreativeRules, async (_e, layers) => ctx.agent.saveCreativeRules(requireRoot(), layers))
 
   /* ---------- 智能体 ---------- */
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
