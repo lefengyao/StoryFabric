@@ -332,6 +332,43 @@ export interface ChatMessage {
   runSettings?: { providerId: string; model: string; reasoning: ReasoningLevel }
 }
 
+/** 可持久化的编排运行摘要；只保存候选产物，不代表已写回工作区。 */
+export interface OrchestrationRunRecord {
+  runId: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  sourceRevision: string | number
+  originalText: string
+  stages: Array<{ stageId: string; status: string; reason?: string; artifactId?: string }>
+  artifacts: Array<{
+    id: string
+    runId: string
+    stageId: string
+    agentId: string
+    version: number
+    kind: string
+    status: string
+    inputArtifactIds: string[]
+    sourceRevisions: Record<string, string | number>
+    text?: string
+    payload?: unknown
+    contentHash: string
+    createdAt: number
+  }>
+  overlay: Record<string, unknown>
+  businessText: string
+  updatedAt: number
+}
+
+export interface AgentBudgetSnapshot {
+  maxCalls: number
+  maxEstimatedTokens: number
+  callsStarted: number
+  callsSettled: number
+  actualTokens: number
+  estimatedTokens: number
+  reservedTokens: number
+}
+
 export interface SessionMeta {
   id: string
   title: string
@@ -355,6 +392,8 @@ export interface ChatSession {
   contextSummaryUpdatedAt?: number
   /** 本会话的创作模式与扩展选择；缺省时按基础模式读取。 */
   creativePreferences?: CreativePreferences
+  /** 最近的编排候选运行，供刷新后查看各阶段结果。 */
+  orchestrationRuns?: OrchestrationRunRecord[]
 }
 
 /** @引用：显式附带的项目实体 */
@@ -399,6 +438,8 @@ export type AgentEvent =
   | { type: 'text-delta'; messageId: string; delta: string }
   | { type: 'tool-start'; callId: string; name: string; argsJson: string }
   | { type: 'tool-args-delta'; callId: string; delta: string }
+  | { type: 'tool-preview'; callId: string; preview: string }
+  | { type: 'budget'; snapshot: AgentBudgetSnapshot }
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }

@@ -110,6 +110,22 @@ describe('chat completion', () => {
     unsubscribe()
   })
 
+  it('ignores late events from an older run in the same session', async () => {
+    let emit: (envelope: AgentEventEnvelope) => void = () => { throw new Error('event listener was not bound') }
+    installPlatformApi({
+      onAgentEvent: vi.fn((callback: (envelope: AgentEventEnvelope) => void) => { emit = callback; return () => undefined })
+    } as unknown as StoryFabricApi)
+    useChat.setState({ activeId: 'session_live', messages: [userMessage], streaming: true, streamingText: '', liveTimeline: [], liveTools: [], error: null })
+    const unsubscribe = useChat.getState().bindEvents()
+
+    emit({ sessionId: 'session_live', runId: 'run-current', event: { type: 'text-delta', messageId: 'current', delta: '当前' } })
+    emit({ sessionId: 'session_live', runId: 'run-old', event: { type: 'text-delta', messageId: 'old', delta: '旧结果' } })
+
+    await vi.waitFor(() => expect(useChat.getState().liveTimeline).toHaveLength(1))
+    expect(useChat.getState().streamingText).toBe('当前')
+    unsubscribe()
+  })
+
   it('applies the final session carried by done without waiting for a disk reload', async () => {
     let emit: (envelope: AgentEventEnvelope) => void = () => {
       throw new Error('event listener was not bound')

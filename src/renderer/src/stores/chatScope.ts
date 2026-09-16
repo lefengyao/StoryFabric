@@ -1,9 +1,11 @@
-import type { ChatMessage, ChatSession, SessionModelPreference } from '../../../shared/types'
+import type { ChatMessage, ChatSession, OrchestrationRunRecord, SessionModelPreference } from '../../../shared/types'
 
 export interface SessionScopePatch {
   activeId: string
   messages: ChatMessage[]
   modelPreferences?: SessionModelPreference[]
+  orchestrationRuns?: OrchestrationRunRecord[]
+  budget: null
   streamingText: string
   liveTimeline: []
   liveTools: []
@@ -21,6 +23,8 @@ export interface WorkspaceScopePatch {
   activeId: null
   messages: []
   modelPreferences: []
+  orchestrationRuns: []
+  budget: null
   streamingText: string
   streaming: false
   liveTimeline: []
@@ -42,7 +46,9 @@ export function sessionScopePatch(session: ChatSession): SessionScopePatch {
   return {
     activeId: session.id,
     messages: session.messages,
-    modelPreferences: session.modelPreferences ?? [],
+  modelPreferences: session.modelPreferences ?? [],
+    budget: null,
+    orchestrationRuns: session.orchestrationRuns ?? [],
     streamingText: '',
     liveTimeline: [],
     liveTools: [],
@@ -62,6 +68,8 @@ export function workspaceScopePatch(): WorkspaceScopePatch {
     activeId: null,
     messages: [],
     modelPreferences: [],
+    orchestrationRuns: [],
+    budget: null,
     streamingText: '',
     streaming: false,
     liveTimeline: [],

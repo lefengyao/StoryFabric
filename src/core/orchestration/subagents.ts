@@ -34,6 +34,7 @@ export class SubagentManager {
   async waitForIdle(): Promise<void> { await this.pumpPromise }
 
   private async pump(): Promise<void> {
+    const running: Promise<void>[] = []
     while (this.activeCount() < this.maxConcurrent) {
       const task = [...this.children.values()].find((item) => item.status === 'queued')
       if (!task) return
@@ -41,17 +42,23 @@ export class SubagentManager {
       task.status = 'running'
       const controller = new AbortController()
       this.controllers.set(task.id, controller)
-      try {
-        task.result = await this.options.runTask(task.input, controller.signal)
-        if (task.status === 'running') task.status = 'completed'
-      } catch (error) {
-        if (task.status === 'running') {
-          task.status = 'failed'
-          task.error = error instanceof Error ? error.message : String(error)
-        }
-      } finally {
-        this.controllers.delete(task.id)
+      running.push(this.runTask(task, controller))
+    }
+    await Promise.all(running)
+    if ([...this.children.values()].some((item) => item.status === 'queued')) await this.pump()
+  }
+
+  private async runTask(task: ChildTask, controller: AbortController): Promise<void> {
+    try {
+      task.result = await this.options.runTask!(task.input, controller.signal)
+      if (task.status === 'running') task.status = 'completed'
+    } catch (error) {
+      if (task.status === 'running') {
+        task.status = 'failed'
+        task.error = error instanceof Error ? error.message : String(error)
       }
+    } finally {
+      this.controllers.delete(task.id)
     }
   }
 

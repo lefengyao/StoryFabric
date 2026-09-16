@@ -20,4 +20,18 @@ describe('session archive', () => {
     const session: ChatSession = { id: 'sess_1', title: '坏', createdAt: 1, updatedAt: 1, archived: false, messages: [{ id: 'm', role: 'user', files: [{ kind: 'image', id: 'i', name: 'x.png', mimeType: 'image/png', size: 1, base64: 'AA==' }] }] }
     expect(() => decodeSessionArchive(exportSessionArchive(session).base64)).toThrow()
   })
+
+  it('round-trips orchestration candidates without executing them on import', () => {
+    const session: ChatSession = {
+      id: 'sess_1', title: '编排', createdAt: 1, updatedAt: 2, archived: false, messages: [],
+      orchestrationRuns: [{
+        runId: 'run_1', status: 'cancelled', sourceRevision: 'rev_1', originalText: '原文',
+        stages: [{ stageId: 'write', status: 'cancelled', artifactId: 'artifact_1' }],
+        artifacts: [{ id: 'artifact_1', runId: 'run_1', stageId: 'write', agentId: 'write', version: 1, kind: 'draft', status: 'candidate', inputArtifactIds: [], sourceRevisions: { source: 'rev_1' }, text: 'partial', contentHash: 'hash', createdAt: 1 }],
+        overlay: {}, businessText: '原文', updatedAt: 2
+      }]
+    }
+    const decoded = decodeSessionArchive(exportSessionArchive(session).base64)
+    expect(decoded.orchestrationRuns).toEqual(session.orchestrationRuns)
+  })
 })

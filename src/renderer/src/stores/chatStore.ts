@@ -4,6 +4,7 @@ import type {
   Attachment,
   ChatMessage,
   ChatSession,
+  AgentBudgetSnapshot,
   MessageFile,
   PendingChange,
   RunAgentRequest,
@@ -41,6 +42,8 @@ interface ChatState {
   activeId: string | null
   messages: ChatMessage[]
   modelPreferences: SessionModelPreference[]
+  orchestrationRuns: import('../../../shared/types').OrchestrationRunRecord[]
+  budget: AgentBudgetSnapshot | null
   /** 正在流式生成的助手草稿 */
   streamingText: string
   streaming: boolean
@@ -84,6 +87,7 @@ type SetFn = (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatS
 let runningSessionId: string | null = null
 let finishingSessionId: string | null = null
 let completedSessionId: string | null = null
+let runningRunId: string | null = null
 let pendingDraftSend: (DraftSendTransaction & { sessionId: string | null; beforeMessageIds: Set<string>; confirmed: boolean }) | null = null
 let workspaceGeneration = 0
 let sessionLoadGeneration = 0
@@ -113,6 +117,8 @@ export const useChat = create<ChatState>((set, get) => ({
   activeId: null,
   messages: [],
   modelPreferences: [],
+  orchestrationRuns: [],
+  budget: null,
   streamingText: '',
   streaming: false,
   liveTimeline: [],
@@ -203,6 +209,7 @@ export const useChat = create<ChatState>((set, get) => ({
     runningSessionId = null
     finishingSessionId = null
     completedSessionId = null
+    runningRunId = null
     pendingDraftSend = null
     set(workspaceScopePatch())
   },
@@ -219,6 +226,7 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     set({ streaming: true, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false, contextCompression: null, error: null })
     completedSessionId = null
+    runningRunId = null
     const req: RunAgentRequest = {
       sessionId: get().activeId ?? undefined,
       message: text.trim() || (get().messageFiles.length ? '请分析所附资料。' : ''),
@@ -228,8 +236,9 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     runningSessionId = req.sessionId ?? null
     try {
-      const { sessionId } = await getPlatformApi().agentRun(req)
+      const { sessionId, runId } = await getPlatformApi().agentRun(req)
       runningSessionId = sessionId
+      if (runId) runningRunId = runId
       if (!get().activeId) set({ activeId: sessionId })
       if (!shouldKeepStreamingAfterAcceptance({ accepted: true, done: false })) {
         runningSessionId = null
@@ -308,6 +317,8 @@ function flushStreamingDelta(): void {
 }
 
 function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatState): void {
+  if (envelope.runId && runningRunId && envelope.runId !== runningRunId) return
+  if (envelope.runId && !runningRunId && get().streaming) runningRunId = envelope.runId
   // 仅处理当前激活会话的事件；后台会话的结果在 send() 完成时统一落库
   if (envelope.sessionId !== get().activeId && !(get().streaming && !get().activeId)) {
     if (envelope.event.type !== 'done' && envelope.sessionId === runningSessionId && !get().activeId) {
@@ -358,6 +369,15 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
         liveTimeline: p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, argsJson: `${item.argsJson}${ev.delta}` } : item),
         liveTools: p.liveTools.map((item) => item.callId === ev.callId ? { ...item, argsJson: `${item.argsJson}${ev.delta}` } : item)
       }))
+      break
+    case 'tool-preview':
+      set((p) => ({
+        liveTimeline: p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, preview: ev.preview } : item),
+        liveTools: p.liveTools.map((item) => item.callId === ev.callId ? { ...item, preview: ev.preview } : item)
+      }))
+      break
+    case 'budget':
+      set({ budget: ev.snapshot })
       break
     case 'tool-done':
       set((p) => ({
@@ -451,6 +471,7 @@ async function finishRun(
     set({ error: err instanceof Error ? err.message : String(err) })
   } finally {
     if (runningSessionId === sessionId || get().activeId === sessionId) runningSessionId = null
+    if (runningRunId && (!get().activeId || get().activeId === sessionId)) runningRunId = null
     if (get().activeId === sessionId || get().streaming) {
       set(applied
         ? { streaming: false, streamingText: '', liveTimeline: [], liveTools: [], contextCompressing: false }

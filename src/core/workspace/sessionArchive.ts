@@ -1,4 +1,4 @@
-import type { ChatSession } from '../../shared/types'
+import type { ChatSession, OrchestrationRunRecord } from '../../shared/types'
 import { validateMessageFiles } from '../attachments/validation'
 import { validateCreativePreferences } from '../../shared/creative'
 
@@ -18,6 +18,19 @@ function base64ToBytes(base64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
+}
+
+function decodeOrchestrationRuns(value: unknown): OrchestrationRunRecord[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new Error('编排运行记录格式无效')
+  for (const run of value) {
+    if (!run || typeof run !== 'object') throw new Error('编排运行记录格式无效')
+    const candidate = run as Partial<OrchestrationRunRecord>
+    if (typeof candidate.runId !== 'string' || !['running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') || !Array.isArray(candidate.stages) || !Array.isArray(candidate.artifacts) || !candidate.overlay || typeof candidate.overlay !== 'object') {
+      throw new Error('编排运行记录格式无效')
+    }
+  }
+  return value as OrchestrationRunRecord[]
 }
 
 export function exportSessionArchive(session: ChatSession): SessionArchive {
@@ -52,6 +65,7 @@ export function decodeSessionArchive(base64: string): ChatSession {
     throw new Error('会话思考设置无效')
   }
   const creativePreferences = value.creativePreferences === undefined ? undefined : validateCreativePreferences(value.creativePreferences)
+  const orchestrationRuns = decodeOrchestrationRuns(value.orchestrationRuns)
   return {
     id: typeof value.id === 'string' ? value.id : '',
     title: value.title,
@@ -63,6 +77,7 @@ export function decodeSessionArchive(base64: string): ChatSession {
     ...(typeof value.contextSummary === 'string' ? { contextSummary: value.contextSummary } : {}),
     ...(typeof value.contextSummaryThrough === 'string' ? { contextSummaryThrough: value.contextSummaryThrough } : {}),
     ...(typeof value.contextSummaryUpdatedAt === 'number' ? { contextSummaryUpdatedAt: value.contextSummaryUpdatedAt } : {}),
-    ...(creativePreferences ? { creativePreferences } : {})
+    ...(creativePreferences ? { creativePreferences } : {}),
+    ...(orchestrationRuns ? { orchestrationRuns } : {})
   } as ChatSession
 }

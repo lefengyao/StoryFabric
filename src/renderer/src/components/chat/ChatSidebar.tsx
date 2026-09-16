@@ -18,6 +18,11 @@ import { resolveContextWindow } from '../../lib/modelCapability'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
+import { getPlatformApi } from '../../platform/platformApi'
+import type { StageId } from '../../../../core/orchestration/types'
+import type { CreativeSelection } from './CreativeOptions'
+import { CreativeOptions } from './CreativeOptions'
+import { OrchestrationPanel } from './OrchestrationPanel'
 
 const QUICK_QUESTIONS = [
   '检查当前章节与前文的设定冲突。',
@@ -38,6 +43,15 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
+  const [capabilities, setCapabilities] = useState<import('../../../../shared/platformCapabilities').PlatformCapabilities | undefined>()
+  const [creativeSelection, setCreativeSelection] = useState<CreativeSelection>({ selectedSkillIds: [], selectedRuleSetIds: [] })
+
+  useEffect(() => {
+    let active = true
+    const platform = getPlatformApi()
+    void (platform.getCapabilities ? platform.getCapabilities() : Promise.resolve(undefined)).then((value) => { if (active) setCapabilities(value) }).catch(() => { if (active) setCapabilities(undefined) })
+    return () => { active = false }
+  }, [uiSource])
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((provider) => provider.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -92,6 +106,18 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
       return
     }
     await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model })
+  }
+
+  const startOrchestration = (stageIds: StageId[]): void => {
+    if (!input.text.trim() || !defaultModel) {
+      useChat.setState({ error: defaultModel ? '请先在输入框写下本次编排目标' : '请先配置默认对话模型' })
+      return
+    }
+    void chat.send(input.text, {
+      providerId: defaultModel.providerId,
+      model: defaultModel.model,
+      creative: { mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', ...creativeSelection, orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: stageIds, modelByStage: {}, maxCalls: 24, maxEstimatedTokens: 100000 } }
+    })
   }
 
   const createSession = async (): Promise<void> => {
@@ -298,6 +324,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
         </div>
 
         <div className="shrink-0 border-t border-line p-3">
+          <div className="mb-2 space-y-2"><CreativeOptions value={creativeSelection} onChange={setCreativeSelection} /><OrchestrationPanel capabilities={capabilities} running={chat.streaming} budget={chat.budget} onStart={startOrchestration} onStop={() => void chat.abort()} /></div>
           {chat.messageFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {chat.messageFiles.map((file) => (

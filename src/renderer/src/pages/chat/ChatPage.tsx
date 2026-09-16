@@ -44,6 +44,7 @@ import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
 import { OrchestrationPanel } from '../../components/chat/OrchestrationPanel'
 import { CreativeOptions, type CreativeSelection } from '../../components/chat/CreativeOptions'
+import { OrchestrationResults } from '../../components/chat/OrchestrationResults'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -388,6 +389,7 @@ export function ChatPage(): React.ReactElement {
           )}
 
           <div className={cn('mx-auto max-w-3xl', densityClasses.list)}>
+            <OrchestrationResults runs={chat.orchestrationRuns ?? []} />
             {chat.messages.map((m) => (
               <MessageItem key={m.id} msg={m} density={density} />
             ))}
@@ -429,7 +431,7 @@ export function ChatPage(): React.ReactElement {
         {/* 输入区 */}
         <div className="shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] backdrop-blur-xl sm:p-4">
           <div className="relative mx-auto max-w-3xl">
-            <div className="mb-3 space-y-2"><CreativeOptions value={creativeSelection} onChange={setCreativeSelection} /><OrchestrationPanel capabilities={capabilities} running={chat.streaming} onStart={startOrchestration} onStop={() => void chat.abort()} /></div>
+            <div className="mb-3 space-y-2"><CreativeOptions value={creativeSelection} onChange={setCreativeSelection} /><OrchestrationPanel capabilities={capabilities} running={chat.streaming} budget={chat.budget} onStart={startOrchestration} onStop={() => void chat.abort()} /></div>
             {chat.attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {chat.attachments.map((a) => (

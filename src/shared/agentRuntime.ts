@@ -94,6 +94,12 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
     case 'tool-args-delta':
       runtime = { type: 'tool-generating', payload: { callId: event.callId, argsDelta: event.delta } }
       break
+    case 'tool-preview':
+      runtime = { type: 'artifact-delta', payload: { callId: event.callId, preview: event.preview } }
+      break
+    case 'budget':
+      runtime = { type: 'usage-update', payload: event.snapshot }
+      break
     case 'tool-done':
       runtime = { type: 'tool-complete', payload: { callId: event.callId, ok: event.ok, resultPreview: event.resultPreview } }
       break

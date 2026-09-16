@@ -1,10 +1,11 @@
 import { DraftOverlay } from './draftOverlay'
+import { createArtifact } from './artifacts'
 import { SEVEN_STAGE_TEMPLATE } from './templates'
 import { runStage, type StageRunnerOptions } from './stageRunner'
 import type { Artifact, StageId, StageState, SourceRevision } from './types'
 
-export interface OrchestrationInput { runId: string; workspaceId: string; sourceRevision: SourceRevision; goal: string; originalText: string; enabledStageIds?: StageId[] }
-export interface OrchestrationResult { stages: StageState[]; artifacts: Artifact[]; overlay: DraftOverlay; businessText: string }
+export interface OrchestrationInput { runId: string; workspaceId: string; sourceRevision: SourceRevision; goal: string; originalText: string; history?: string; enabledStageIds?: StageId[] }
+export interface OrchestrationResult { stages: StageState[]; artifacts: Artifact[]; overlay: DraftOverlay; businessText: string; status: 'completed' | 'failed' | 'cancelled'; error?: string }
 
 export class OrchestrationScheduler {
   constructor(private readonly runner: StageRunnerOptions) {}
@@ -42,12 +43,34 @@ export class OrchestrationScheduler {
         state.artifactId = artifact.id
       } catch (error) {
         const state = stages.find((item) => item.stageId === stage.stageId)!
-        state.status = 'failed'
+        const cancelled = (error as Error)?.name === 'AbortError'
+        state.status = cancelled ? 'cancelled' : 'failed'
         state.reason = error instanceof Error ? error.message : String(error)
+        const partialText = typeof (error as { partialText?: unknown })?.partialText === 'string'
+          ? (error as { partialText: string }).partialText
+          : ''
+        if (partialText) {
+          const partial = {
+            runId: input.runId,
+            stageId: stage.stageId,
+            kind: stage.kind,
+            text: partialText,
+            inputArtifactIds: artifacts.map((item) => item.id),
+            sourceRevisions: { source: input.sourceRevision }
+          }
+          const artifact = createArtifact(partial)
+          artifacts.push(artifact)
+          state.artifactId = artifact.id
+        }
         if (stage.required) for (const later of SEVEN_STAGE_TEMPLATE.slice(SEVEN_STAGE_TEMPLATE.indexOf(stage) + 1)) stages.push({ stageId: later.stageId, status: 'stale', reason: `依赖 ${stage.stageId} 失败` })
         break
       }
     }
-    return { stages, artifacts, overlay, businessText: input.originalText }
+    const status = stages.some((stage) => stage.status === 'cancelled')
+      ? 'cancelled'
+      : stages.some((stage) => stage.status === 'failed' || stage.status === 'stale')
+        ? 'failed'
+        : 'completed'
+    return { stages, artifacts, overlay, businessText: input.originalText, status }
   }
 }

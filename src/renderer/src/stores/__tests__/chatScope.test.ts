@@ -29,6 +29,8 @@ describe('chat scope transitions', () => {
       activeId: null,
       messages: [],
       modelPreferences: [],
+      orchestrationRuns: [],
+      budget: null,
       streamingText: '',
       streaming: false,
       liveTimeline: [],

@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { SubagentManager } from '../subagents'
 
 it('allows bounded read-only child tasks and rejects recursion, cross-workspace access and writes', async () => {
@@ -13,4 +13,33 @@ it('limits the number of child tasks', async () => {
   const manager = new SubagentManager({ workspaceId: 'w', maxChildren: 1, maxConcurrent: 1 })
   await manager.delegate({ task: 'one', role: 'check', depth: 1, sourceRefs: [] })
   await expect(manager.delegate({ task: 'two', role: 'check', depth: 1, sourceRefs: [] })).rejects.toThrow(/上限|数量/)
+})
+
+it('starts up to the configured concurrency limit instead of serializing child tasks', async () => {
+  let running = 0
+  let peak = 0
+  const releases = new Map<string, () => void>()
+  const manager = new SubagentManager({
+    workspaceId: 'w',
+    maxChildren: 4,
+    maxConcurrent: 2,
+    runTask: async (input) => {
+      running += 1
+      peak = Math.max(peak, running)
+      await new Promise<void>((resolve) => releases.set(input.task, resolve))
+      running -= 1
+      return { text: input.task }
+    }
+  })
+  await manager.delegate({ task: 'one', role: 'check', depth: 1, sourceRefs: [] })
+  await manager.delegate({ task: 'two', role: 'check', depth: 1, sourceRefs: [] })
+  const idle = manager.waitForIdle()
+  try {
+    await vi.waitFor(() => expect(peak).toBe(2), { timeout: 100 })
+  } finally {
+    releases.get('one')?.()
+    releases.get('two')?.()
+  }
+  await idle
+  expect(peak).toBe(2)
 })

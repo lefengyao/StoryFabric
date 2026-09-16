@@ -149,6 +149,13 @@ export class ToolBodyPreview {
 
   isComplete(): boolean { return this.complete }
 
+  replace(value: string): string {
+    this.buffer = ''
+    this.preview = ''
+    this.complete = false
+    return this.push(value)
+  }
+
   getArguments(): Record<string, unknown> | null {
     if (!this.complete) return null
     try {

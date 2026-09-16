@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import type { AgentEvent, ChatSession } from '../../../shared/types'
 import { CoreAgentService } from '../agentLoop'
 import { runBasicPolish } from '../basicPolish'
 import { contentRevision } from '../../workspace/resourceRevision'
@@ -10,8 +11,9 @@ import { builtinPackages } from '../../skills/builtin'
 import { PortableUsageStore } from '../../usage/portableUsageStore'
 import { OrchestrationScheduler } from '../../orchestration/scheduler'
 import { SubagentManager } from '../../orchestration/subagents'
+import { RuleStore } from '../../rules/ruleStore'
 import { useRunStore } from '../../../renderer/src/stores/runStore'
-import { orchestrationStartEnabled } from '../../../renderer/src/components/chat/OrchestrationPanel'
+import { orchestrationStartEnabled } from '../../../renderer/src/components/chat/orchestrationPolicy'
 
 it('keeps the orchestration action disabled until capabilities explicitly confirm support', () => {
   expect(orchestrationStartEnabled(undefined, false)).toBe(false)
@@ -41,12 +43,130 @@ it('routes orchestration through a budgeted stage runner and includes selected s
   })
 
   const result = await service.run({ providerId: 'mock', model: 'audit-model', message: 'write a chapter', creative: {
-    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: ['natural-dialogue'], selectedRuleSetIds: [], orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: [], modelByStage: {}, maxCalls: 1, maxEstimatedTokens: 1000 }
+    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: ['natural-dialogue'], selectedRuleSetIds: [], orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: ['plan'], modelByStage: {}, maxCalls: 1, maxEstimatedTokens: 1000000 }
   } })
   expect(calls).toBe(1)
   expect(stages).toContain('plan')
   expect(result.runId).toBeTruthy()
   expect(prompts.some((prompt) => prompt.includes(builtinPackages[1].files[0].content))).toBe(true)
+})
+
+it('persists every orchestration artifact and sends the real session context to stages', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-orchestration-artifacts')
+  const sessions = new CoreSessionStore(store)
+  const existing = await sessions.create()
+  existing.messages = [{ id: 'history', role: 'assistant', text: 'HISTORY_SENTINEL' }]
+  await sessions.save(existing)
+  const stageIds = ['plan', 'setting', 'prompt', 'anti-ai', 'write', 'polish', 'review'] as const
+  const prompts: string[] = []
+  let calls = 0
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async (_model, request) => {
+      prompts.push(request.messages[0]?.text ?? '')
+      const stageId = stageIds[calls++]
+      return { text: `OUTPUT_${stageId}`, stopReason: 'stop' as const, toolCalls: [] }
+    } }),
+    emit: () => undefined
+  })
+
+  const result = await service.run({ sessionId: existing.id, providerId: 'mock', model: 'audit-model', message: 'write', creative: {
+    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: [],
+    orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: [...stageIds], modelByStage: {}, maxCalls: 7, maxEstimatedTokens: 100000 }
+  } })
+  const saved = await sessions.load(result.sessionId)
+  const persisted = (saved as ChatSession & { orchestrationRuns?: Array<{ artifacts: Array<{ stageId: string; text?: string }>; stages: Array<{ status: string }>; status: string }> })?.orchestrationRuns?.at(-1)
+
+  expect(prompts.some((prompt) => prompt.includes('HISTORY_SENTINEL'))).toBe(true)
+  expect(persisted?.status).toBe('completed')
+  expect(persisted?.artifacts.map((artifact) => artifact.stageId)).toEqual(stageIds)
+  expect(persisted?.artifacts.map((artifact) => artifact.text)).toEqual(stageIds.map((stageId) => `OUTPUT_${stageId}`))
+})
+
+it('keeps an orchestration stage partial when the user aborts it', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-orchestration-abort')
+  const sessions = new CoreSessionStore(store)
+  let sessionId = ''
+  let service!: CoreAgentService
+  service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async (_model, request, _key, handlers) => {
+      if (!request.messages[0]?.text?.includes('当前阶段：write')) return { text: 'PLAN', stopReason: 'stop' as const, toolCalls: [] }
+      handlers.onText('WRITE_PARTIAL')
+      service.abort(sessionId)
+      const error = new Error('cancelled')
+      error.name = 'AbortError'
+      throw error
+    } }),
+    emit: (sid) => { sessionId = sid }
+  })
+
+  const result = await service.run({ providerId: 'mock', model: 'audit-model', message: 'write', creative: {
+    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: [],
+    orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: ['plan', 'write'], modelByStage: {}, maxCalls: 2, maxEstimatedTokens: 100000 }
+  } })
+  const saved = await sessions.load(result.sessionId)
+  const persisted = (saved as ChatSession & { orchestrationRuns?: Array<{ status: string; artifacts: Array<{ stageId: string; text?: string }> }> })?.orchestrationRuns?.at(-1)
+
+  expect(persisted?.status).toBe('cancelled')
+  expect(persisted?.artifacts.some((artifact) => artifact.stageId === 'plan')).toBe(true)
+  expect(persisted?.artifacts.find((artifact) => artifact.stageId === 'write')?.text).toBe('WRITE_PARTIAL')
+})
+
+it('applies stage-scoped workspace rules only to the matching orchestration stage', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-orchestration-rules')
+  await new RuleStore(store).save([{ source: 'workspace', rules: [{ id: 'review-only', kind: 'guidance', target: 'review', key: 'freeText', value: 'REVIEW_ONLY_SENTINEL', severity: 'prefer', enabled: true }] }])
+  const sessions = new CoreSessionStore(store)
+  const prompts = new Map<string, string>()
+  const stages = ['plan', 'setting', 'prompt', 'anti-ai', 'write', 'polish', 'review'] as const
+  let calls = 0
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async (_model, request) => {
+      prompts.set(stages[calls], request.system)
+      calls += 1
+      return { text: 'ok', stopReason: 'stop' as const, toolCalls: [] }
+    } }),
+    emit: () => undefined
+  })
+
+  await service.run({ providerId: 'mock', model: 'audit-model', message: 'write', creative: {
+    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: [],
+    orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: [...stages], modelByStage: {}, maxCalls: 7, maxEstimatedTokens: 100000 }
+  } })
+
+  expect(prompts.get('review')).toContain('REVIEW_ONLY_SENTINEL')
+  expect([...prompts.entries()].filter(([stage]) => stage !== 'review').every(([, prompt]) => !prompt.includes('REVIEW_ONLY_SENTINEL'))).toBe(true)
+})
+
+it('does not turn an explicitly empty stage selection into all seven model calls', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-empty-orchestration')
+  const sessions = new CoreSessionStore(store)
+  let calls = 0
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async () => { calls += 1; return { text: 'unexpected', stopReason: 'stop' as const, toolCalls: [] } } }),
+    emit: () => undefined
+  })
+
+  await service.run({ providerId: 'mock', model: 'audit-model', message: 'write', creative: {
+    mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: [],
+    orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: [], modelByStage: {}, maxCalls: 7, maxEstimatedTokens: 100000 }
+  } })
+
+  expect(calls).toBe(0)
 })
 
 it('includes selected builtin skill guidance in a basic model request', async () => {
@@ -210,6 +330,32 @@ it('forwards streamed tool argument deltas through the real agent event path', a
   await service.run({ providerId: 'mock', model: 'audit-model', message: 'inspect' })
   expect(events).toContainEqual({ type: 'tool-args-delta', callId: 'tool-1', delta: '{"query":"' })
   expect(events).toContainEqual({ type: 'tool-args-delta', callId: 'tool-1', delta: '伏笔"}' })
+})
+
+it('emits a readable save_chapter body preview while its tool arguments are still incomplete', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-tool-body-preview')
+  const sessions = new CoreSessionStore(store)
+  const events: AgentEvent[] = []
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async (_model, _request, _key, handlers) => {
+      handlers.onToolCallStart?.('tool-1', 'save_chapter', 0)
+      handlers.onToolArgsDelta?.('tool-1', '{"chapter":{"content":"正文第一段', 0)
+      handlers.onToolArgsDelta?.('tool-1', '继续"}}', 0)
+      handlers.onToolCallComplete?.('tool-1', 'save_chapter', '{"chapter":{"content":"正文第一段继续"}}', 0)
+      return { text: '', stopReason: 'tool_calls' as const, toolCalls: [{ id: 'tool-1', name: 'save_chapter', argsJson: '{"chapter":{"content":"正文第一段继续"}}' }] }
+    } }),
+    emit: (_sid, event) => events.push(event),
+    executeTool: async () => ({ kind: 'result' as const, ok: true, text: '{}', preview: 'ok' })
+  })
+
+  await service.run({ providerId: 'mock', model: 'audit-model', message: 'write' })
+
+  expect(events).toContainEqual({ type: 'tool-preview', callId: 'tool-1', preview: '正文第一段' })
+  expect(events).toContainEqual({ type: 'tool-preview', callId: 'tool-1', preview: '正文第一段继续' })
 })
 
 it('rebuilds renderer partials from ordered events and keeps failed terminal state', () => {

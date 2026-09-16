@@ -1,6 +1,6 @@
-import type { AgentEvent, ChatMessage, ChatSession, ModelSettings, PendingChange, RunAgentRequest, ToolCallData, UsageRecord } from '../../shared/types'
+import type { AgentEvent, ChatMessage, ChatSession, ModelSettings, OrchestrationRunRecord, PendingChange, RunAgentRequest, ToolCallData, UsageRecord } from '../../shared/types'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
-import type { LlmAdapter, LlmAdapterFactory } from '../llm/types'
+import type { LlmAdapter, LlmAdapterFactory, ModelParams } from '../llm/types'
 import { CoreSessionStore, titleFromMessage } from '../workspace/sessionStore'
 import type { FileStore } from '../storage/fileStore'
 import { executeTool, TOOL_DEFS, type ToolOutcome } from '../tools/registry'
@@ -16,6 +16,11 @@ import { ModelCallGateway } from './modelCallGateway'
 import { OrchestrationScheduler } from '../orchestration/scheduler'
 import type { StageId } from '../orchestration/types'
 import { RuleStore } from '../rules/ruleStore'
+import { resolveRules } from '../rules/resolveRules'
+import type { RuleLayer } from '../rules/types'
+import { getChapterBody } from '../workspace/entityStore'
+import { contentRevision } from '../workspace/resourceRevision'
+import { ToolBodyPreview } from '../llm/toolPreview'
 import {
   estimateTextTokens,
   fallbackContextSummary,
@@ -95,6 +100,19 @@ function creativeGuidance(creative: ReturnType<typeof normalizeCreativePreferenc
 function promptWithCreativeGuidance(prompt: string, creative: ReturnType<typeof normalizeCreativePreferences>, packages: ContentPackage[] = builtinPackages): string {
   const guidance = creativeGuidance(creative, packages)
   return guidance ? `${prompt}\n\n【本次启用的创作技能】\n${guidance}` : prompt
+}
+
+function selectedRuleLayers(creative: ReturnType<typeof normalizeCreativePreferences>, packages: ContentPackage[]): RuleLayer[] {
+  const selected = new Set(creative.selectedRuleSetIds)
+  return packages.flatMap((pkg) => pkg.manifest.ruleSets.flatMap((entry) => {
+    if (!selected.has(entry.id) && !selected.has(pkg.manifest.id)) return []
+    try {
+      const parsed = JSON.parse(pkg.files.find((file) => file.path === entry.path)?.content ?? '{}') as { rules?: RuleLayer['rules'] }
+      return parsed.rules ? [{ source: 'run' as const, rules: parsed.rules }] : []
+    } catch {
+      return []
+    }
+  }))
 }
 
 export class CoreAgentService {
@@ -258,20 +276,28 @@ export class CoreAgentService {
     providerName: string
     model: string
     prompt: string
-    modelSettings: ModelSettings
+    modelSettings: ModelParams
+    history: string
+    originalText: string
+    sourceRevision: string | number
+    stageRuleGuidance: (stageId: string) => string
     signal: AbortSignal
     session: ChatSession
     gateway: ModelCallGateway
   }): Promise<void> {
     const orchestration = options.creative.orchestration
     const maxEstimatedTokens = orchestration?.maxEstimatedTokens ?? 100000
+    if (Array.isArray(orchestration?.enabledStageIds) && orchestration.enabledStageIds.length === 0) throw new Error('请至少选择一个编排阶段')
     const gateway = options.gateway
     const system = options.prompt
+    const stagePartials = new Map<string, string>()
     const scheduler = new OrchestrationScheduler({
       call: async ({ stageId, prompt }) => {
         this.emit(options.sessionId, { type: 'stage-start', stageId }, options.runId)
         const messageId = `${options.runId}_${stageId}`
-        const estimatedInputTokens = Math.max(1, estimateTextTokens(prompt))
+        const estimatedInputTokens = Math.max(1, estimateTextTokens(system) + estimateTextTokens(prompt))
+        const maxOutputTokens = Math.max(1, Math.min(options.modelSettings.maxOutputTokens, maxEstimatedTokens - estimatedInputTokens))
+        const stageParams: ModelParams = { ...options.modelSettings, maxOutputTokens }
         let result
         try {
           result = await gateway.call({
@@ -284,16 +310,22 @@ export class CoreAgentService {
           providerName: options.providerName,
           model: options.model,
           estimatedInputTokens,
-          maxOutputTokens: Math.max(1, Math.min(options.modelSettings.maxOutputTokens, maxEstimatedTokens - estimatedInputTokens)),
+          maxOutputTokens,
           execute: () => options.adapter.stream(options.model, {
-            system,
+            system: `${system}${options.stageRuleGuidance(stageId) ? `\n\n【当前阶段规则】\n${options.stageRuleGuidance(stageId)}` : ''}`,
             messages: [{ id: messageId, role: 'user', text: prompt }],
             tools: [],
             signal: options.signal,
-            params: options.modelSettings
-          }, options.apiKey, { onText: (delta) => this.emit(options.sessionId, { type: 'text-delta', messageId, delta }, options.runId) })
+            params: stageParams
+          }, options.apiKey, { onText: (delta) => {
+            stagePartials.set(stageId, `${stagePartials.get(stageId) ?? ''}${delta}`)
+            this.emit(options.sessionId, { type: 'text-delta', messageId, delta }, options.runId)
+          } })
           })
+          this.emit(options.sessionId, { type: 'budget', snapshot: gateway.budget.snapshot() }, options.runId)
         } catch (error) {
+          const partialText = stagePartials.get(stageId)
+          if (partialText) (error as { partialText?: string }).partialText = partialText
           this.emit(options.sessionId, { type: 'error', message: `阶段 ${stageId} 失败：${error instanceof Error ? error.message : String(error)}` }, options.runId)
           throw error
         }
@@ -302,19 +334,32 @@ export class CoreAgentService {
       }
     })
     const configuredStages = orchestration?.enabledStageIds ?? []
-    const enabledStageIds = configuredStages.length
+    const enabledStageIds = Array.isArray(orchestration?.enabledStageIds)
       ? configuredStages.filter((stageId): stageId is StageId => ['plan', 'setting', 'prompt', 'anti-ai', 'write', 'polish', 'review'].includes(stageId))
       : undefined
     const result = await scheduler.run({
       runId: options.runId,
       workspaceId: this.options.workspaceId ?? 'workspace',
-      sourceRevision: 0,
+      sourceRevision: options.sourceRevision,
       goal: options.message,
-      originalText: '',
+      originalText: options.originalText,
+      history: options.history,
       enabledStageIds
     })
     const finalText = result.artifacts.find((artifact) => artifact.stageId === 'write')?.text ?? result.artifacts.at(-1)?.text
     if (finalText?.trim()) options.session.messages.push({ id: `msg_${Date.now().toString(36)}_orchestration`, role: 'assistant', text: finalText })
+    const record: OrchestrationRunRecord = {
+      runId: options.runId,
+      status: result.status,
+      sourceRevision: options.sourceRevision,
+      originalText: options.originalText,
+      stages: result.stages,
+      artifacts: result.artifacts,
+      overlay: result.overlay.toJSON(),
+      businessText: result.businessText,
+      updatedAt: Date.now()
+    }
+    options.session.orchestrationRuns = [...(options.session.orchestrationRuns ?? []), record].slice(-10)
   }
 
   async run(req: RunAgentRequest): Promise<{ sessionId: string; runId: string }> {
@@ -322,9 +367,7 @@ export class CoreAgentService {
     if (req.sessionId) this.pendingRunIds.set(req.sessionId, reservedRunId)
     const session = (req.sessionId ? await this.options.sessions.load(req.sessionId) : null) ?? await this.options.sessions.create()
     const sid = session.id
-    if (req.creative !== undefined) {
-      session.creativePreferences = normalizeCreativePreferences(req.creative)
-    }
+    session.creativePreferences = normalizeCreativePreferences(req.creative ?? { mode: 'basic', orchestrationEnabled: false, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: [] })
     const message = req.message.trim() || (req.files?.length ? '请分析所附资料。' : '')
     const files = validateMessageFiles(req.files ?? [])
     const user: ChatMessage = { id: `msg_${Date.now().toString(36)}`, role: 'user', text: userTextForRequest({ ...req, message }), ...(files.length ? { files } : {}) }
@@ -350,17 +393,21 @@ export class CoreAgentService {
       if (files.some((file) => file.kind === 'image') && !vision) throw new Error('当前模型不支持图片输入，请切换模型或移除图片')
       const adapter: LlmAdapter = this.options.getAdapter(provider.protocol, provider.baseUrl)
       const custom = settings.customPrompt?.trim()
-      const basePrompt = custom ? `${SYSTEM_PROMPT}\n\n【用户自定义要求（与内置规则冲突时优先遵守）】\n${custom}` : SYSTEM_PROMPT
+      const basePrompt = SYSTEM_PROMPT
       const installedPackages = await new ContentPackageStore(this.options.store).list().catch(() => [])
       const disabledBuiltins = new Set(installedPackages.filter((item) => builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version) && !item.enabled).map((item) => `${item.manifest.id}@${item.manifest.version}`))
       const activeBuiltins = builtinPackages.filter((item) => !disabledBuiltins.has(`${item.manifest.id}@${item.manifest.version}`))
       const activeInstalled = installedPackages.filter((item) => item.enabled && !builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version))
       const creative = session.creativePreferences ?? normalizeCreativePreferences(undefined)
       const workspaceRules = await new RuleStore(this.options.store).load().catch(() => [])
-      const ruleGuidance = workspaceRules.flatMap((layer) => layer.rules.filter((rule) => rule.enabled).map((rule) => `工作区规则 ${rule.target}.${rule.key}（${rule.severity}）：${JSON.stringify(rule.value)}`)).join('\n')
-      const prompt = `${promptWithCreativeGuidance(basePrompt, creative, [...activeBuiltins, ...activeInstalled])}${ruleGuidance ? `\n\n【工作区规则】\n${ruleGuidance}` : ''}`
+      const resolvedRules = resolveRules([...workspaceRules, ...selectedRuleLayers(creative, [...activeBuiltins, ...activeInstalled])], { customPrompt: custom })
+      const rulesForStage = (stageId: string): string => resolvedRules.effective
+        .filter((rule) => rule.target === 'all' || rule.target === stageId)
+        .map((rule) => `工作区规则 ${rule.target}.${rule.key}（${rule.severity}）：${JSON.stringify(rule.value)}`)
+        .join('\n')
+      const prompt = `${promptWithCreativeGuidance(basePrompt, creative, [...activeBuiltins, ...activeInstalled])}${rulesForStage('all') ? `\n\n【工作区规则】\n${rulesForStage('all')}` : ''}`
       const resolvedSettings = resolveModelSettings(provider, req.model)
-      const effectiveSettings = req.reasoning === undefined ? resolvedSettings : { ...resolvedSettings, reasoning: req.reasoning }
+      const effectiveSettings: ModelParams = req.reasoning === undefined ? resolvedSettings : { ...resolvedSettings, reasoning: req.reasoning }
       const basicGateway = new ModelCallGateway({
         maxCalls: session.creativePreferences?.orchestration?.maxCalls ?? MAX_TOOL_ROUNDS,
         maxEstimatedTokens: session.creativePreferences?.orchestration?.maxEstimatedTokens ?? 100000000
@@ -389,7 +436,9 @@ export class CoreAgentService {
       const modelMessages = (): ChatMessage[] =>
         messagesAfterSummary(session.messages, session.contextSummaryThrough).filter((message) => message.role !== 'system')
 
-      if (session.creativePreferences?.orchestrationEnabled) {
+      if (creative.orchestrationEnabled) {
+        const attachedChapter = req.attachments?.find((attachment) => attachment.kind === 'chapter')
+        const originalText = attachedChapter ? await getChapterBody(this.options.store, attachedChapter.id).catch(() => null) ?? '' : ''
         await this.runOrchestration({
           runId,
           sessionId: sid,
@@ -402,6 +451,10 @@ export class CoreAgentService {
           model: req.model,
           prompt: promptWithSummary,
           modelSettings: effectiveSettings,
+          history: modelMessages().map((item) => `${item.role}: ${item.text ?? ''}`).join('\n'),
+          originalText,
+          sourceRevision: contentRevision(originalText),
+          stageRuleGuidance: rulesForStage,
           signal: controller.signal,
           session,
           gateway: basicGateway
@@ -411,6 +464,7 @@ export class CoreAgentService {
         let previousToolSignature = ''
         let repeatedToolRounds = 0
         const toolArgBuffers = new Map<string, string>()
+        const toolPreviews = new Map<string, ToolBodyPreview>()
         for (; round < MAX_TOOL_ROUNDS; round++) {
         const assistantId = `msg_${Date.now().toString(36)}_${round}`
         const messages = modelMessages()
@@ -432,15 +486,25 @@ export class CoreAgentService {
               streamedText.set(assistantId, `${streamedText.get(assistantId) ?? ''}${delta}`)
               this.emit(sid, { type: 'text-delta', messageId: assistantId, delta }, runId)
             },
-            onToolCallStart: (callId, name) => this.emit(sid, { type: 'tool-start', callId, name, argsJson: toolArgBuffers.get(callId) ?? '' }, runId),
+            onToolCallStart: (callId, name) => {
+              if (name === 'save_chapter') toolPreviews.set(callId, new ToolBodyPreview({ toolName: name, contentPath: ['chapter', 'content'] }))
+              this.emit(sid, { type: 'tool-start', callId, name, argsJson: toolArgBuffers.get(callId) ?? '' }, runId)
+            },
             onToolArgsDelta: (callId, delta) => {
               toolArgBuffers.set(callId, `${toolArgBuffers.get(callId) ?? ''}${delta}`)
               this.emit(sid, { type: 'tool-args-delta', callId, delta }, runId)
+              const preview = toolPreviews.get(callId)?.push(delta)
+              if (preview) this.emit(sid, { type: 'tool-preview', callId, preview }, runId)
             },
-            onToolCallComplete: (callId, _name, argsJson) => { toolArgBuffers.set(callId, argsJson) }
+            onToolCallComplete: (callId, _name, argsJson) => {
+              toolArgBuffers.set(callId, argsJson)
+              const preview = toolPreviews.get(callId)?.replace(argsJson)
+              if (preview) this.emit(sid, { type: 'tool-preview', callId, preview }, runId)
+            }
             }
           )
         })
+        this.emit(sid, { type: 'budget', snapshot: basicGateway.budget.snapshot() }, runId)
         session.messages.push({ id: assistantId, role: 'assistant', text: result.text || streamedText.get(assistantId) || undefined, toolCalls: result.toolCalls.length ? result.toolCalls : undefined, thinkingBlocks: result.thinkingBlocks })
         streamedText.delete(assistantId)
         if (!result.toolCalls.length) break
