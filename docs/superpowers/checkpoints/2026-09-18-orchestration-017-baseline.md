@@ -269,4 +269,4 @@ release/0.1.6 下的两个旧重复产物属于被忽略的生成文件，按用
 - 两个服务包 SHA256：一致。
 - 当前 package.json、根 package-lock.json 顶层及 packages[empty] 版本：0.1.7-snapshot。
 
-重建不会清理 release/0.1.6 中旧的空格命名产物；旧文件仍存在但不再被 latest.yml 引用。本次不删除它们，以避免超出修复 metadata/config 缺口的最小范围。
+清理后，release/0.1.6 仅保留 canonical 的 StoryFabric-Setup-0.1.6.exe 及其 StoryFabric-Setup-0.1.6.exe.blockmap；旧空格命名重复文件已删除，latest.yml 指向 canonical 安装器。
