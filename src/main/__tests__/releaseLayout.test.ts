@@ -21,7 +21,7 @@ describe('version-scoped release layout', () => {
 
     expect(builderConfig).toContain('- target: zip')
     expect(builderConfig).toContain('artifactName: StoryFabric-Portable-${version}.${ext}')
-    expect(builderConfig).toContain('artifactName: StoryFabric Setup ${version}.${ext}')
+    expect(builderConfig).toContain('artifactName: StoryFabric-Setup-${version}.${ext}')
     expect(builderConfig).not.toContain('- target: portable')
   })
 
