@@ -1,4 +1,4 @@
-/** 渲染进程可调用的完整 API 面（preload 实现它，renderer 通过 window.api 使用） */
+﻿/** 渲染进程可调用的完整 API 面（preload 实现它，renderer 通过 window.api 使用） */
 import type {
   AgentEvent,
   ChapterBox,
@@ -29,7 +29,8 @@ import type { WorkspaceArchive } from '../core/workspace/archive'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
 import type { RunEventEnvelope } from './agentRuntime'
 import type { PlatformCapabilities } from './platformCapabilities'
-import type { CreativePackageSummary } from './creative'
+import type { CreativePackageSummary, CreativePreferences } from './creative'
+import type { AgentQuestionAnswer, SkillCandidateAction } from './agentQuestions'
 import type { RuleLayer } from '../core/rules/types'
 
 export interface AgentEventEnvelope {
@@ -166,12 +167,16 @@ export interface StoryFabricApi {
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }>
   agentConfirm(changeId: string, approved: boolean): Promise<void>
   agentAbort(sessionId: string): Promise<void>
+  /** Optional until each platform bridge wires the corresponding IPC handlers. */
+  agentAnswerQuestion?(answer: AgentQuestionAnswer): Promise<void>
+  /** Optional until each platform bridge wires the corresponding IPC handlers. */
+  agentResolveSkillCandidate?(candidateId: string, action: SkillCandidateAction): Promise<void>
   listSessions(): Promise<SessionMeta[]>
   createSession(): Promise<ChatSession>
   loadSession(id: string): Promise<ChatSession | null>
   deleteSession(id: string): Promise<void>
   /** 更新会话元信息：重命名 / 归档 */
-  updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void>
+  updateSession(id: string, patch: { title?: string; archived?: boolean; creativePreferences?: CreativePreferences }): Promise<void>
   updateSessionModelPreference(id: string, value: SessionModelPreference): Promise<void>
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void
 

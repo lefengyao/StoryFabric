@@ -1,9 +1,9 @@
-import type { AgentEvent } from './types'
+﻿import type { AgentEvent } from './types'
 
 export const RUNTIME_EVENT_TYPES = [
   'run-start', 'stage-start', 'text-delta', 'tool-generating', 'tool-complete', 'artifact-delta',
   'stage-complete', 'child-start', 'child-complete', 'usage-update', 'pending-change', 'change-result',
-  'run-paused', 'run-error', 'run-done'
+  'run-paused', 'run-error', 'run-done', 'agent-question', 'skill-candidate', 'waiting-user'
 ] as const
 
 export type RuntimeEventType = typeof RUNTIME_EVENT_TYPES[number]
@@ -52,11 +52,28 @@ function requiredString(value: unknown, name: string): string {
   return value
 }
 
+function validateStructuredEventPayload(event: Record<string, unknown>): void {
+  if (event.type === 'agent-question' || event.type === 'skill-candidate') {
+    if (!isRecord(event.payload)) throw new Error(`${event.type} 的 payload 必须是对象`)
+    const identity = event.type === 'agent-question' ? 'questionId' : 'candidateId'
+    requiredString(event.payload[identity], `event.payload.${identity}`)
+    return
+  }
+  if (event.type === 'waiting-user') {
+    if (!isRecord(event.payload)) throw new Error('waiting-user 的 payload 必须是对象')
+    const hasQuestionId = event.payload.questionId !== undefined
+    const hasCandidateId = event.payload.candidateId !== undefined
+    if (hasQuestionId) requiredString(event.payload.questionId, 'event.payload.questionId')
+    if (hasCandidateId) requiredString(event.payload.candidateId, 'event.payload.candidateId')
+    if (!hasQuestionId && !hasCandidateId) throw new Error('waiting-user 的 payload 必须包含 questionId 或 candidateId')
+  }
+}
 export function validateRuntimeEvent(event: unknown): RuntimeEvent {
   if (!isRecord(event) || typeof event.type !== 'string' || !RUNTIME_EVENT_TYPE_SET.has(event.type)) throw new Error('不支持的运行事件类型')
   if (event.messageId !== undefined) requiredString(event.messageId, 'event.messageId')
   if (event.artifactId !== undefined) requiredString(event.artifactId, 'event.artifactId')
   if (event.delta !== undefined && typeof event.delta !== 'string') throw new Error('event.delta 必须是字符串')
+  validateStructuredEventPayload(event)
   return event as unknown as RuntimeEvent
 }
 
@@ -111,6 +128,15 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       break
     case 'change-result':
       runtime = { type: 'change-result', payload: event }
+      break
+    case 'agent-question':
+      runtime = { type: 'agent-question', payload: { questionId: event.question.questionId, question: event.question } }
+      break
+    case 'skill-candidate':
+      runtime = { type: 'skill-candidate', payload: { candidateId: event.candidate.candidateId, candidate: event.candidate } }
+      break
+    case 'waiting-user':
+      runtime = { type: 'waiting-user', payload: event }
       break
     case 'context-compression-start':
       runtime = { type: 'stage-start', payload: event }

@@ -1,5 +1,6 @@
-export type CreativeMode = 'basic' | 'orchestration'
+﻿export type CreativeMode = 'basic' | 'orchestration'
 export type CreativeIntensity = 'light' | 'standard' | 'strong'
+export type OrchestrationMode = 'multi' | 'single'
 
 export interface CreativePackageSummary {
   id: string
@@ -12,6 +13,8 @@ export interface CreativePackageSummary {
 }
 
 export interface OrchestrationPreferences {
+  /** Multi-agent orchestration is the backwards-compatible default. */
+  mode?: OrchestrationMode
   enabled: boolean
   subagentsEnabled: boolean
   enabledStageIds: string[]
@@ -20,6 +23,17 @@ export interface OrchestrationPreferences {
   maxEstimatedTokens?: number
 }
 
+export type NormalizedOrchestrationPreferences = OrchestrationPreferences & { mode: OrchestrationMode }
+
+export const DEFAULT_ORCHESTRATION_PREFERENCES: NormalizedOrchestrationPreferences = {
+  mode: 'multi',
+  enabled: false,
+  subagentsEnabled: false,
+  enabledStageIds: ['plan', 'setting', 'prompt', 'anti-ai', 'write', 'polish', 'review'],
+  modelByStage: {},
+  maxCalls: 24,
+  maxEstimatedTokens: 300000
+}
 export interface CreativePreferences {
   mode: CreativeMode
   orchestrationEnabled: boolean
@@ -62,6 +76,28 @@ function normalizeModels(value: unknown): Record<string, { providerId: string; m
   return result
 }
 
+/** Settings-level orchestration profile shared by desktop, web, and Android. */
+export function normalizeOrchestrationPreferences(value: unknown): NormalizedOrchestrationPreferences {
+  if (!isRecord(value)) return {
+    ...DEFAULT_ORCHESTRATION_PREFERENCES,
+    enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds],
+    modelByStage: {}
+  }
+
+  const enabledStageIds = stringList(value.enabledStageIds)
+  const configuredBudget = positiveInteger(value.maxEstimatedTokens)
+  return {
+    mode: value.mode === 'single' ? 'single' : 'multi',
+    enabled: value.enabled === true,
+    subagentsEnabled: value.subagentsEnabled === true,
+    enabledStageIds: Array.isArray(value.enabledStageIds) ? enabledStageIds : [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds],
+    modelByStage: normalizeModels(value.modelByStage),
+    maxCalls: positiveInteger(value.maxCalls) ?? DEFAULT_ORCHESTRATION_PREFERENCES.maxCalls,
+    // 100k was the old bundled default; migrate it so existing profiles can
+    // finish a full multi-stage run without silently changing other custom limits.
+    maxEstimatedTokens: configuredBudget === 100000 ? DEFAULT_ORCHESTRATION_PREFERENCES.maxEstimatedTokens : configuredBudget ?? DEFAULT_ORCHESTRATION_PREFERENCES.maxEstimatedTokens
+  }
+}
 export function normalizeCreativePreferences(value: unknown): CreativePreferences {
   if (!isRecord(value)) return { ...DEFAULT_CREATIVE_PREFERENCES }
 
@@ -80,13 +116,14 @@ export function normalizeCreativePreferences(value: unknown): CreativePreference
   }
 
   if (orchestrationValue || orchestrationEnabled) {
+    const orchestration = normalizeOrchestrationPreferences(orchestrationValue)
+    const configuredBudget = positiveInteger(orchestrationValue?.maxEstimatedTokens ?? value.maxEstimatedTokens)
     result.orchestration = {
+      ...orchestration,
       enabled: orchestrationEnabled,
       subagentsEnabled,
-      enabledStageIds: stringList(orchestrationValue?.enabledStageIds),
-      modelByStage: normalizeModels(orchestrationValue?.modelByStage),
-      maxCalls: positiveInteger(orchestrationValue?.maxCalls ?? value.maxCalls),
-      maxEstimatedTokens: positiveInteger(orchestrationValue?.maxEstimatedTokens ?? value.maxEstimatedTokens)
+      maxCalls: positiveInteger(orchestrationValue?.maxCalls ?? value.maxCalls) ?? orchestration.maxCalls,
+      maxEstimatedTokens: configuredBudget === 100000 ? DEFAULT_ORCHESTRATION_PREFERENCES.maxEstimatedTokens : configuredBudget ?? orchestration.maxEstimatedTokens
     }
   }
   return result

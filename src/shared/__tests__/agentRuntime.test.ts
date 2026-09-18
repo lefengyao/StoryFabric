@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import type { AgentEvent } from '../types'
 import {
   ClientRunIdRegistry,
   adaptLegacyAgentEvent,
+  validateRuntimeEvent,
   validateRunEventEnvelope
 } from '../agentRuntime'
 import { normalizeCreativePreferences } from '../creative'
@@ -44,6 +45,50 @@ describe('agent runtime contract', () => {
     })).toThrow(/event|事件/)
   })
 
+  it('validates structured question, skill candidate, and waiting-user events by stable identity', () => {
+    expect(validateRuntimeEvent({ type: 'agent-question', payload: { questionId: 'question-1' } })).toEqual({
+      type: 'agent-question',
+      payload: { questionId: 'question-1' }
+    })
+    expect(validateRuntimeEvent({ type: 'skill-candidate', payload: { candidateId: 'candidate-1' } })).toEqual({
+      type: 'skill-candidate',
+      payload: { candidateId: 'candidate-1' }
+    })
+    expect(validateRuntimeEvent({ type: 'waiting-user', payload: { questionId: 'question-1' } })).toEqual({
+      type: 'waiting-user',
+      payload: { questionId: 'question-1' }
+    })
+
+    expect(() => validateRuntimeEvent({ type: 'agent-question', payload: {} })).toThrow('questionId')
+    expect(() => validateRuntimeEvent({ type: 'skill-candidate', payload: {} })).toThrow('candidateId')
+    expect(() => validateRuntimeEvent({ type: 'waiting-user', payload: {} })).toThrow(/questionId|candidateId/)
+  })
+
+  it('adapts a structured legacy agent-question event at the compatibility boundary', () => {
+    const question = {
+      questionId: 'question-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      agentId: 'planner',
+      title: '选择',
+      description: '请选择',
+      fields: [{ id: 'choice', label: '选项', type: 'single' as const, options: [{ id: 'a', label: 'A' }] }]
+    }
+    const envelope = adaptLegacyAgentEvent({
+      workspaceId: 'w',
+      sessionId: 's',
+      runId: 'r',
+      agentId: 'planner',
+      seq: 1,
+      event: { type: 'agent-question', question }
+    })
+
+    expect(envelope.event).toEqual({
+      type: 'agent-question',
+      payload: { questionId: 'question-1', question }
+    })
+    expect(validateRunEventEnvelope(envelope)).toEqual(envelope)
+  })
   it('maps a legacy event exactly once at the compatibility boundary', () => {
     const legacy: AgentEvent = { type: 'text-delta', messageId: 'm', delta: '你好' }
     const envelope = adaptLegacyAgentEvent({

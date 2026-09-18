@@ -1,4 +1,4 @@
-/** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
+﻿/** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
 
 export const IPC = {
   /* 工作区 */
@@ -69,6 +69,8 @@ export const IPC = {
   AgentRun: 'agent:run',
   AgentConfirm: 'agent:confirm',
   AgentAbort: 'agent:abort',
+  AgentAnswerQuestion: 'agent:answer-question',
+  AgentResolveSkillCandidate: 'agent:resolve-skill-candidate',
   ListSessions: 'agent:sessions:list',
   CreateSession: 'agent:sessions:create',
   ExportSession: 'agent:sessions:export',

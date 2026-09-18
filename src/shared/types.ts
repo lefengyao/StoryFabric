@@ -1,4 +1,4 @@
-/** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
+﻿/** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
 
 export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note' | 'projectDoc'
 
@@ -182,7 +182,8 @@ export interface TrashEntry {
   }
 }
 
-import type { CreativePreferences } from './creative'
+import type { AgentQuestion, PlanningGate, SkillCandidate } from './agentQuestions'
+import type { CreativePreferences, OrchestrationMode } from './creative'
 
 /* ---------------- 应用设置 ---------------- */
 
@@ -335,6 +336,7 @@ export interface ChatMessage {
 /** 可持久化的编排运行摘要；只保存候选产物，不代表已写回工作区。 */
 export interface OrchestrationRunRecord {
   runId: string
+  orchestrationMode?: OrchestrationMode
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   sourceRevision: string | number
   originalText: string
@@ -357,6 +359,9 @@ export interface OrchestrationRunRecord {
   overlay: Record<string, unknown>
   businessText: string
   updatedAt: number
+  waitingQuestion?: AgentQuestion
+  skillCandidates?: SkillCandidate[]
+  planningGate?: PlanningGate
 }
 
 export interface AgentBudgetSnapshot {
@@ -392,6 +397,10 @@ export interface ChatSession {
   contextSummaryUpdatedAt?: number
   /** 本会话的创作模式与扩展选择；缺省时按基础模式读取。 */
   creativePreferences?: CreativePreferences
+  orchestrationMode?: OrchestrationMode
+  waitingQuestion?: AgentQuestion
+  skillCandidates?: SkillCandidate[]
+  planningGate?: PlanningGate
   /** 最近的编排候选运行，供刷新后查看各阶段结果。 */
   orchestrationRuns?: OrchestrationRunRecord[]
 }
@@ -414,6 +423,10 @@ export interface RunAgentRequest {
   clientRunId?: string
   /** 本次运行的创作模式；缺省时必须按基础模式处理。 */
   creative?: CreativePreferences
+  orchestrationMode?: OrchestrationMode
+  waitingQuestion?: AgentQuestion
+  skillCandidates?: SkillCandidate[]
+  planningGate?: PlanningGate
 }
 
 /* ---------------- 待确认写变更 ---------------- */
@@ -444,7 +457,10 @@ export type AgentEvent =
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }
   | { type: 'change-result'; changeId: string; status: 'applied' | 'rejected' | 'conflict' | 'failed'; message: string }
-  | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
+  | { type: 'agent-question'; question: AgentQuestion }
+  | { type: 'skill-candidate'; candidate: SkillCandidate }
+  | { type: 'waiting-user'; questionId: string; reason?: string; planningGate?: PlanningGate }
+  | { type: 'waiting-user'; candidateId: string; reason?: string; planningGate?: PlanningGate }  | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
   | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
   | { type: 'error'; message: string }
   | { type: 'done'; session?: ChatSession }
