@@ -1,4 +1,4 @@
-import type { RunEventEnvelope, RuntimeEvent } from '../../shared/agentRuntime'
+import { validateRunEventEnvelope, type RunEventEnvelope, type RuntimeEvent } from '../../shared/agentRuntime'
 
 export interface RunEventInput extends Omit<RunEventEnvelope, 'schemaVersion' | 'seq' | 'at' | 'event'> {
   event: RuntimeEvent
@@ -20,12 +20,14 @@ export class RunEventLedger {
       agentId: input.agentId,
       ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
       ...(input.stageId ? { stageId: input.stageId } : {}),
-      seq: this.nextSeq++,
+      seq: this.nextSeq,
       at: input.at ?? this.now(),
       event: input.event
     }
-    this.events.push(event)
-    return event
+    const validated = validateRunEventEnvelope(event)
+    this.nextSeq += 1
+    this.events.push(validated)
+    return validated
   }
 
   list(afterSeq = 0): RunEventEnvelope[] {

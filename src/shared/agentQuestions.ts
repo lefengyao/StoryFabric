@@ -71,7 +71,16 @@ function optionalString(value: unknown, name: string): string | undefined {
 
 function parsePackageEntry(value: unknown, name: string): SkillManifestEntry | RuleSetManifestEntry {
   if (!isRecord(value)) throw new Error(`${name} 必须是对象`)
-  return { id: requiredString(value.id, `${name}.id`), path: requiredString(value.path, `${name}.path`) }
+  const id = requiredString(value.id, `${name}.id`)
+  const path = requiredString(value.path, `${name}.path`)
+  if (!/^[A-Za-z0-9._/-]+$/.test(path) || path.startsWith('/') || path.includes('..') || path.split('/').some((part) => !part || part === '.')) throw new Error(`${name}.path 路径无效`)
+  return { id, path }
+}
+
+function validatePackageVersion(value: unknown, name: string): string {
+  const version = requiredString(value, name)
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`${name} 版本格式无效`)
+  return version
 }
 
 function parseContentPackage(value: unknown): ContentPackage {
@@ -85,26 +94,39 @@ function parseContentPackage(value: unknown): ContentPackage {
   if (!Array.isArray(rawManifest.skills) || !Array.isArray(rawManifest.ruleSets)) throw new Error('候选 package.manifest 的 skills/ruleSets 必须是数组')
   if (!Array.isArray(value.files)) throw new Error('候选 package.files 必须是数组')
 
+  const skills = rawManifest.skills.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.skills[${index}]`)) as SkillManifestEntry[]
+  const ruleSets = rawManifest.ruleSets.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.ruleSets[${index}]`)) as RuleSetManifestEntry[]
+  if (new Set(skills.map((entry) => entry.id)).size !== skills.length) throw new Error('候选 Skill id 重复')
+  if (new Set(ruleSets.map((entry) => entry.id)).size !== ruleSets.length) throw new Error('候选规则集 id 重复')
+
   const manifest: SkillPackageManifest = {
     schemaVersion: 1,
     id: requiredString(rawManifest.id, '候选 package.manifest.id'),
-    version: requiredString(rawManifest.version, '候选 package.manifest.version'),
+    version: validatePackageVersion(rawManifest.version, '候选 package.manifest.version'),
     name: requiredString(rawManifest.name, '候选 package.manifest.name'),
     description: requiredString(rawManifest.description, '候选 package.manifest.description'),
     author: requiredString(rawManifest.author, '候选 package.manifest.author'),
     license: requiredString(rawManifest.license, '候选 package.manifest.license'),
-    minAppVersion: requiredString(rawManifest.minAppVersion, '候选 package.manifest.minAppVersion'),
+    minAppVersion: validatePackageVersion(rawManifest.minAppVersion, '候选 package.manifest.minAppVersion'),
     platforms: rawManifest.platforms as SupportedPlatform[],
-    skills: rawManifest.skills.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.skills[${index}]`)) as SkillManifestEntry[],
-    ruleSets: rawManifest.ruleSets.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.ruleSets[${index}]`)) as RuleSetManifestEntry[]
+    skills,
+    ruleSets
   }
   const files = value.files.map((file, index) => {
     if (!isRecord(file)) throw new Error(`候选 package.files[${index}] 必须是对象`)
+    const path = requiredString(file.path, `候选 package.files[${index}].path`)
+    if (!/^[A-Za-z0-9._/-]+$/.test(path) || path.startsWith('/') || path.includes('..') || path.split('/').some((part) => !part || part === '.')) throw new Error(`候选 package.files[${index}].path 路径无效`)
     return {
-      path: requiredString(file.path, `候选 package.files[${index}].path`),
+      path,
       content: typeof file.content === 'string' ? file.content : (() => { throw new Error(`候选 package.files[${index}].content 必须是字符串`) })()
     }
   })
+  const filePaths = new Set<string>()
+  for (const file of files) {
+    if (filePaths.has(file.path)) throw new Error(`候选 package.files 路径重复：${file.path}`)
+    filePaths.add(file.path)
+  }
+  for (const entry of [...skills, ...ruleSets]) if (!filePaths.has(entry.path)) throw new Error(`候选 package.manifest 引用文件不存在：${entry.path}`)
   return { manifest, files }
 }
 

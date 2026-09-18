@@ -50,7 +50,9 @@ export class SessionStore {
 
   async load(id: string): Promise<ChatSession | null> {
     try {
-      return JSON.parse(await fs.readFile(this.pathOf(id), 'utf-8')) as ChatSession
+      const session = JSON.parse(await fs.readFile(this.pathOf(id), 'utf-8')) as ChatSession
+      if (session.creativePreferences !== undefined) session.creativePreferences = validateCreativePreferences(session.creativePreferences)
+      return session
     } catch {
       return null
     }

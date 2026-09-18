@@ -65,7 +65,7 @@ function validateStructuredEventPayload(event: Record<string, unknown>, identity
     const questionId = requiredString(payload.questionId, 'event.payload.questionId')
     const question = parseAgentQuestion(payload.question)
     if (question.questionId !== questionId) throw new Error('event.payload.questionId 与 question.questionId 不匹配')
-    if (identity && (question.runId !== identity.runId || question.sessionId !== identity.sessionId || question.agentId !== identity.agentId || (question.stageId !== undefined && identity.stageId !== undefined && question.stageId !== identity.stageId))) {
+    if (identity && (question.runId !== identity.runId || question.sessionId !== identity.sessionId || question.agentId !== identity.agentId || question.stageId !== identity.stageId)) {
       throw new Error('agent-question 的身份字段与运行事件 envelope 不匹配')
     }
     return
@@ -97,6 +97,8 @@ function validateEventShape(event: Record<string, unknown>): void {
       if (typeof event.delta !== 'string') throw new Error('text-delta 的 delta 必须是字符串')
       return
     case 'run-start':
+      if (event.payload !== undefined && !isRecord(event.payload)) throw new Error('run-start 的 payload 必须是对象')
+      return
     case 'stage-start':
     case 'stage-complete':
     case 'tool-generating':
@@ -204,7 +206,7 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'pending-change', payload: { change: event.change } }
       break
     case 'change-applied':
-      runtime = { type: 'change-result', payload: { changeId: event.changeId, approved: event.approved } }
+      runtime = { type: 'change-result', payload: { changeId: event.changeId, status: event.approved ? 'applied' : 'rejected', message: event.approved ? '变更已应用' : '变更已拒绝' } }
       break
     case 'change-result':
       runtime = { type: 'change-result', payload: event }

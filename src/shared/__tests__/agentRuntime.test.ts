@@ -8,6 +8,7 @@ import {
 } from '../agentRuntime'
 import { normalizeCreativePreferences, normalizeOrchestrationPreferences } from '../creative'
 import { normalizePlatformCapabilities } from '../platformCapabilities'
+import { RunEventLedger } from '../../core/agent/events'
 
 describe('agent runtime contract', () => {
   it('defaults missing creative preferences to basic mode without orchestration', () => {
@@ -77,6 +78,12 @@ describe('agent runtime contract', () => {
     expect(() => validateRuntimeEvent({ type: 'stage-start' })).toThrow(/payload/)
   })
 
+  it('enforces the same validator when events enter the runtime ledger', () => {
+    const ledger = new RunEventLedger(() => 1)
+    expect(() => ledger.append({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'a', event: { type: 'text-delta' } as never })).toThrow(/messageId|delta/)
+    expect(ledger.append({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'a', event: { type: 'run-start' } })).toMatchObject({ seq: 1, event: { type: 'run-start' } })
+  })
+
   it('requires structured question and skill-candidate payloads beyond stable identity', () => {
     expect(() => validateRuntimeEvent({ type: 'agent-question', payload: { questionId: 'question-1' } })).toThrow(/问题|question|title|description|fields/)
     expect(() => validateRuntimeEvent({ type: 'skill-candidate', payload: { candidateId: 'candidate-1' } })).toThrow(/候选|candidate|package/)
@@ -128,6 +135,19 @@ describe('agent runtime contract', () => {
       type: 'skill-candidate',
       payload: { candidateId: 'candidate-1', candidate: { ...candidate, package: { manifest: {}, files: [] } } }
     })).toThrow(/manifest|package/)
+    expect(() => validateRuntimeEvent({
+      type: 'skill-candidate',
+      payload: {
+        candidateId: 'candidate-1',
+        candidate: {
+          ...candidate,
+          package: {
+            ...candidate.package,
+            manifest: { ...candidate.package.manifest, skills: [{ id: 'dialogue', path: 'skills/dialogue/SKILL.md' }] }
+          }
+        }
+      }
+    })).toThrow(/不存在|引用|file/)
   })
 
   it('requires exactly one waiting-user identity', () => {
@@ -204,6 +224,14 @@ describe('agent runtime contract', () => {
 
     expect(envelope.event).toEqual({ type: 'text-delta', messageId: 'm', delta: '你好' })
     expect(validateRunEventEnvelope(envelope)).toEqual(envelope)
+  })
+
+  it('maps legacy change decisions to the canonical change-result payload', () => {
+    const envelope = adaptLegacyAgentEvent({
+      workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'writer', seq: 1,
+      event: { type: 'change-applied', changeId: 'change-1', approved: true }
+    })
+    expect(envelope.event).toEqual({ type: 'change-result', payload: { changeId: 'change-1', status: 'applied', message: '变更已应用' } })
   })
 
   it('returns the existing run for an identical client id and rejects changed input', () => {

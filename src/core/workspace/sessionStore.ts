@@ -22,7 +22,11 @@ export class CoreSessionStore {
   async load(id: string): Promise<ChatSession | null> {
     const raw = await this.store.readText(this.pathOf(id))
     if (!raw) return null
-    try { return JSON.parse(raw) as ChatSession } catch { return null }
+    try {
+      const session = JSON.parse(raw) as ChatSession
+      if (session.creativePreferences !== undefined) session.creativePreferences = validateCreativePreferences(session.creativePreferences)
+      return session
+    } catch { return null }
   }
 
   async save(session: ChatSession): Promise<void> {
