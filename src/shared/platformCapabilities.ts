@@ -6,6 +6,7 @@ export interface PlatformCapabilities {
   rules: boolean
   orchestration: boolean
   subagents: boolean
+  goalMode: boolean
   eventRecovery: boolean
   budgets: boolean
   orientation: OrientationCapability
@@ -19,6 +20,7 @@ export const MINIMAL_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   rules: false,
   orchestration: false,
   subagents: false,
+  goalMode: false,
   eventRecovery: false,
   budgets: false,
   orientation: 'none',
@@ -42,6 +44,7 @@ export function normalizePlatformCapabilities(value: unknown): PlatformCapabilit
     rules: value.rules === true,
     orchestration: value.orchestration === true,
     subagents: value.subagents === true,
+    goalMode: value.goalMode === true,
     eventRecovery: value.eventRecovery === true,
     budgets: value.budgets === true,
     orientation,

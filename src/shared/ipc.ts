@@ -1,4 +1,4 @@
-﻿/** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
+/** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
 
 export const IPC = {
   /* 工作区 */
@@ -54,6 +54,7 @@ export const IPC = {
   FetchModels: 'settings:fetch-models',
   GetCapabilities: 'runtime:capabilities',
   ListCreativePackages: 'creative:packages:list',
+  InstallCreativePackage: 'creative:packages:install',
   SetCreativePackageEnabled: 'creative:packages:enabled',
   ListCreativeRules: 'creative:rules:list',
   SaveCreativeRules: 'creative:rules:save',
@@ -71,6 +72,11 @@ export const IPC = {
   AgentAbort: 'agent:abort',
   AgentAnswerQuestion: 'agent:answer-question',
   AgentResolveSkillCandidate: 'agent:resolve-skill-candidate',
+  ListGoals: 'agent:goals:list',
+  GetGoal: 'agent:goals:get',
+  ContinueGoal: 'agent:goals:continue',
+  StopGoal: 'agent:goals:stop',
+  ReplanGoal: 'agent:goals:replan',
   ListSessions: 'agent:sessions:list',
   CreateSession: 'agent:sessions:create',
   ExportSession: 'agent:sessions:export',
@@ -80,6 +86,8 @@ export const IPC = {
   UpdateSession: 'agent:sessions:update',
   UpdateSessionModelPreference: 'agent:sessions:model-preference:update',
   AgentEvent: 'agent:event',
+  RuntimeAgentEvent: 'agent:runtime-event',
+  RecoverRunEvents: 'agent:runtime-events:recover',
 
   /* 远程部署（仅桌面端） */
   DeployTestConnection: 'deploy:test',

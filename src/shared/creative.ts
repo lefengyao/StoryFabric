@@ -1,4 +1,6 @@
-﻿export type CreativeMode = 'basic' | 'orchestration'
+import type { AgentMode, ApprovalPolicy, GoalTask, GoalTaskStatus } from './types'
+
+export type CreativeMode = 'basic' | 'orchestration'
 export type CreativeIntensity = 'light' | 'standard' | 'strong'
 export type OrchestrationMode = 'multi' | 'single'
 
@@ -34,6 +36,7 @@ export const DEFAULT_ORCHESTRATION_PREFERENCES: NormalizedOrchestrationPreferenc
   maxCalls: 24,
   maxEstimatedTokens: 300000
 }
+
 export interface CreativePreferences {
   mode: CreativeMode
   orchestrationEnabled: boolean
@@ -98,6 +101,7 @@ export function normalizeOrchestrationPreferences(value: unknown): NormalizedOrc
     maxEstimatedTokens: configuredBudget === 100000 ? DEFAULT_ORCHESTRATION_PREFERENCES.maxEstimatedTokens : configuredBudget ?? DEFAULT_ORCHESTRATION_PREFERENCES.maxEstimatedTokens
   }
 }
+
 export function normalizeCreativePreferences(value: unknown): CreativePreferences {
   if (!isRecord(value)) return { ...DEFAULT_CREATIVE_PREFERENCES }
 
@@ -137,4 +141,71 @@ export function validateCreativePreferences(value: unknown): CreativePreferences
     if (value[key] !== undefined && (!Array.isArray(value[key]) || value[key].some((item) => typeof item !== 'string' || !item.trim()))) throw new Error(`creative.${key} 无效`)
   }
   return normalizeCreativePreferences(value)
+}
+
+export function normalizeAgentMode(value: unknown): AgentMode {
+  return value === 'goal' ? 'goal' : 'normal'
+}
+
+export function normalizeApprovalPolicy(value: unknown): ApprovalPolicy {
+  return value === 'delete-confirm' || value === 'auto' ? value : 'strict'
+}
+
+function goalTaskStatus(value: unknown): GoalTaskStatus {
+  const statuses: GoalTaskStatus[] = ['pending', 'running', 'awaiting-approval', 'validating', 'completed', 'failed', 'skipped']
+  return typeof value === 'string' && statuses.includes(value as GoalTaskStatus) ? value as GoalTaskStatus : 'pending'
+}
+
+/** Validates model-produced goal tasks before they enter the executable state machine. */
+export function validateGoalTasks(value: unknown): GoalTask[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) throw new Error('目标任务数量必须在 1 到 10 项之间')
+  const ids = new Set<string>()
+  const tasks: GoalTask[] = value.map((entry, index) => {
+    if (!isRecord(entry)) throw new Error(`目标任务 ${index + 1} 必须是对象`)
+    const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+    const title = typeof entry.title === 'string' ? entry.title.trim() : ''
+    const instructions = typeof entry.instructions === 'string' ? entry.instructions.trim() : ''
+    const acceptanceCriteria = Array.isArray(entry.acceptanceCriteria)
+      ? entry.acceptanceCriteria.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+      : []
+    const dependsOn = Array.isArray(entry.dependsOn)
+      ? entry.dependsOn.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+      : []
+    if (!id || !title || !instructions) throw new Error(`目标任务 ${index + 1} 缺少 id、标题或说明`)
+    if (ids.has(id)) throw new Error(`目标任务 id 重复：${id}`)
+    if (!acceptanceCriteria.length) throw new Error(`目标任务 ${id} 至少需要一条验收条件`)
+    if (dependsOn.includes(id)) throw new Error(`目标任务 ${id} 不能依赖自身`)
+    ids.add(id)
+    return {
+      id,
+      title,
+      instructions,
+      acceptanceCriteria,
+      dependsOn,
+      status: goalTaskStatus(entry.status),
+      attempts: typeof entry.attempts === 'number' && Number.isInteger(entry.attempts) && entry.attempts >= 0 ? entry.attempts : 0,
+      ...(typeof entry.resultSummary === 'string' && entry.resultSummary.trim() ? { resultSummary: entry.resultSummary.trim() } : {}),
+      ...(typeof entry.validationReason === 'string' && entry.validationReason.trim() ? { validationReason: entry.validationReason.trim() } : {})
+    }
+  })
+
+  for (const task of tasks) {
+    for (const dependency of task.dependsOn) {
+      if (!ids.has(dependency)) throw new Error(`目标任务 ${task.id} 依赖不存在的任务：${dependency}`)
+    }
+  }
+
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new Error(`目标任务依赖存在循环：${id}`)
+    if (visited.has(id)) return
+    visiting.add(id)
+    const task = tasks.find((candidate) => candidate.id === id)
+    for (const dependency of task?.dependsOn ?? []) visit(dependency)
+    visiting.delete(id)
+    visited.add(id)
+  }
+  for (const task of tasks) visit(task.id)
+  return tasks
 }

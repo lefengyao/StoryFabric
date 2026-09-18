@@ -18,6 +18,7 @@ import { pruneModelSettings } from '../../core/llm/modelCatalog'
 import { keyPreview } from '../../shared/keyPreview'
 import { markRecentWorkspace } from '../../shared/recentWorkspaces'
 import { throwIfWorkspaceRequestAborted } from '../../shared/api'
+import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../../shared/creative'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -40,6 +41,7 @@ function getSafeStorage(): SafeStorageLike | null {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
+  orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -98,7 +100,14 @@ function normalizeSettings(raw: unknown): AppSettings {
     ? Object.fromEntries(Object.entries(parsed.recentWorkspaceOpenedAt).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
     : {}
 
-  return { ...DEFAULT_SETTINGS, ...parsed, providers, recentWorkspaces, recentWorkspaceOpenedAt }
+  return {
+    ...DEFAULT_SETTINGS,
+    ...parsed,
+    providers,
+    recentWorkspaces,
+    recentWorkspaceOpenedAt,
+    orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
+  }
 }
 
 export function encryptApiKey(plain: string): string {
@@ -163,7 +172,7 @@ export class SettingsService {
 
   update(patch: Partial<AppSettings>): Promise<AppSettings> {
     return this.serialized(async () => {
-      const next = { ...(await this.loadRaw()), ...patch }
+      const next = normalizeSettings({ ...(await this.loadRaw()), ...patch })
       await this.saveRaw(next)
       return next
     })

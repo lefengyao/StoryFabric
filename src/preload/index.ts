@@ -68,6 +68,7 @@ const api: StoryFabricApi = {
   fetchModels: (input: FetchModelsInput) => ipcRenderer.invoke(IPC.FetchModels, input),
   getCapabilities: () => ipcRenderer.invoke(IPC.GetCapabilities),
   listCreativePackages: () => ipcRenderer.invoke(IPC.ListCreativePackages),
+  installCreativePackage: (input) => ipcRenderer.invoke(IPC.InstallCreativePackage, input),
   setCreativePackageEnabled: (id, version, enabled) => ipcRenderer.invoke(IPC.SetCreativePackageEnabled, id, version, enabled),
   listCreativeRules: () => ipcRenderer.invoke(IPC.ListCreativeRules),
   saveCreativeRules: (layers) => ipcRenderer.invoke(IPC.SaveCreativeRules, layers),
@@ -75,6 +76,11 @@ const api: StoryFabricApi = {
   agentRun: (req: RunAgentRequest) => ipcRenderer.invoke(IPC.AgentRun, req),
   agentConfirm: (changeId, approved) => ipcRenderer.invoke(IPC.AgentConfirm, changeId, approved),
   agentAbort: (sessionId) => ipcRenderer.invoke(IPC.AgentAbort, sessionId),
+  listGoals: () => ipcRenderer.invoke(IPC.ListGoals),
+  getGoal: (id) => ipcRenderer.invoke(IPC.GetGoal, id),
+  continueGoal: (id) => ipcRenderer.invoke(IPC.ContinueGoal, id),
+  stopGoal: (id) => ipcRenderer.invoke(IPC.StopGoal, id),
+  replanGoal: (id) => ipcRenderer.invoke(IPC.ReplanGoal, id),
   listSessions: () => ipcRenderer.invoke(IPC.ListSessions),
   createSession: () => ipcRenderer.invoke(IPC.CreateSession),
   exportSession: (id) => ipcRenderer.invoke(IPC.ExportSession, id),
@@ -83,10 +89,16 @@ const api: StoryFabricApi = {
   deleteSession: (id) => ipcRenderer.invoke(IPC.DeleteSession, id),
   updateSession: (id, patch) => ipcRenderer.invoke(IPC.UpdateSession, id, patch),
   updateSessionModelPreference: (id, value) => ipcRenderer.invoke(IPC.UpdateSessionModelPreference, id, value),
+  recoverRunEvents: (runId, afterSeq) => ipcRenderer.invoke(IPC.RecoverRunEvents, runId, afterSeq),
   onAgentEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
     ipcRenderer.on(IPC.AgentEvent, listener)
     return () => ipcRenderer.removeListener(IPC.AgentEvent, listener)
+  },
+  onRuntimeAgentEvent: (cb) => {
+    const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
+    ipcRenderer.on(IPC.RuntimeAgentEvent, listener)
+    return () => ipcRenderer.removeListener(IPC.RuntimeAgentEvent, listener)
   },
 
   deployTestConnection: (input) => ipcRenderer.invoke(IPC.DeployTestConnection, input),

@@ -7,6 +7,7 @@ import { pruneModelSettings } from '../core/llm/modelCatalog'
 import { keyPreview } from '../shared/keyPreview'
 import { markRecentWorkspace } from '../shared/recentWorkspaces'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
+import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../shared/creative'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
@@ -18,6 +19,7 @@ interface ServerSettings extends Omit<AppSettings, 'providers'> {
 
 const DEFAULT_SETTINGS: ServerSettings = {
   providers: [],
+  orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -116,7 +118,8 @@ export class ServerSettingsStore {
       ...parsed,
       providers,
       recentWorkspaces,
-      recentWorkspaceOpenedAt
+      recentWorkspaceOpenedAt,
+      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
     }
   }
 
@@ -170,7 +173,12 @@ export class ServerSettingsStore {
 
   update(patch: SettingsPatch): Promise<PublicAppSettings> {
     return this.serialized(async () => {
-      const next = { ...(await this.loadRawForMutation()), ...patch }
+      const current = await this.loadRawForMutation()
+      const next = {
+        ...current,
+        ...patch,
+        orchestrationDefaults: normalizeOrchestrationPreferences(patch.orchestrationDefaults ?? current.orchestrationDefaults)
+      }
       return this.toPublic(await this.persist(next))
     })
   }
