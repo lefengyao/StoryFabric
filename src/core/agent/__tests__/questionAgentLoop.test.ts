@@ -102,6 +102,7 @@ describe('CoreAgentService structured questions', () => {
 
     service.abort(questionEvent.question.sessionId)
     await running
+    expect((await loadSession(store, questionEvent.question.sessionId)).waitingQuestion).toBeUndefined()
   })
 
 })

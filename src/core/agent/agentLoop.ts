@@ -1,5 +1,5 @@
 import type { AgentEvent, ApprovalPolicy, ChatMessage, ChatSession, GoalRun, GoalTask, ModelSettings, OrchestrationRunRecord, PendingChange, RunAgentRequest, ToolCallData, UsageRecord } from '../../shared/types'
-import { validateAgentQuestionAnswer, type AgentQuestionAnswer } from '../../shared/agentQuestions'
+import { parseSkillCandidate, validateAgentQuestionAnswer, type AgentQuestionAnswer, type SkillCandidate, type SkillCandidateAction } from '../../shared/agentQuestions'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import type { LlmAdapter, LlmAdapterFactory, ModelParams } from '../llm/types'
 import { CoreSessionStore, titleFromMessage } from '../workspace/sessionStore'
@@ -81,6 +81,23 @@ interface PendingQuestion {
   sessionId: string
   runId: string
   session: ChatSession
+}
+
+interface SkillCandidateWaiter {
+  sessionId: string
+  runId: string
+  session: ChatSession
+  candidate: SkillCandidate
+  promise: Promise<SkillCandidateResolution>
+  resolve: (result: SkillCandidateResolution) => void
+  reject: (error: Error) => void
+}
+
+interface SkillCandidateResolution {
+  action: SkillCandidateAction
+  packageId?: string
+  version?: string
+  enabled?: boolean
 }
 
 const CONTEXT_SUMMARY_PROMPT = `你是 StoryFabric 的对话上下文压缩器。
@@ -167,6 +184,8 @@ export class CoreAgentService {
   private pendingQuestions = new Map<string, PendingQuestion>()
   private questionWaiters = new Map<string, QuestionWaiter>()
   private answeredQuestions = new Map<string, AgentQuestionAnswer>()
+  private pendingSkillCandidates = new Map<string, SkillCandidateWaiter>()
+  private answeredSkillCandidates = new Map<string, { action: SkillCandidateAction; packageId?: string; version?: string; enabled?: boolean }>()
 
   constructor(private readonly options: AgentRunOptions) {}
 
@@ -327,6 +346,44 @@ export class CoreAgentService {
     waiter.resolve(answer)
   }
 
+  async resolveSkillCandidate(candidateId: string, action: SkillCandidateAction): Promise<void> {
+    const answered = this.answeredSkillCandidates.get(candidateId)
+    if (answered) {
+      if (answered.action === action) return
+      throw new Error('技能候选已经处理，不能替换决定')
+    }
+    if (action !== 'install-enable' && action !== 'install' && action !== 'reject') throw new Error('技能候选操作无效')
+    const waiter = this.pendingSkillCandidates.get(candidateId)
+    if (!waiter) {
+      const persisted = await this.findPersistedSkillCandidate(candidateId)
+      if (persisted) throw new Error('技能候选存在，但当前进程没有可安全继续运行的等待点；请重新启动本次任务')
+      throw new Error('技能候选不存在或已经结束')
+    }
+    if (this.pendingSkillCandidates.get(candidateId) !== waiter) throw new Error('技能候选已经由另一个请求处理')
+    this.pendingSkillCandidates.delete(candidateId)
+
+    let resolution: SkillCandidateResolution = { action }
+    try {
+      if (action !== 'reject') {
+        if (!this.options.globalSkillLibrary) throw new Error('当前平台没有可用的全局 Skill 库')
+        const installed = await this.options.globalSkillLibrary.install(waiter.candidate.package, action === 'install-enable')
+        resolution = { action, packageId: installed.manifest.id, version: installed.manifest.version, enabled: installed.enabled }
+      }
+
+      const sessionCandidate = waiter.session.skillCandidates?.find((candidate) => candidate.candidateId === candidateId)
+      if (sessionCandidate) sessionCandidate.status = action === 'reject' ? 'rejected' : 'accepted'
+      const record = waiter.session.orchestrationRuns?.find((item) => item.runId === waiter.runId)
+      const recordCandidate = record?.skillCandidates?.find((candidate) => candidate.candidateId === candidateId)
+      if (recordCandidate) recordCandidate.status = sessionCandidate?.status ?? (action === 'reject' ? 'rejected' : 'accepted')
+      await this.options.sessions.save(waiter.session)
+      this.answeredSkillCandidates.set(candidateId, resolution)
+      waiter.resolve(resolution)
+    } catch (error) {
+      this.pendingSkillCandidates.set(candidateId, waiter)
+      throw error
+    }
+  }
+
   abort(sessionId: string): void {
     this.aborts.get(sessionId)?.abort()
     for (const [id, waiter] of this.waiters) {
@@ -338,7 +395,6 @@ export class CoreAgentService {
     for (const [questionId, waiter] of this.questionWaiters) {
       if (waiter.sessionId !== sessionId) continue
       this.questionWaiters.delete(questionId)
-      this.pendingQuestions.delete(questionId)
       const error = new Error('已中止本次生成。')
       error.name = 'AbortError'
       waiter.reject(error)
@@ -373,6 +429,17 @@ export class CoreAgentService {
       if (session.waitingQuestion?.questionId === questionId) return { session, question: session.waitingQuestion }
       const record = session.orchestrationRuns?.find((item) => item.waitingQuestion?.questionId === questionId)
       if (record?.waitingQuestion) return { session, question: record.waitingQuestion }
+    }
+    return null
+  }
+
+  private async findPersistedSkillCandidate(candidateId: string): Promise<{ session: ChatSession; candidate: SkillCandidate } | null> {
+    for (const meta of await this.options.sessions.list()) {
+      const session = await this.options.sessions.load(meta.id)
+      const candidate = session?.skillCandidates?.find((item) => item.candidateId === candidateId)
+      if (session && candidate) return { session, candidate }
+      const recordCandidate = session?.orchestrationRuns?.flatMap((item) => item.skillCandidates ?? []).find((item) => item.candidateId === candidateId)
+      if (session && recordCandidate) return { session, candidate: recordCandidate }
     }
     return null
   }
@@ -422,6 +489,50 @@ export class CoreAgentService {
     return question
   }
 
+  private async openSkillCandidate(input: {
+    package: ContentPackage
+    reason: string
+    runId: string
+    sessionId: string
+    stageId: string
+    agentId: string
+    session: ChatSession
+  }): Promise<SkillCandidate> {
+    const candidate = parseSkillCandidate({
+      candidateId: `candidate_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      package: input.package,
+      reason: input.reason,
+      status: 'pending'
+    })
+    let resolve!: (result: SkillCandidateResolution) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<SkillCandidateResolution>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+    void promise.catch(() => {})
+    const waiter: SkillCandidateWaiter = { sessionId: input.sessionId, runId: input.runId, session: input.session, candidate, promise, resolve, reject }
+    this.pendingSkillCandidates.set(candidate.candidateId, waiter)
+    input.session.skillCandidates = [...(input.session.skillCandidates ?? []).filter((item) => item.candidateId !== candidate.candidateId), candidate].slice(-20)
+    const record = input.session.orchestrationRuns?.find((item) => item.runId === input.runId)
+    if (record) {
+      record.skillCandidates = [...(record.skillCandidates ?? []).filter((item) => item.candidateId !== candidate.candidateId), candidate]
+      record.updatedAt = Date.now()
+    }
+    try {
+      await this.options.sessions.save(input.session)
+    } catch (error) {
+      this.pendingSkillCandidates.delete(candidate.candidateId)
+      throw error
+    }
+    this.emit(input.sessionId, { type: 'skill-candidate', candidate }, input.runId)
+    this.emit(input.sessionId, { type: 'waiting-user', candidateId: candidate.candidateId, reason: 'skill-candidate' }, input.runId)
+    return candidate
+  }
+
   private waitForQuestion(questionId: string, signal: AbortSignal): Promise<AgentQuestionAnswer> {
     const answered = this.answeredQuestions.get(questionId)
     if (answered) return Promise.resolve(structuredClone(answered))
@@ -445,6 +556,29 @@ export class CoreAgentService {
     })
   }
 
+  private waitForSkillCandidate(candidateId: string, signal: AbortSignal): Promise<SkillCandidateResolution> {
+    const answered = this.answeredSkillCandidates.get(candidateId)
+    if (answered) return Promise.resolve(structuredClone(answered))
+    const waiter = this.pendingSkillCandidates.get(candidateId)
+    if (!waiter) return Promise.reject(new Error('技能候选等待器不存在，无法安全继续运行'))
+    if (signal.aborted) {
+      const error = new Error('已中止本次生成。')
+      error.name = 'AbortError'
+      return Promise.reject(error)
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener('abort', onAbort)
+        reject(Object.assign(new Error('已中止本次生成。'), { name: 'AbortError' }))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      waiter.promise.then(
+        (result) => { signal.removeEventListener('abort', onAbort); resolve(result) },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error) }
+      )
+    })
+  }
+
   private async clearQuestionsForRun(runId: string, session: ChatSession): Promise<void> {
     for (const [questionId, pending] of this.pendingQuestions) {
       if (pending.runId !== runId) continue
@@ -455,6 +589,11 @@ export class CoreAgentService {
       if (session.waitingQuestion?.questionId === questionId) delete session.waitingQuestion
       const record = session.orchestrationRuns?.find((item) => item.runId === runId)
       if (record?.waitingQuestion?.questionId === questionId) delete record.waitingQuestion
+    }
+    for (const [candidateId, waiter] of this.pendingSkillCandidates) {
+      if (waiter.runId !== runId) continue
+      this.pendingSkillCandidates.delete(candidateId)
+      waiter.reject(new Error('运行已结束，技能候选不再等待确认'))
     }
   }
 
@@ -886,7 +1025,7 @@ export class CoreAgentService {
           })
           : { skills: [], prompt: '', events: [] }
         const roleSystem = buildRoleSystemPrompt({ basePrompt: system, role: stageId, rules: options.stageRuleGuidance(stageId), skills: stageSkills.prompt })
-        const tools = [...toolsForRole(stageId), ...QUESTION_TOOL_DEFS]
+        const tools = [...toolsForRole(stageId), ...QUESTION_TOOL_DEFS, ...SKILL_TOOL_DEFS]
         const stageMessages: ChatMessage[] = [{ id: `${options.runId}_${stageId}_input`, role: 'user', text: prompt }]
         let receiptCount = 0
         let messageSequence = 0
@@ -905,14 +1044,37 @@ export class CoreAgentService {
             })
             return { ok: true, text: '', preview: '等待用户回答', waitingUser: question }
           }
-          const outcome: ToolOutcome = SKILL_TOOL_DEFS.some((tool) => tool.name === toolCall.name)
-            ? await (async () => {
-              const result = this.options.globalSkillLibrary && options.skillSnapshot
-                ? await executeSkillTool(this.options.globalSkillLibrary, toolCall.name, toolCall.argsJson, options.skillSnapshot)
-                : { ok: false, text: '当前运行没有全局 Skill 库', preview: 'Skill 库不可用' }
-              return { kind: 'result' as const, ...result }
-            })()
-            : await (this.options.executeTool?.(toolCall.name, toolCall.argsJson) ?? executeTool(this.options.store, toolCall.name, toolCall.argsJson))
+          if (SKILL_TOOL_DEFS.some((tool) => tool.name === toolCall.name)) {
+            const skillResult = this.options.globalSkillLibrary && options.skillSnapshot
+              ? await executeSkillTool(this.options.globalSkillLibrary, toolCall.name, toolCall.argsJson, options.skillSnapshot)
+              : { ok: false, text: '当前运行没有全局 Skill 库', preview: 'Skill 库不可用' }
+            receiptCount += 1
+            if (toolCall.name === 'propose_skill_package' && skillResult.ok && skillResult.candidatePackage) {
+              const candidate = await this.openSkillCandidate({
+                package: skillResult.candidatePackage,
+                reason: skillResult.candidateReason ?? '智能体建议该 Skill 用于当前任务',
+                runId: options.runId,
+                sessionId: options.sessionId,
+                stageId,
+                agentId: stageId,
+                session: options.session
+              })
+              return { ok: true, text: '', preview: '等待确认安装 Skill', waitingCandidate: candidate }
+            }
+            const receipt: ToolReceipt = {
+              runId: options.runId,
+              stageId,
+              agentId: stageId,
+              callId: toolCall.id,
+              toolName: toolCall.name,
+              status: skillResult.ok ? 'read' : 'failed',
+              sources: []
+            }
+            toolReceipts.push(receipt)
+            this.emit(options.sessionId, { type: 'tool-receipt', receipt }, options.runId)
+            return { ok: skillResult.ok, text: skillResult.text, preview: skillResult.preview }
+          }
+          const outcome = await (this.options.executeTool?.(toolCall.name, toolCall.argsJson) ?? executeTool(this.options.store, toolCall.name, toolCall.argsJson))
           receiptCount += 1
           if (outcome.kind === 'result') {
             const receipt: ToolReceipt = {
@@ -975,7 +1137,7 @@ export class CoreAgentService {
               const estimatedInputTokens = Math.max(1, estimateTextTokens(roleSystem) + estimateTextTokens(prompt) + messages.reduce((sum, item) => sum + estimateTextTokens(item.text), 0) + estimateTextTokens(JSON.stringify(tools)))
               const maxOutputTokens = Math.max(1, Math.min(runtime.settings.maxOutputTokens, maxEstimatedTokens - estimatedInputTokens))
               const stageParams: ModelParams = { ...runtime.settings, maxOutputTokens }
-              const requestId = `${options.runId}:${stageId}:${round}`
+              const requestId = `${options.runId}:${stageId}:${round}:${++messageSequence}`
               const requestContext: RequestContextUsage = {
                 requestId,
                 runId: options.runId,
@@ -1028,14 +1190,19 @@ export class CoreAgentService {
             onToolDone: (toolCall, toolResult) => this.emit(options.sessionId, { type: 'tool-done', callId: toolCall.id, ok: toolResult.ok, resultPreview: toolResult.preview }, options.runId)
           })
           let loopResult = await runStageLoop()
-          while (loopResult.waitingUser) {
-            const answer = await this.waitForQuestion(loopResult.waitingUser.question.questionId, options.signal)
+          while (loopResult.waitingUser || loopResult.waitingCandidate) {
+            const waitingUser = loopResult.waitingUser
+            const waitingCandidate = loopResult.waitingCandidate
+            const answerText = waitingUser
+              ? JSON.stringify((await this.waitForQuestion(waitingUser.question.questionId, options.signal)).answers)
+              : JSON.stringify(await this.waitForSkillCandidate(waitingCandidate!.candidate.candidateId, options.signal))
+            const toolCall = waitingUser?.toolCall ?? waitingCandidate!.toolCall
             stageMessages.push({
               id: `${options.runId}_${stageId}_answer_${++messageSequence}`,
               role: 'tool',
-              toolCallId: loopResult.waitingUser.toolCall.id,
-              toolName: loopResult.waitingUser.toolCall.name,
-              text: JSON.stringify(answer.answers)
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              text: answerText
             })
             options.session.messages.push(stageMessages.at(-1)!)
             loopResult = await runStageLoop()
@@ -1258,7 +1425,7 @@ export class CoreAgentService {
         let repeatedToolRounds = 0
         const toolArgBuffers = new Map<string, string>()
         const toolPreviews = new Map<string, ToolBodyPreview>()
-        const basicTools = [...TOOL_DEFS, ...QUESTION_TOOL_DEFS]
+        const basicTools = [...TOOL_DEFS, ...QUESTION_TOOL_DEFS, ...SKILL_TOOL_DEFS]
         for (; round < MAX_TOOL_ROUNDS; round++) {
         const assistantId = `msg_${Date.now().toString(36)}_${round}`
         const messages = modelMessages()
@@ -1337,6 +1504,34 @@ export class CoreAgentService {
               text: JSON.stringify(answer.answers)
             })
             break
+          }
+          if (SKILL_TOOL_DEFS.some((tool) => tool.name === toolCall.name)) {
+            const skillResult = this.options.globalSkillLibrary && skillSnapshot
+              ? await executeSkillTool(this.options.globalSkillLibrary, toolCall.name, toolCall.argsJson, skillSnapshot)
+              : { ok: false, text: '当前运行没有全局 Skill 库', preview: 'Skill 库不可用' }
+            this.emit(sid, { type: 'tool-done', callId: toolCall.id, ok: skillResult.ok, resultPreview: skillResult.preview }, runId)
+            if (toolCall.name === 'propose_skill_package' && skillResult.ok && skillResult.candidatePackage) {
+              const candidate = await this.openSkillCandidate({
+                package: skillResult.candidatePackage,
+                reason: skillResult.candidateReason ?? '智能体建议该 Skill 用于当前任务',
+                runId,
+                sessionId: sid,
+                stageId: 'basic',
+                agentId: 'basic',
+                session
+              })
+              const resolution = await this.waitForSkillCandidate(candidate.candidateId, controller.signal)
+              session.messages.push({
+                id: `msg_${Date.now().toString(36)}_candidate_answer`,
+                role: 'tool',
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                text: JSON.stringify(resolution)
+              })
+              break
+            }
+            session.messages.push({ id: `msg_${Date.now().toString(36)}`, role: 'tool', toolCallId: toolCall.id, toolName: toolCall.name, text: skillResult.text, isError: !skillResult.ok })
+            continue
           }
           const outcome = await (this.options.executeTool?.(toolCall.name, toolCall.argsJson) ?? executeTool(this.options.store, toolCall.name, toolCall.argsJson))
           if (outcome.kind === 'result') {

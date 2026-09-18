@@ -56,8 +56,10 @@ export class AgentRuntime {
   private readonly clientRuns = new ClientRunIdRegistry()
   private readonly completions = new Map<string, Promise<void>>()
   private readonly persistQueues = new Map<string, Promise<void>>()
-  private readonly questionWaiters = new Map<string, { runId: string; resolve: (answer: AgentQuestionAnswer) => void; reject: (error: Error) => void; promise: Promise<AgentQuestionAnswer> }>()
+  private readonly questionWaiters = new Map<string, { runId: string; question: AgentQuestion; resolve: (answer: AgentQuestionAnswer) => void; reject: (error: Error) => void; promise: Promise<AgentQuestionAnswer> }>()
   private readonly answeredQuestions = new Map<string, AgentQuestionAnswer>()
+  private readonly answeringQuestions = new Set<string>()
+  private readonly answerInFlight = new Map<string, AgentQuestionAnswer>()
 
   constructor(options: AgentRuntimeOptions = {}) {
     this.store = options.store ?? new MemoryRunStore()
@@ -137,7 +139,8 @@ export class AgentRuntime {
       if (JSON.stringify(answered) === JSON.stringify(answer)) return
       throw new Error('问题已经回答，不能替换答案')
     }
-    const waiterEntry = [...this.questionWaiters.entries()].find(([, waiter]) => {
+    const waiterEntry = [...this.questionWaiters.entries()].find(([questionId, waiter]) => {
+      if (questionId === answer.questionId) return true
       const snapshot = this.runs.get(waiter.runId)
       return snapshot?.waitingQuestion?.questionId === answer.questionId
     })
@@ -148,20 +151,49 @@ export class AgentRuntime {
     }
     const [questionId, waiter] = waiterEntry
     const snapshot = this.runs.get(waiter.runId)!
-    validateAgentQuestionAnswer(snapshot.waitingQuestion!, answer)
+    validateAgentQuestionAnswer(snapshot.waitingQuestion ?? waiter.question, answer)
+    if (this.answeringQuestions.has(questionId)) {
+      const inFlight = this.answerInFlight.get(questionId)
+      if (inFlight && JSON.stringify(inFlight) === JSON.stringify(answer)) {
+        await waiter.promise
+        return
+      }
+      throw new Error('问题正在处理中，请勿替换答案')
+    }
     if (this.questionWaiters.get(questionId) !== waiter) {
       const alreadyAnswered = this.answeredQuestions.get(questionId)
       if (alreadyAnswered && JSON.stringify(alreadyAnswered) === JSON.stringify(answer)) return
       throw new Error('问题已经由另一个回答请求处理')
     }
-    this.answeredQuestions.set(questionId, structuredClone(answer))
-    this.questionWaiters.delete(questionId)
+    this.answeringQuestions.add(questionId)
+    this.answerInFlight.set(questionId, structuredClone(answer))
+    const previousQuestion = snapshot.waitingQuestion ?? waiter.question
+    const previousQuestionId = snapshot.questionId
     delete snapshot.waitingQuestion
     delete snapshot.questionId
     snapshot.status = 'running'
     snapshot.updatedAt = this.now()
-    await this.persist(snapshot)
-    waiter.resolve(answer)
+    try {
+      await this.persist(snapshot, true)
+      const controller = this.controllers.get(waiter.runId)
+      if (controller?.signal.aborted || isTerminal(snapshot.status)) {
+        throw Object.assign(new Error('运行已取消，不能恢复问题'), { name: 'AbortError' })
+      }
+      this.questionWaiters.delete(questionId)
+      this.answeredQuestions.set(questionId, structuredClone(answer))
+      waiter.resolve(answer)
+    } catch (error) {
+      if (this.questionWaiters.get(questionId) === waiter && !isTerminal(snapshot.status)) {
+        snapshot.waitingQuestion = previousQuestion
+        snapshot.questionId = previousQuestionId
+        snapshot.status = 'awaiting_user'
+        await this.persist(snapshot).catch(() => undefined)
+      }
+      throw error
+    } finally {
+      this.answeringQuestions.delete(questionId)
+      this.answerInFlight.delete(questionId)
+    }
   }
 
   getSnapshot(runId: string): RuntimeRunSnapshot | null {
@@ -227,7 +259,7 @@ export class AgentRuntime {
             reject = rejectPromise
           })
           void promise.catch(() => {})
-          this.questionWaiters.set(parsed.questionId, { runId: snapshot.runId, resolve, reject, promise })
+          this.questionWaiters.set(parsed.questionId, { runId: snapshot.runId, question: parsed, resolve, reject, promise })
           this.append(snapshot, input, { type: 'agent-question', payload: { questionId: parsed.questionId, question: parsed } }, parsed.stageId)
           this.append(snapshot, input, { type: 'waiting-user', payload: { questionId: parsed.questionId } }, parsed.stageId)
           await this.persist(snapshot)
@@ -284,21 +316,24 @@ export class AgentRuntime {
     void this.persist(snapshot)
   }
 
-  private async persist(snapshot: RuntimeRunSnapshot): Promise<void> {
+  private async persist(snapshot: RuntimeRunSnapshot, strict = false): Promise<void> {
     const previous = this.persistQueues.get(snapshot.runId) ?? Promise.resolve()
+    let failure: unknown
     const next = previous.catch(() => undefined).then(async () => {
       try {
         const existing = await this.store.get(snapshot.runId)
         if (!existing) await this.store.create(snapshot)
         else await this.store.save(snapshot)
         snapshot.draftSaveStatus = 'saved'
-      } catch {
+      } catch (error) {
+        failure = error
         snapshot.draftSaveStatus = 'unsaved'
       }
     })
     this.persistQueues.set(snapshot.runId, next)
     await next
     if (this.persistQueues.get(snapshot.runId) === next) this.persistQueues.delete(snapshot.runId)
+    if (strict && failure) throw failure
   }
 }
 

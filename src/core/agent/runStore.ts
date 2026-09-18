@@ -81,7 +81,7 @@ export class MemoryRunStore implements RunStore {
 
   list(workspaceId: string, sessionId?: string): RuntimeRunSnapshot[] {
     return [...this.snapshots.values()]
-      .filter((snapshot) => snapshot.workspaceId === workspaceId && (!sessionId || snapshot.sessionId === sessionId))
+      .filter((snapshot) => (!workspaceId || snapshot.workspaceId === workspaceId) && (!sessionId || snapshot.sessionId === sessionId))
       .map(clone)
   }
 }

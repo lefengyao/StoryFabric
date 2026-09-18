@@ -38,4 +38,25 @@ describe('runToolLoop structured user waiting', () => {
     expect(dones).toEqual(['ask_user'])
     expect(messages.filter((message) => message.role === 'tool')).toHaveLength(0)
   })
+
+  it('returns tool results for every call when a control tool is mixed with another call', async () => {
+    const messages: ChatMessage[] = [{ id: 'input', role: 'user', text: '继续' }]
+    let modelCalls = 0
+    const result = await runToolLoop({
+      getMessages: () => messages,
+      appendMessage: (message) => messages.push(message),
+      maxRounds: 2,
+      callModel: async () => {
+        modelCalls += 1
+        return modelCalls === 1
+          ? { text: '', toolCalls: [{ id: 'question', name: 'ask_user', argsJson: '{}' }, { id: 'read', name: 'list_notes', argsJson: '{}' }], stopReason: 'tool_calls' as const }
+          : { text: '已修正调用方式。', toolCalls: [], stopReason: 'stop' as const }
+      },
+      executeTool: async () => ({ ok: true, text: '不应执行', preview: '不应执行' })
+    })
+
+    expect(result.stoppedReason).toBe('completed')
+    expect(messages.filter((message) => message.role === 'tool')).toHaveLength(2)
+    expect(messages.filter((message) => message.role === 'tool').every((message) => message.isError)).toBe(true)
+  })
 })

@@ -1,9 +1,14 @@
 import type { ChatMessage, ToolCallData } from '../../shared/types'
-import type { AgentQuestion } from '../../shared/agentQuestions'
+import type { AgentQuestion, SkillCandidate } from '../../shared/agentQuestions'
 import type { StreamResult } from '../llm/types'
 
 export interface ToolLoopWaitingUser {
   question: AgentQuestion
+  toolCall: ToolCallData
+}
+
+export interface ToolLoopWaitingSkillCandidate {
+  candidate: SkillCandidate
   toolCall: ToolCallData
 }
 
@@ -13,6 +18,7 @@ export interface ToolLoopResult {
   rounds: number
   stoppedReason?: 'completed' | 'repeated-tool-calls' | 'tool-failure' | 'max-rounds' | 'waiting-user'
   waitingUser?: ToolLoopWaitingUser
+  waitingCandidate?: ToolLoopWaitingSkillCandidate
 }
 
 export interface ToolLoopToolResult {
@@ -20,6 +26,7 @@ export interface ToolLoopToolResult {
   text: string
   preview: string
   waitingUser?: AgentQuestion
+  waitingCandidate?: SkillCandidate
 }
 
 export interface ToolLoopOptions {
@@ -81,6 +88,30 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
       return { text: result.text, toolCalls: result.toolCalls, rounds: round + 1, stoppedReason: 'repeated-tool-calls' }
     }
 
+    // Control tools pause the run and therefore must be the only tool call in a model turn.
+    // Return a concrete tool error for every call in a mixed batch so providers never see
+    // an assistant tool-call list with missing tool results.
+    if (result.toolCalls.length > 1 && result.toolCalls.some((toolCall) => toolCall.name === 'ask_user' || toolCall.name === 'propose_skill_package')) {
+      for (const toolCall of result.toolCalls) {
+        options.onToolStart?.(toolCall)
+        const toolResult: ToolLoopToolResult = {
+          ok: false,
+          text: 'ask_user 或 propose_skill_package 必须作为本轮唯一工具调用，请重新提交单个控制工具调用。',
+          preview: '控制工具不能与其它工具混用'
+        }
+        options.onToolDone?.(toolCall, toolResult)
+        options.appendMessage({
+          id: id('tool'),
+          role: 'tool',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          text: toolResult.text,
+          isError: true
+        })
+      }
+      continue
+    }
+
     for (const toolCall of result.toolCalls) {
       options.onToolStart?.(toolCall)
       const toolResult = await options.executeTool(toolCall)
@@ -92,6 +123,15 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
           rounds: round + 1,
           stoppedReason: 'waiting-user',
           waitingUser: { question: toolResult.waitingUser, toolCall }
+        }
+      }
+      if (toolResult.waitingCandidate) {
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls,
+          rounds: round + 1,
+          stoppedReason: 'waiting-user',
+          waitingCandidate: { candidate: toolResult.waitingCandidate, toolCall }
         }
       }
       options.appendMessage({
