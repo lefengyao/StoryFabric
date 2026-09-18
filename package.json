@@ -1,6 +1,6 @@
 {
   "name": "storyfabric",
-  "version": "0.1.5",
+  "version": "0.1.7-snapshot",
   "description": "依托智能体的小说创作工作台",
   "main": "./out/main/index.js",
   "author": "StoryFabric",
