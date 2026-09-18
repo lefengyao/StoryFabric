@@ -5,7 +5,7 @@ export const SEVEN_STAGE_TEMPLATE: StageDefinition[] = [
   { stageId: 'setting', kind: 'setting-proposal', dependsOn: ['plan'], required: false },
   { stageId: 'prompt', kind: 'writing-brief', dependsOn: ['plan'], required: false },
   { stageId: 'anti-ai', kind: 'style-guidance', dependsOn: ['prompt'], required: true },
-  { stageId: 'write', kind: 'draft', dependsOn: ['plan'], required: true },
+  { stageId: 'write', kind: 'draft', dependsOn: ['plan'], required: true, requiredForWrite: ['plan', 'setting', 'prompt'] },
   { stageId: 'polish', kind: 'polished', dependsOn: ['write'], required: false },
   { stageId: 'review', kind: 'review', dependsOn: ['write'], required: true }
 ]

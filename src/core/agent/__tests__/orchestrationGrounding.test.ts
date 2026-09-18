@@ -218,7 +218,7 @@ describe('orchestration grounding', () => {
       providerId,
       model: 'mock-model',
       approvalPolicy: 'auto',
-      creative: { ...orchestrationPreferences(), orchestration: { ...orchestrationPreferences().orchestration, enabledStageIds: ['plan', 'write'] } }
+      creative: { ...orchestrationPreferences(), orchestration: { ...orchestrationPreferences().orchestration, enabledStageIds: ['plan', 'setting', 'prompt', 'write'] } }
     })
 
     const notes = await listNotes(store)
@@ -246,7 +246,7 @@ describe('orchestration grounding', () => {
       message: '润色一章',
       providerId,
       model: 'mock-model',
-      creative: { ...orchestrationPreferences(), orchestration: { ...orchestrationPreferences().orchestration, enabledStageIds: ['plan', 'write', 'polish', 'review'] } }
+      creative: { ...orchestrationPreferences(), orchestration: { ...orchestrationPreferences().orchestration, enabledStageIds: ['plan', 'setting', 'prompt', 'write', 'polish', 'review'] } }
     })
     const session = await loadSession(store, result.sessionId)
 

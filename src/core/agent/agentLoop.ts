@@ -852,6 +852,15 @@ export class CoreAgentService {
     }
     const resolveStageRuntime = (stageId: string) => {
       const assigned = orchestration?.modelByStage[stageId]
+      if (orchestration?.mode === 'single') {
+        return {
+          provider: undefined,
+          model: options.model,
+          apiKey: options.apiKey,
+          adapter: options.adapter,
+          settings: options.modelSettings
+        }
+      }
       const assignedProvider = assigned ? options.providers.find((provider) => provider.id === assigned.providerId) : undefined
       if (assigned && !assignedProvider) throw new Error(`阶段 ${stageId} 配置的供应商不可用`)
       const provider = assignedProvider
@@ -868,7 +877,7 @@ export class CoreAgentService {
     }
     const subagentFindings: Array<{ role: string; text: string }> = []
 
-    if (orchestration?.subagentsEnabled) {
+    if (orchestration?.subagentsEnabled && orchestration.mode !== 'single') {
       const manager = new SubagentManager({
         workspaceId: this.options.workspaceId ?? 'workspace',
         maxChildren: 2,
@@ -1007,7 +1016,7 @@ export class CoreAgentService {
     }
     const scheduler = new OrchestrationScheduler({
       onStageComplete: (stageId) => this.emit(options.sessionId, { type: 'stage-complete', stageId }, options.runId),
-      call: async ({ stageId, prompt }) => {
+      call: async ({ stageId, prompt, planningGate }) => {
         this.emit(options.sessionId, { type: 'stage-start', stageId }, options.runId)
         const runtime = resolveStageRuntime(stageId)
         const stageSkills = skillResolver
@@ -1030,6 +1039,9 @@ export class CoreAgentService {
         let receiptCount = 0
         let messageSequence = 0
         const executeStageTool = async (toolCall: ToolCallData): Promise<ToolLoopToolResult> => {
+          if (stageId === 'write' && !planningGate.open) {
+            return { ok: false, text: `正文写作门禁未开启，缺少：${planningGate.missing.join('、')}`, preview: '正文写作被规划门禁阻止' }
+          }
           if (!tools.some((tool) => tool.name === toolCall.name) || (WRITE_TOOLS.has(toolCall.name) && stageId !== 'write')) {
             return { ok: false, text: `角色 ${stageId} 没有权限调用工具：${toolCall.name}`, preview: '角色权限拒绝' }
           }

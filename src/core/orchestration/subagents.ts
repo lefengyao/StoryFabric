@@ -1,6 +1,6 @@
 import { validateSubagentTools } from './toolPolicy'
 
-export interface SubagentSourceRef { workspaceId: string; id: string; revision?: number }
+export interface SubagentSourceRef { workspaceId: string; id: string; revision?: string | number; sourcePath?: string }
 export interface DelegateTaskInput { task: string; role: string; depth: number; sourceRefs: SubagentSourceRef[]; expectedOutput?: string; tokenCap?: number; requestedTools?: string[] }
 export interface ChildTask { id: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; input: DelegateTaskInput; result?: { text: string; payload?: unknown }; error?: string }
 
@@ -9,8 +9,8 @@ export class SubagentManager {
   private readonly maxChildren: number
   private readonly maxConcurrent: number
   private readonly controllers = new Map<string, AbortController>()
-
-  private pumpPromise: Promise<void> = Promise.resolve()
+  private readonly running = new Map<string, Promise<void>>()
+  private readonly idleWaiters = new Set<() => void>()
 
   constructor(private readonly options: { workspaceId: string; maxChildren?: number; maxConcurrent?: number; runTask?: (input: DelegateTaskInput, signal: AbortSignal) => Promise<{ text: string; payload?: unknown }> }) {
     this.maxChildren = options.maxChildren ?? 4
@@ -27,25 +27,36 @@ export class SubagentManager {
     const id = `child_${this.children.size + 1}`
     const task: ChildTask = { id, status: 'queued', input: { ...input, sourceRefs: input.sourceRefs.map((ref) => ({ ...ref })) } }
     this.children.set(id, task)
-    this.pumpPromise = this.pumpPromise.then(() => this.pump())
+    this.schedule()
     return structuredClone(task)
   }
 
-  async waitForIdle(): Promise<void> { await this.pumpPromise }
+  async waitForIdle(): Promise<void> {
+    while (this.running.size > 0 || [...this.children.values()].some((task) => task.status === 'queued')) {
+      await new Promise<void>((resolve) => this.idleWaiters.add(resolve))
+    }
+  }
 
-  private async pump(): Promise<void> {
-    const running: Promise<void>[] = []
-    while (this.activeCount() < this.maxConcurrent) {
+  private schedule(): void {
+    while (this.running.size < this.maxConcurrent) {
       const task = [...this.children.values()].find((item) => item.status === 'queued')
-      if (!task) return
-      if (!this.options.runTask) return
+      if (!task || !this.options.runTask) break
       task.status = 'running'
       const controller = new AbortController()
       this.controllers.set(task.id, controller)
-      running.push(this.runTask(task, controller))
+      const running = this.runTask(task, controller).finally(() => {
+        this.running.delete(task.id)
+        this.schedule()
+        this.notifyIdleWaiters()
+      })
+      this.running.set(task.id, running)
     }
-    await Promise.all(running)
-    if ([...this.children.values()].some((item) => item.status === 'queued')) await this.pump()
+    this.notifyIdleWaiters()
+  }
+
+  private notifyIdleWaiters(): void {
+    for (const resolve of this.idleWaiters) resolve()
+    this.idleWaiters.clear()
   }
 
   private async runTask(task: ChildTask, controller: AbortController): Promise<void> {
@@ -67,9 +78,9 @@ export class SubagentManager {
     if (task && task.status !== 'completed' && task.status !== 'failed') {
       task.status = 'cancelled'
       this.controllers.get(id)?.abort()
+      this.schedule()
     }
   }
 
   list(): ChildTask[] { return [...this.children.values()].map((task) => structuredClone(task)) }
-  private activeCount(): number { return [...this.children.values()].filter((task) => task.status === 'running').length }
 }
