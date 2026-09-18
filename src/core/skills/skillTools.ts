@@ -45,7 +45,8 @@ export async function executeSkillTool(library: GlobalSkillLibrary, name: string
   if (name === 'propose_skill_package') {
     try {
       const pkg = validateContentPackage(args.package as { manifest: unknown; files: Array<{ path: string; content: string }> })
-      const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : '智能体建议该 Skill 用于当前任务'
+      if (typeof args.reason !== 'string' || !args.reason.trim()) throw new Error('reason 必须是非空字符串')
+      const reason = args.reason.trim()
       const text = JSON.stringify({ status: 'candidate', requiresConfirmation: true, package: pkg, reason })
       return { ok: true, text, preview: '已生成待确认 Skill 包候选；尚未安装', candidatePackage: pkg, candidateReason: reason }
     } catch (error) {

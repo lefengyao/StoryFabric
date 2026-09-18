@@ -45,7 +45,7 @@ describe('global skill resolver', () => {
     const result = await new SkillResolver(library).resolve({ runId: 'run-2', stageId: 'review', agentId: 'review', query: '对白', snapshot, emit: (event) => events.push(event.status) })
     expect(result.skills).toHaveLength(0)
     expect(events).toEqual(['checked', 'none'])
-    const proposal = await executeSkillTool(library, 'propose_skill_package', JSON.stringify({ package: pkg }), snapshot)
+    const proposal = await executeSkillTool(library, 'propose_skill_package', JSON.stringify({ package: pkg, reason: '补充对白校对能力' }), snapshot)
     expect(proposal.ok).toBe(true)
     expect(proposal.text).toContain('requiresConfirmation')
     expect(await library.list()).toHaveLength(1)

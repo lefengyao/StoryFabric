@@ -186,6 +186,8 @@ export class CoreAgentService {
   private answeredQuestions = new Map<string, AgentQuestionAnswer>()
   private pendingSkillCandidates = new Map<string, SkillCandidateWaiter>()
   private answeredSkillCandidates = new Map<string, { action: SkillCandidateAction; packageId?: string; version?: string; enabled?: boolean }>()
+  private skillResolutionInFlight = new Map<string, Promise<void>>()
+  private skillResolutionActions = new Map<string, SkillCandidateAction>()
 
   constructor(private readonly options: AgentRunOptions) {}
 
@@ -347,6 +349,23 @@ export class CoreAgentService {
   }
 
   async resolveSkillCandidate(candidateId: string, action: SkillCandidateAction): Promise<void> {
+    const inFlight = this.skillResolutionInFlight.get(candidateId)
+    if (inFlight) {
+      if (this.skillResolutionActions.get(candidateId) !== action) throw new Error('技能候选已经由另一个请求处理')
+      return inFlight
+    }
+    const operation = this.resolveSkillCandidateOnce(candidateId, action)
+    this.skillResolutionActions.set(candidateId, action)
+    this.skillResolutionInFlight.set(candidateId, operation)
+    try {
+      await operation
+    } finally {
+      if (this.skillResolutionInFlight.get(candidateId) === operation) this.skillResolutionInFlight.delete(candidateId)
+      if (this.skillResolutionActions.get(candidateId) === action) this.skillResolutionActions.delete(candidateId)
+    }
+  }
+
+  private async resolveSkillCandidateOnce(candidateId: string, action: SkillCandidateAction): Promise<void> {
     const answered = this.answeredSkillCandidates.get(candidateId)
     if (answered) {
       if (answered.action === action) return
@@ -593,6 +612,9 @@ export class CoreAgentService {
     for (const [candidateId, waiter] of this.pendingSkillCandidates) {
       if (waiter.runId !== runId) continue
       this.pendingSkillCandidates.delete(candidateId)
+      if (session.skillCandidates) session.skillCandidates = session.skillCandidates.filter((candidate) => candidate.candidateId !== candidateId)
+      const record = session.orchestrationRuns?.find((item) => item.runId === runId)
+      if (record?.skillCandidates) record.skillCandidates = record.skillCandidates.filter((candidate) => candidate.candidateId !== candidateId)
       waiter.reject(new Error('运行已结束，技能候选不再等待确认'))
     }
   }
@@ -940,6 +962,9 @@ export class CoreAgentService {
               executeTool: async (toolCall) => {
                 if (!tools.some((tool) => tool.name === toolCall.name)) return { ok: false, text: `子智能体没有权限调用工具：${toolCall.name}`, preview: '角色权限拒绝' }
                 if (SKILL_TOOL_DEFS.some((tool) => tool.name === toolCall.name)) {
+                  if (toolCall.name === 'propose_skill_package') {
+                    return { ok: false, text: '只读子智能体不能提出需要用户审批的 Skill 安装候选。', preview: '子智能体不能发起 Skill 审批' }
+                  }
                   const result = this.options.globalSkillLibrary && options.skillSnapshot
                     ? await executeSkillTool(this.options.globalSkillLibrary, toolCall.name, toolCall.argsJson, options.skillSnapshot)
                     : { ok: false, text: '当前运行没有全局 Skill 库', preview: 'Skill 库不可用' }
@@ -1494,6 +1519,16 @@ export class CoreAgentService {
             text: '检测到连续 3 轮调用完全相同的工具和参数，已停止以避免循环。请调整要求或继续对话后再试。'
           })
           break
+        }
+
+        if (result.toolCalls.length > 1 && result.toolCalls.some((toolCall) => toolCall.name === 'ask_user' || toolCall.name === 'propose_skill_package')) {
+          for (const toolCall of result.toolCalls) {
+            this.emit(sid, { type: 'tool-start', callId: toolCall.id, name: toolCall.name, argsJson: toolCall.argsJson }, runId)
+            const text = 'ask_user 或 propose_skill_package 必须作为本轮唯一工具调用，请重新提交单个控制工具调用。'
+            this.emit(sid, { type: 'tool-done', callId: toolCall.id, ok: false, resultPreview: '控制工具不能与其它工具混用' }, runId)
+            session.messages.push({ id: `msg_${Date.now().toString(36)}_${toolCall.id}_mixed`, role: 'tool', toolCallId: toolCall.id, toolName: toolCall.name, text, isError: true })
+          }
+          continue
         }
 
         for (const toolCall of result.toolCalls) {

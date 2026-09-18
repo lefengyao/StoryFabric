@@ -23,11 +23,32 @@ export class GlobalSkillLibrary {
     if (expectedBaseHash && existing?.contentHash !== expectedBaseHash) throw new Error('Skill 基于的版本已变化，请重新预览')
     if (existing && existing.contentHash !== contentHash) throw new Error('同 ID 同版本的 Skill 内容不同，禁止静默覆盖')
     const base = `${this.root}/${validated.manifest.id}/${validated.manifest.version}`
+    const packagePath = `${base}/package.json`
+    const indexPath = `${this.root}/index.json`
+    const previousPackageText = await this.store.readText(packagePath)
+    const previousFiles = existing
+      ? await Promise.all(existing.files.map(async (file) => ({ path: file.path, content: await this.store.readText(`${base}/${file.path}`) })))
+      : []
+    const previousIndexText = await this.store.readText(indexPath)
     const installed: GlobalSkillPackage = { ...validated, enabled, installedAt: existing?.installedAt ?? Date.now(), contentHash }
-    await this.store.ensureDir(base)
-    await this.store.writeText(`${base}/package.json`, JSON.stringify(installed, null, 2))
-    for (const file of validated.files) await this.store.writeText(`${base}/${file.path}`, file.content)
-    await this.writeIndex()
+    try {
+      await this.store.ensureDir(base)
+      await this.store.writeText(packagePath, JSON.stringify(installed, null, 2))
+      for (const file of validated.files) await this.store.writeText(`${base}/${file.path}`, file.content)
+      await this.writeIndex()
+    } catch (error) {
+      await this.store.remove(base).catch(() => {})
+      if (previousPackageText !== null) {
+        await this.store.ensureDir(base).catch(() => {})
+        await this.store.writeText(packagePath, previousPackageText).catch(() => {})
+        for (const file of previousFiles) {
+          if (file.content !== null) await this.store.writeText(`${base}/${file.path}`, file.content).catch(() => {})
+        }
+      }
+      if (previousIndexText !== null) await this.store.writeText(indexPath, previousIndexText).catch(() => {})
+      else await this.store.remove(indexPath).catch(() => {})
+      throw error
+    }
     return structuredClone(installed)
   }
 
