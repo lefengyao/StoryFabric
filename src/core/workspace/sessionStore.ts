@@ -1,5 +1,5 @@
 import type { ChatMessage, ChatSession, SessionMeta } from '../../shared/types'
-import type { CreativePreferences } from '../../shared/creative'
+import { validateCreativePreferences, type CreativePreferences } from '../../shared/creative'
 import type { FileStore } from '../storage/fileStore'
 import { genId } from './entityStore'
 import { setSessionApprovalPolicy, setSessionModelPreference } from './sessionPreferences'
@@ -38,7 +38,7 @@ export class CoreSessionStore {
     if (patch.title !== undefined) session.title = patch.title.trim() || session.title
     if (patch.archived !== undefined) session.archived = patch.archived
     let next = patch.approvalPolicy === undefined ? session : setSessionApprovalPolicy(session, patch.approvalPolicy)
-    if (patch.creativePreferences !== undefined) next = { ...next, creativePreferences: patch.creativePreferences, updatedAt: Date.now() }
+    if (patch.creativePreferences !== undefined) next = { ...next, creativePreferences: validateCreativePreferences(patch.creativePreferences), updatedAt: Date.now() }
     await this.save(next)
     return true
   }
