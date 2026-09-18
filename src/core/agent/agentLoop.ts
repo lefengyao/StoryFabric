@@ -1,4 +1,5 @@
 import type { AgentEvent, ApprovalPolicy, ChatMessage, ChatSession, GoalRun, GoalTask, ModelSettings, OrchestrationRunRecord, PendingChange, RunAgentRequest, ToolCallData, UsageRecord } from '../../shared/types'
+import { validateAgentQuestionAnswer, type AgentQuestionAnswer } from '../../shared/agentQuestions'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
 import type { LlmAdapter, LlmAdapterFactory, ModelParams } from '../llm/types'
 import { CoreSessionStore, titleFromMessage } from '../workspace/sessionStore'
@@ -30,6 +31,7 @@ import { GoalRunner } from '../goal/goalRunner'
 import { buildGoalPlanningPrompt, parseGoalPlan } from '../goal/goalPlanner'
 import type { GoalValidationResult } from '../goal/goalTypes'
 import { runToolLoop, type ToolLoopToolResult } from './toolLoop'
+import { parseAskUserArguments, QUESTION_TOOL_DEFS } from './questionTool'
 import { buildRoleSystemPrompt, toolsForRole } from '../orchestration/rolePrompts'
 import { readOnlyToolDefs } from '../orchestration/toolPolicy'
 import { WRITE_TOOLS } from '../tools/registry'
@@ -65,6 +67,21 @@ export interface AgentRunOptions {
 }
 
 interface Waiter { sessionId: string; resolve: (approved: boolean) => void }
+
+interface QuestionWaiter {
+  sessionId: string
+  runId: string
+  promise: Promise<AgentQuestionAnswer>
+  resolve: (answer: AgentQuestionAnswer) => void
+  reject: (error: Error) => void
+}
+
+interface PendingQuestion {
+  question: import('../../shared/agentQuestions').AgentQuestion
+  sessionId: string
+  runId: string
+  session: ChatSession
+}
 
 const CONTEXT_SUMMARY_PROMPT = `你是 StoryFabric 的对话上下文压缩器。
 你的任务是把较早的智能体对话压缩成后续仍然可用的工作记忆，不执行任何工具，不编造事实。
@@ -147,6 +164,9 @@ export class CoreAgentService {
   private activeRunIds = new Map<string, string>()
   private pendingRunIds = new Map<string, string>()
   private waiters = new Map<string, Waiter>()
+  private pendingQuestions = new Map<string, PendingQuestion>()
+  private questionWaiters = new Map<string, QuestionWaiter>()
+  private answeredQuestions = new Map<string, AgentQuestionAnswer>()
 
   constructor(private readonly options: AgentRunOptions) {}
 
@@ -262,6 +282,51 @@ export class CoreAgentService {
     }
   }
 
+  async answerQuestion(answer: AgentQuestionAnswer): Promise<void> {
+    const answered = this.answeredQuestions.get(answer.questionId)
+    if (answered) {
+      if (JSON.stringify(answered) === JSON.stringify(answer)) return
+      throw new Error('问题已经回答，不能替换答案')
+    }
+
+    const pending = this.pendingQuestions.get(answer.questionId)
+    if (!pending) {
+      const persisted = await this.findPersistedQuestion(answer.questionId)
+      if (persisted) throw new Error('问题存在，但当前进程没有可安全继续运行的等待点；请重新启动本次任务')
+      throw new Error('问题不存在或已经结束')
+    }
+    validateAgentQuestionAnswer(pending.question, answer)
+    const waiter = this.questionWaiters.get(answer.questionId)
+    if (!waiter) throw new Error('问题等待器不存在，无法安全继续运行')
+    const activePending = this.pendingQuestions.get(answer.questionId)
+    const activeWaiter = this.questionWaiters.get(answer.questionId)
+    if (activePending !== pending || activeWaiter !== waiter) {
+      const alreadyAnswered = this.answeredQuestions.get(answer.questionId)
+      if (alreadyAnswered && JSON.stringify(alreadyAnswered) === JSON.stringify(answer)) return
+      throw new Error('问题已经由另一个回答请求处理')
+    }
+
+    this.answeredQuestions.set(answer.questionId, structuredClone(answer))
+    this.pendingQuestions.delete(answer.questionId)
+    this.questionWaiters.delete(answer.questionId)
+    const previousSessionWaitingQuestion = pending.session.waitingQuestion
+    const record = pending.session.orchestrationRuns?.find((item) => item.runId === pending.runId)
+    const previousRecordWaitingQuestion = record?.waitingQuestion
+    if (pending.session.waitingQuestion?.questionId === answer.questionId) delete pending.session.waitingQuestion
+    if (record?.waitingQuestion?.questionId === answer.questionId) delete record.waitingQuestion
+    try {
+      await this.options.sessions.save(pending.session)
+    } catch (error) {
+      if (previousSessionWaitingQuestion) pending.session.waitingQuestion = previousSessionWaitingQuestion
+      if (record && previousRecordWaitingQuestion) record.waitingQuestion = previousRecordWaitingQuestion
+      this.pendingQuestions.set(answer.questionId, pending)
+      this.questionWaiters.set(answer.questionId, waiter)
+      this.answeredQuestions.delete(answer.questionId)
+      throw error
+    }
+    waiter.resolve(answer)
+  }
+
   abort(sessionId: string): void {
     this.aborts.get(sessionId)?.abort()
     for (const [id, waiter] of this.waiters) {
@@ -269,6 +334,14 @@ export class CoreAgentService {
         this.waiters.delete(id)
         waiter.resolve(false)
       }
+    }
+    for (const [questionId, waiter] of this.questionWaiters) {
+      if (waiter.sessionId !== sessionId) continue
+      this.questionWaiters.delete(questionId)
+      this.pendingQuestions.delete(questionId)
+      const error = new Error('已中止本次生成。')
+      error.name = 'AbortError'
+      waiter.reject(error)
     }
   }
 
@@ -291,6 +364,98 @@ export class CoreAgentService {
         }
       })
     })
+  }
+
+  private async findPersistedQuestion(questionId: string): Promise<{ session: ChatSession; question: import('../../shared/agentQuestions').AgentQuestion } | null> {
+    for (const meta of await this.options.sessions.list()) {
+      const session = await this.options.sessions.load(meta.id)
+      if (!session) continue
+      if (session.waitingQuestion?.questionId === questionId) return { session, question: session.waitingQuestion }
+      const record = session.orchestrationRuns?.find((item) => item.waitingQuestion?.questionId === questionId)
+      if (record?.waitingQuestion) return { session, question: record.waitingQuestion }
+    }
+    return null
+  }
+
+  private async openQuestion(input: {
+    argsJson: string
+    runId: string
+    sessionId: string
+    stageId?: string
+    agentId: string
+    session: ChatSession
+  }): Promise<import('../../shared/agentQuestions').AgentQuestion> {
+    const question = parseAskUserArguments(input.argsJson, {
+      runId: input.runId,
+      sessionId: input.sessionId,
+      ...(input.stageId ? { stageId: input.stageId } : {}),
+      agentId: input.agentId
+    })
+    let resolve!: (answer: AgentQuestionAnswer) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<AgentQuestionAnswer>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+    void promise.catch(() => {})
+    this.pendingQuestions.set(question.questionId, { question, sessionId: input.sessionId, runId: input.runId, session: input.session })
+    this.questionWaiters.set(question.questionId, { sessionId: input.sessionId, runId: input.runId, promise, resolve, reject })
+    input.session.waitingQuestion = question
+    const record = input.session.orchestrationRuns?.find((item) => item.runId === input.runId)
+    if (record) {
+      record.waitingQuestion = question
+      record.currentStage = input.stageId
+      record.stages = [{ stageId: input.stageId ?? 'basic', status: 'waiting_user' }]
+      record.updatedAt = Date.now()
+    }
+    try {
+      await this.options.sessions.save(input.session)
+    } catch (error) {
+      this.pendingQuestions.delete(question.questionId)
+      this.questionWaiters.delete(question.questionId)
+      if (input.session.waitingQuestion?.questionId === question.questionId) delete input.session.waitingQuestion
+      if (record?.waitingQuestion?.questionId === question.questionId) delete record.waitingQuestion
+      throw error
+    }
+    this.emit(input.sessionId, { type: 'agent-question', question }, input.runId)
+    this.emit(input.sessionId, { type: 'waiting-user', questionId: question.questionId }, input.runId)
+    return question
+  }
+
+  private waitForQuestion(questionId: string, signal: AbortSignal): Promise<AgentQuestionAnswer> {
+    const answered = this.answeredQuestions.get(questionId)
+    if (answered) return Promise.resolve(structuredClone(answered))
+    const waiter = this.questionWaiters.get(questionId)
+    if (!waiter) return Promise.reject(new Error('问题等待器不存在，无法安全继续运行'))
+    if (signal.aborted) {
+      const error = new Error('已中止本次生成。')
+      error.name = 'AbortError'
+      return Promise.reject(error)
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener('abort', onAbort)
+        reject(Object.assign(new Error('已中止本次生成。'), { name: 'AbortError' }))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      waiter.promise.then(
+        (answer) => { signal.removeEventListener('abort', onAbort); resolve(answer) },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error) }
+      )
+    })
+  }
+
+  private async clearQuestionsForRun(runId: string, session: ChatSession): Promise<void> {
+    for (const [questionId, pending] of this.pendingQuestions) {
+      if (pending.runId !== runId) continue
+      this.pendingQuestions.delete(questionId)
+      const waiter = this.questionWaiters.get(questionId)
+      this.questionWaiters.delete(questionId)
+      if (waiter) waiter.reject(new Error('运行已结束，问题不再等待回答'))
+      if (session.waitingQuestion?.questionId === questionId) delete session.waitingQuestion
+      const record = session.orchestrationRuns?.find((item) => item.runId === runId)
+      if (record?.waitingQuestion?.questionId === questionId) delete record.waitingQuestion
+    }
   }
 
   private async runGoalTaskCall(options: {
@@ -519,6 +684,19 @@ export class CoreAgentService {
     const requestContexts: RequestContextUsage[] = []
     const skillEvents: SkillApplicationEvent[] = []
     const skillResolver = this.options.globalSkillLibrary && options.skillSnapshot ? new SkillResolver(this.options.globalSkillLibrary) : undefined
+    const initialRecord: OrchestrationRunRecord = {
+      runId: options.runId,
+      status: 'running',
+      sourceRevision: options.sourceRevision,
+      originalText: options.originalText,
+      stages: [],
+      artifacts: [],
+      overlay: {},
+      businessText: options.originalText,
+      updatedAt: Date.now()
+    }
+    options.session.orchestrationRuns = [...(options.session.orchestrationRuns ?? []).filter((record) => record.runId !== options.runId), initialRecord].slice(-10)
+    await this.options.sessions.save(options.session).catch(() => {})
     const sourcesForTool = (toolCall: ToolCallData): SourceRef[] => {
       const sources = options.sourceRefs ?? []
       let args: Record<string, unknown> = {}
@@ -708,13 +886,24 @@ export class CoreAgentService {
           })
           : { skills: [], prompt: '', events: [] }
         const roleSystem = buildRoleSystemPrompt({ basePrompt: system, role: stageId, rules: options.stageRuleGuidance(stageId), skills: stageSkills.prompt })
-        const tools = toolsForRole(stageId)
+        const tools = [...toolsForRole(stageId), ...QUESTION_TOOL_DEFS]
         const stageMessages: ChatMessage[] = [{ id: `${options.runId}_${stageId}_input`, role: 'user', text: prompt }]
         let receiptCount = 0
         let messageSequence = 0
         const executeStageTool = async (toolCall: ToolCallData): Promise<ToolLoopToolResult> => {
           if (!tools.some((tool) => tool.name === toolCall.name) || (WRITE_TOOLS.has(toolCall.name) && stageId !== 'write')) {
             return { ok: false, text: `角色 ${stageId} 没有权限调用工具：${toolCall.name}`, preview: '角色权限拒绝' }
+          }
+          if (toolCall.name === 'ask_user') {
+            const question = await this.openQuestion({
+              argsJson: toolCall.argsJson,
+              runId: options.runId,
+              sessionId: options.sessionId,
+              stageId,
+              agentId: stageId,
+              session: options.session
+            })
+            return { ok: true, text: '', preview: '等待用户回答', waitingUser: question }
           }
           const outcome: ToolOutcome = SKILL_TOOL_DEFS.some((tool) => tool.name === toolCall.name)
             ? await (async () => {
@@ -774,7 +963,7 @@ export class CoreAgentService {
           return { ok, text, preview: ok ? '变更已写入' : text }
         }
         try {
-          const loopResult = await runToolLoop({
+          const runStageLoop = () => runToolLoop({
             getMessages: () => stageMessages,
             appendMessage: (message) => {
               stageMessages.push(message)
@@ -838,6 +1027,19 @@ export class CoreAgentService {
             onToolStart: (toolCall) => this.emit(options.sessionId, { type: 'tool-start', callId: toolCall.id, name: toolCall.name, argsJson: toolCall.argsJson }, options.runId),
             onToolDone: (toolCall, toolResult) => this.emit(options.sessionId, { type: 'tool-done', callId: toolCall.id, ok: toolResult.ok, resultPreview: toolResult.preview }, options.runId)
           })
+          let loopResult = await runStageLoop()
+          while (loopResult.waitingUser) {
+            const answer = await this.waitForQuestion(loopResult.waitingUser.question.questionId, options.signal)
+            stageMessages.push({
+              id: `${options.runId}_${stageId}_answer_${++messageSequence}`,
+              role: 'tool',
+              toolCallId: loopResult.waitingUser.toolCall.id,
+              toolName: loopResult.waitingUser.toolCall.name,
+              text: JSON.stringify(answer.answers)
+            })
+            options.session.messages.push(stageMessages.at(-1)!)
+            loopResult = await runStageLoop()
+          }
           return { text: loopResult.text, hasToolReceipt: receiptCount > 0 }
         } catch (error) {
           const partialText = stagePartials.get(stageId)
@@ -894,7 +1096,7 @@ export class CoreAgentService {
         ? { currentStage: result.stages.find((stage) => stage.status === 'running' || stage.status === 'paused_budget')?.stageId }
         : {})
     }
-    options.session.orchestrationRuns = [...(options.session.orchestrationRuns ?? []), record].slice(-10)
+    options.session.orchestrationRuns = [...(options.session.orchestrationRuns ?? []).filter((item) => item.runId !== options.runId), record].slice(-10)
   }
 
   async run(req: RunAgentRequest): Promise<{ sessionId: string; runId: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }> {
@@ -1056,6 +1258,7 @@ export class CoreAgentService {
         let repeatedToolRounds = 0
         const toolArgBuffers = new Map<string, string>()
         const toolPreviews = new Map<string, ToolBodyPreview>()
+        const basicTools = [...TOOL_DEFS, ...QUESTION_TOOL_DEFS]
         for (; round < MAX_TOOL_ROUNDS; round++) {
         const assistantId = `msg_${Date.now().toString(36)}_${round}`
         const messages = modelMessages()
@@ -1072,7 +1275,7 @@ export class CoreAgentService {
           maxAttempts: 2,
           execute: () => adapter.stream(
             req.model,
-            { system: promptWithSummary, messages, tools: TOOL_DEFS, signal: controller.signal, params: effectiveSettings },
+            { system: promptWithSummary, messages, tools: basicTools, signal: controller.signal, params: effectiveSettings },
             provider.apiKey,
             { onText: (delta) => {
               streamedText.set(assistantId, `${streamedText.get(assistantId) ?? ''}${delta}`)
@@ -1116,6 +1319,25 @@ export class CoreAgentService {
 
         for (const toolCall of result.toolCalls) {
           this.emit(sid, { type: 'tool-start', callId: toolCall.id, name: toolCall.name, argsJson: toolCall.argsJson }, runId)
+          if (toolCall.name === 'ask_user') {
+            const question = await this.openQuestion({
+              argsJson: toolCall.argsJson,
+              runId,
+              sessionId: sid,
+              agentId: 'basic',
+              session
+            })
+            this.emit(sid, { type: 'tool-done', callId: toolCall.id, ok: true, resultPreview: '等待用户回答' }, runId)
+            const answer = await this.waitForQuestion(question.questionId, controller.signal)
+            session.messages.push({
+              id: `msg_${Date.now().toString(36)}_answer`,
+              role: 'tool',
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              text: JSON.stringify(answer.answers)
+            })
+            break
+          }
           const outcome = await (this.options.executeTool?.(toolCall.name, toolCall.argsJson) ?? executeTool(this.options.store, toolCall.name, toolCall.argsJson))
           if (outcome.kind === 'result') {
             this.emit(sid, { type: 'tool-done', callId: toolCall.id, ok: outcome.ok, resultPreview: outcome.preview }, runId)
@@ -1176,6 +1398,7 @@ export class CoreAgentService {
       this.emit(sid, { type: 'error', message: text }, runId)
     } finally {
       await approvalAudit?.invalidatePending(runId).catch(() => {})
+      await this.clearQuestionsForRun(runId, session)
       const disk = await this.options.sessions.load(sid).catch(() => null)
       if (disk) {
         if (disk.title !== titleAtStart) session.title = disk.title

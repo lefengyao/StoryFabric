@@ -1,4 +1,9 @@
 import type { RunEventEnvelope } from '../../shared/agentRuntime'
+import { normalizeAgentMode, normalizeApprovalPolicy } from '../../shared/creative'
+import type { AgentMode, ApprovalPolicy } from '../../shared/types'
+import type { ApprovalAuditEntry } from './approvalAudit'
+import type { AgentBudgetSnapshot } from '../../shared/types'
+import type { AgentQuestion } from '../../shared/agentQuestions'
 
 export type RuntimeRunStatus = 'created' | 'queued' | 'running' | 'awaiting_user' | 'paused_budget' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 export type DraftSaveStatus = 'saved' | 'unsaved'
@@ -24,6 +29,18 @@ export interface RuntimeRunSnapshot {
   events: RunEventEnvelope[]
   draftSaveStatus: DraftSaveStatus
   terminalEventEmitted?: boolean
+  questionId?: string
+  waitingQuestion?: AgentQuestion
+  /** 新字段对旧快照保持可选，读取时归一化为安全默认值。 */
+  mode?: AgentMode
+  approvalPolicy?: ApprovalPolicy
+  goalId?: string
+  approvalAudit?: ApprovalAuditEntry[]
+  currentStage?: string
+  completedStages?: string[]
+  pauseReason?: 'budget' | 'cancelled' | 'error'
+  error?: string
+  budget?: AgentBudgetSnapshot
 }
 
 export interface RunStore {
@@ -34,7 +51,14 @@ export interface RunStore {
 }
 
 function clone(snapshot: RuntimeRunSnapshot): RuntimeRunSnapshot {
-  return structuredClone(snapshot)
+  return structuredClone({
+    ...snapshot,
+    mode: normalizeAgentMode(snapshot.mode),
+    approvalPolicy: normalizeApprovalPolicy(snapshot.approvalPolicy),
+    approvalAudit: snapshot.approvalAudit ? [...snapshot.approvalAudit] : [],
+    completedStages: [...(snapshot.completedStages ?? [])],
+    ...(snapshot.waitingQuestion ? { waitingQuestion: structuredClone(snapshot.waitingQuestion) } : {})
+  })
 }
 
 export class MemoryRunStore implements RunStore {

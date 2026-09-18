@@ -9,7 +9,14 @@ export class RunEventLedger {
   private readonly events: RunEventEnvelope[] = []
   private nextSeq = 1
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = Date.now, existingEvents: RunEventEnvelope[] = []) {
+    for (const event of existingEvents) {
+      const validated = validateRunEventEnvelope(event)
+      if (this.events.length && validated.seq <= this.events[this.events.length - 1].seq) throw new Error('恢复运行事件 seq 必须递增')
+      this.events.push(validated)
+      this.nextSeq = Math.max(this.nextSeq, validated.seq + 1)
+    }
+  }
 
   append(input: RunEventInput): RunEventEnvelope {
     const event: RunEventEnvelope = {

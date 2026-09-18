@@ -1,17 +1,25 @@
 import type { ChatMessage, ToolCallData } from '../../shared/types'
+import type { AgentQuestion } from '../../shared/agentQuestions'
 import type { StreamResult } from '../llm/types'
+
+export interface ToolLoopWaitingUser {
+  question: AgentQuestion
+  toolCall: ToolCallData
+}
 
 export interface ToolLoopResult {
   text: string
   toolCalls: ToolCallData[]
   rounds: number
-  stoppedReason?: 'completed' | 'repeated-tool-calls' | 'tool-failure' | 'max-rounds'
+  stoppedReason?: 'completed' | 'repeated-tool-calls' | 'tool-failure' | 'max-rounds' | 'waiting-user'
+  waitingUser?: ToolLoopWaitingUser
 }
 
 export interface ToolLoopToolResult {
   ok: boolean
   text: string
   preview: string
+  waitingUser?: AgentQuestion
 }
 
 export interface ToolLoopOptions {
@@ -76,6 +84,16 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     for (const toolCall of result.toolCalls) {
       options.onToolStart?.(toolCall)
       const toolResult = await options.executeTool(toolCall)
+      options.onToolDone?.(toolCall, toolResult)
+      if (toolResult.waitingUser) {
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls,
+          rounds: round + 1,
+          stoppedReason: 'waiting-user',
+          waitingUser: { question: toolResult.waitingUser, toolCall }
+        }
+      }
       options.appendMessage({
         id: id('tool'),
         role: 'tool',
@@ -84,7 +102,6 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         text: toolResult.text,
         isError: !toolResult.ok
       })
-      options.onToolDone?.(toolCall, toolResult)
       if (toolResult.ok) toolFailures.delete(toolCall.name)
       else {
         const failures = (toolFailures.get(toolCall.name) ?? 0) + 1

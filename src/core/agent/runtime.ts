@@ -1,7 +1,10 @@
 import { ClientRunIdRegistry } from '../../shared/agentRuntime'
 import type { RunEventEnvelope, RuntimeEvent } from '../../shared/agentRuntime'
+import { parseAgentQuestion, validateAgentQuestionAnswer, type AgentQuestion, type AgentQuestionAnswer } from '../../shared/agentQuestions'
 import { RunEventLedger } from './events'
 import { MemoryRunStore, type RunStore, type RuntimeRunSnapshot } from './runStore'
+import { RunController, type RunPauseReason } from './runController'
+import type { AgentBudgetSnapshot } from '../../shared/types'
 
 export interface RuntimeStartInput {
   workspaceId: string
@@ -17,6 +20,11 @@ export interface RuntimeContext {
   signal: AbortSignal
   text(messageId: string, delta: string): void
   emit(event: RuntimeEvent): void
+  stage(stageId: string): void
+  stageComplete(stageId: string): void
+  budget(snapshot: AgentBudgetSnapshot): void
+  pause(reason: RunPauseReason, message: string): void
+  awaitUser(question: AgentQuestion): Promise<AgentQuestionAnswer>
 }
 
 export type RuntimeRunner = (context: RuntimeContext) => Promise<void> | void
@@ -48,6 +56,8 @@ export class AgentRuntime {
   private readonly clientRuns = new ClientRunIdRegistry()
   private readonly completions = new Map<string, Promise<void>>()
   private readonly persistQueues = new Map<string, Promise<void>>()
+  private readonly questionWaiters = new Map<string, { runId: string; resolve: (answer: AgentQuestionAnswer) => void; reject: (error: Error) => void; promise: Promise<AgentQuestionAnswer> }>()
+  private readonly answeredQuestions = new Map<string, AgentQuestionAnswer>()
 
   constructor(options: AgentRuntimeOptions = {}) {
     this.store = options.store ?? new MemoryRunStore()
@@ -93,7 +103,8 @@ export class AgentRuntime {
       lastSeq: 0,
       drafts: [],
       events: [],
-      draftSaveStatus: 'saved'
+      draftSaveStatus: 'saved',
+      completedStages: []
     }
     this.runs.set(runId, snapshot)
     this.ledgers.set(runId, new RunEventLedger(this.now))
@@ -108,8 +119,49 @@ export class AgentRuntime {
   cancel(runId: string): void {
     const snapshot = this.runs.get(runId)
     if (!snapshot || isTerminal(snapshot.status)) return
+    for (const [questionId, waiter] of this.questionWaiters) {
+      if (waiter.runId !== runId) continue
+      this.questionWaiters.delete(questionId)
+      const error = Object.assign(new Error('运行已取消'), { name: 'AbortError' })
+      waiter.reject(error)
+    }
+    delete snapshot.waitingQuestion
+    delete snapshot.questionId
     this.controllers.get(runId)?.abort()
     this.finish(snapshot, 'cancelled')
+  }
+
+  async answerQuestion(answer: AgentQuestionAnswer): Promise<void> {
+    const answered = this.answeredQuestions.get(answer.questionId)
+    if (answered) {
+      if (JSON.stringify(answered) === JSON.stringify(answer)) return
+      throw new Error('问题已经回答，不能替换答案')
+    }
+    const waiterEntry = [...this.questionWaiters.entries()].find(([, waiter]) => {
+      const snapshot = this.runs.get(waiter.runId)
+      return snapshot?.waitingQuestion?.questionId === answer.questionId
+    })
+    if (!waiterEntry) {
+      const persisted = this.store.list('', '').find((snapshot) => snapshot.waitingQuestion?.questionId === answer.questionId)
+      if (persisted) throw new Error('问题存在，但当前进程没有可安全继续运行的等待点；请重新启动本次任务')
+      throw new Error('问题不存在或已经结束')
+    }
+    const [questionId, waiter] = waiterEntry
+    const snapshot = this.runs.get(waiter.runId)!
+    validateAgentQuestionAnswer(snapshot.waitingQuestion!, answer)
+    if (this.questionWaiters.get(questionId) !== waiter) {
+      const alreadyAnswered = this.answeredQuestions.get(questionId)
+      if (alreadyAnswered && JSON.stringify(alreadyAnswered) === JSON.stringify(answer)) return
+      throw new Error('问题已经由另一个回答请求处理')
+    }
+    this.answeredQuestions.set(questionId, structuredClone(answer))
+    this.questionWaiters.delete(questionId)
+    delete snapshot.waitingQuestion
+    delete snapshot.questionId
+    snapshot.status = 'running'
+    snapshot.updatedAt = this.now()
+    await this.persist(snapshot)
+    waiter.resolve(answer)
   }
 
   getSnapshot(runId: string): RuntimeRunSnapshot | null {
@@ -124,6 +176,7 @@ export class AgentRuntime {
   }
 
   private async execute(snapshot: RuntimeRunSnapshot, input: RuntimeStartInput, controller: AbortController, runner: RuntimeRunner): Promise<void> {
+    const progress = new RunController(snapshot, this.now)
     snapshot.status = 'running'
     this.append(snapshot, input, { type: 'run-start' })
     void this.persist(snapshot)
@@ -144,13 +197,54 @@ export class AgentRuntime {
           if (controller.signal.aborted || isTerminal(snapshot.status)) return
           this.append(snapshot, input, event)
           void this.persist(snapshot)
+        },
+        stage: (stageId) => progress.stage(stageId),
+        stageComplete: (stageId) => progress.stageComplete(stageId),
+        budget: (value) => progress.budget(value),
+        pause: (reason, message) => {
+          if (progress.isTerminal()) return
+          progress.pause(reason, message)
+          this.append(snapshot, input, { type: 'run-paused', payload: { reason, message } })
+          this.finish(snapshot, snapshot.status)
+          void this.persist(snapshot)
+        },
+        awaitUser: async (question) => {
+          const parsed = parseAgentQuestion(question)
+          if (parsed.runId !== snapshot.runId || parsed.sessionId !== snapshot.sessionId || parsed.agentId !== snapshot.agentId) {
+            throw new Error('问题身份与运行不匹配')
+          }
+          if (controller.signal.aborted) throw Object.assign(new Error('运行已取消'), { name: 'AbortError' })
+          snapshot.status = 'awaiting_user'
+          snapshot.questionId = parsed.questionId
+          snapshot.waitingQuestion = structuredClone(parsed)
+          if (parsed.stageId) {
+            progress.stage(parsed.stageId)
+          }
+          let resolve!: (answer: AgentQuestionAnswer) => void
+          let reject!: (error: Error) => void
+          const promise = new Promise<AgentQuestionAnswer>((resolvePromise, rejectPromise) => {
+            resolve = resolvePromise
+            reject = rejectPromise
+          })
+          void promise.catch(() => {})
+          this.questionWaiters.set(parsed.questionId, { runId: snapshot.runId, resolve, reject, promise })
+          this.append(snapshot, input, { type: 'agent-question', payload: { questionId: parsed.questionId, question: parsed } }, parsed.stageId)
+          this.append(snapshot, input, { type: 'waiting-user', payload: { questionId: parsed.questionId } }, parsed.stageId)
+          await this.persist(snapshot)
+          return promise
         }
       })
-      if (!isTerminal(snapshot.status)) this.finish(snapshot, 'completed')
+      if (!progress.isTerminal()) {
+        progress.complete()
+        this.finish(snapshot, 'completed')
+      }
     } catch (error) {
       if (!isTerminal(snapshot.status)) {
-        this.append(snapshot, input, { type: controller.signal.aborted ? 'run-paused' : 'run-error', payload: { message: error instanceof Error ? error.message : String(error) } })
-        this.finish(snapshot, controller.signal.aborted ? 'cancelled' : 'failed')
+        const message = error instanceof Error ? error.message : String(error)
+        const reason: RunPauseReason = controller.signal.aborted ? 'cancelled' : (error as { code?: unknown })?.code === 'BUDGET_EXCEEDED' ? 'budget' : 'error'
+        progress.pause(reason, message)
+        this.append(snapshot, input, { type: reason === 'error' ? 'run-error' : 'run-paused', payload: { reason, message } })
+        this.finish(snapshot, snapshot.status)
       }
     } finally {
       await this.persist(snapshot)
@@ -160,13 +254,14 @@ export class AgentRuntime {
     }
   }
 
-  private append(snapshot: RuntimeRunSnapshot, input: RuntimeStartInput, event: RuntimeEvent): RunEventEnvelope {
+  private append(snapshot: RuntimeRunSnapshot, input: RuntimeStartInput, event: RuntimeEvent, stageId?: string): RunEventEnvelope {
     const envelope = this.ledgers.get(snapshot.runId)!.append({
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
       runId: snapshot.runId,
       agentId: input.agentId,
       ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
+      ...(stageId ? { stageId } : {}),
       event
     })
     snapshot.events.push(envelope)
@@ -208,5 +303,5 @@ export class AgentRuntime {
 }
 
 function isTerminal(status: RuntimeRunSnapshot['status']): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted'
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'paused_budget' || status === 'interrupted'
 }
