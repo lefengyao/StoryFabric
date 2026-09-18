@@ -55,7 +55,7 @@ export interface AppContext {
   agent: AgentService
   usage: UsageService
   deploy: DeployService
-  runtimeEvents: { replay: (workspaceId: string, runId: string, afterSeq?: number) => RunReplay }
+  runtimeEvents?: { replay: (workspaceId: string, runId: string, afterSeq?: number) => RunReplay }
 }
 
 let currentRoot: string | null = null
@@ -278,7 +278,10 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
   ipcMain.handle(IPC.AgentConfirm, async (_e, changeId: string, approved: boolean) => ctx.agent.confirmChange(changeId, approved))
   ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abort(sessionId))
-  ipcMain.handle(IPC.RecoverRunEvents, async (_e, runId: string, afterSeq?: number) => ctx.runtimeEvents.replay(requireRoot(), runId, afterSeq))
+  ipcMain.handle(IPC.RecoverRunEvents, async (_e, runId: string, afterSeq?: number) => {
+    if (!ctx.runtimeEvents) throw new Error('运行事件恢复服务尚未初始化')
+    return ctx.runtimeEvents.replay(requireRoot(), runId, afterSeq)
+  })
   ipcMain.handle(IPC.ListGoals, async () => ctx.agent.listGoals(requireRoot()))
   ipcMain.handle(IPC.GetGoal, async (_e, id: string) => ctx.agent.getGoal(requireRoot(), id))
   ipcMain.handle(IPC.ContinueGoal, async (_e, id: string) => ctx.agent.continueGoal(requireRoot(), id))
