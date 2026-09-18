@@ -21,6 +21,8 @@ describe('session archive', () => {
   it('rejects invalid attachment archives', () => {
     const session: ChatSession = { id: 'sess_1', title: '坏', createdAt: 1, updatedAt: 1, archived: false, messages: [{ id: 'm', role: 'user', files: [{ kind: 'image', id: 'i', name: 'x.png', mimeType: 'image/png', size: 1, base64: 'AA==' }] }] }
     expect(() => decodeSessionArchive(exportSessionArchive(session).base64)).toThrow()
+    const malformed = { ...session, messages: [], archived: 'yes' as never }
+    expect(() => decodeSessionArchive(exportSessionArchive(malformed).base64)).toThrow(/归档|archived/)
   })
 
   it('round-trips orchestration candidates without executing them on import', () => {

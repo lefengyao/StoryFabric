@@ -78,6 +78,7 @@ export function decodeSessionArchive(base64: string): ChatSession {
     throw new Error('会话思考设置无效')
   }
   const creativePreferences = value.creativePreferences === undefined ? undefined : validateCreativePreferences(value.creativePreferences)
+  if (value.archived !== undefined && typeof value.archived !== 'boolean') throw new Error('会话归档状态无效')
   const approvalPolicy = normalizeApprovalPolicy(value.approvalPolicy)
   const orchestrationRuns = decodeOrchestrationRuns(value.orchestrationRuns)
   const waitingQuestion = value.waitingQuestion === undefined ? undefined : parseAgentQuestion(value.waitingQuestion)

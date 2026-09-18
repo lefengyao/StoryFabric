@@ -61,7 +61,10 @@ export class SessionStore {
   async save(session: ChatSession): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true })
     const tmp = this.pathOf(session.id) + '.tmp'
-    await fs.writeFile(tmp, JSON.stringify(session, null, 2), 'utf-8')
+    const next = session.creativePreferences === undefined
+      ? session
+      : { ...session, creativePreferences: validateCreativePreferences(session.creativePreferences) }
+    await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf-8')
     await fs.rename(tmp, this.pathOf(session.id))
   }
 

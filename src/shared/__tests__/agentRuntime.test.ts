@@ -183,6 +183,10 @@ describe('agent runtime contract', () => {
       seq: 1,
       event: { type: 'agent-question', question: { questionId: 'question-1', runId: 'other-run', sessionId: 's', agentId: 'planner', title: '需要确认', description: '说明', fields: [{ id: 'choice', label: '选择', type: 'single', options: [{ id: 'a', label: 'A' }] }] } }
     })).toThrow(/身份|envelope|不匹配/)
+    expect(() => adaptLegacyAgentEvent({
+      workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'planner', stageId: 'write', seq: 1,
+      event: { type: 'stage-start', stageId: 'plan' }
+    })).toThrow(/stageId|阶段|不匹配/)
   })
 
   it('adapts a structured legacy agent-question event at the compatibility boundary', () => {

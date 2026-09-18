@@ -48,5 +48,6 @@ describe('SessionStore creative preferences', () => {
     const session = await store.create()
     await store.save(session)
     await expect(store.updateMeta(session.id, { creativePreferences: { mode: 'invalid' } as never })).rejects.toThrow(/creative\.mode/)
+    await expect(store.save({ ...session, creativePreferences: { mode: 'invalid' } as never })).rejects.toThrow(/creative\.mode/)
   })
 })

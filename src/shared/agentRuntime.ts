@@ -88,6 +88,11 @@ function validateStructuredEventPayload(event: Record<string, unknown>, identity
     if (hasQuestionId) requiredString(payload.questionId, 'event.payload.questionId')
     if (hasCandidateId) requiredString(payload.candidateId, 'event.payload.candidateId')
   }
+  if (event.type === 'stage-start' || event.type === 'stage-complete') {
+    const payload = payloadRecord(event, event.type)
+    const stageId = requiredString(payload.stageId, `${event.type}.payload.stageId`)
+    if (identity && identity.stageId !== stageId) throw new Error(`${event.type} 的 stageId 与运行事件 envelope 不匹配`)
+  }
 }
 
 function validateEventShape(event: Record<string, unknown>): void {
@@ -106,7 +111,6 @@ function validateEventShape(event: Record<string, unknown>): void {
     case 'artifact-delta':
     case 'usage-update':
     case 'pending-change':
-    case 'change-result':
     case 'goal-plan':
     case 'goal-task':
     case 'goal-validation':
@@ -118,6 +122,13 @@ function validateEventShape(event: Record<string, unknown>): void {
     case 'run-error':
       payloadRecord(event, event.type)
       return
+    case 'change-result': {
+      const payload = payloadRecord(event, event.type)
+      requiredString(payload.changeId, 'change-result.payload.changeId')
+      if (payload.status !== 'applied' && payload.status !== 'rejected' && payload.status !== 'conflict' && payload.status !== 'failed') throw new Error('change-result.payload.status 无效')
+      requiredString(payload.message, 'change-result.payload.message')
+      return
+    }
     case 'run-done':
       if (event.payload !== undefined && !isRecord(event.payload)) throw new Error('run-done 的 payload 必须是对象')
       return
@@ -209,7 +220,7 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'change-result', payload: { changeId: event.changeId, status: event.approved ? 'applied' : 'rejected', message: event.approved ? '变更已应用' : '变更已拒绝' } }
       break
     case 'change-result':
-      runtime = { type: 'change-result', payload: event }
+      runtime = { type: 'change-result', payload: { changeId: event.changeId, status: event.status, message: event.message } }
       break
     case 'goal-plan':
       runtime = { type: 'goal-plan', payload: event.goal }

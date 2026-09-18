@@ -31,7 +31,10 @@ export class CoreSessionStore {
 
   async save(session: ChatSession): Promise<void> {
     await this.store.ensureDir('.storyfabric/sessions')
-    await this.store.writeText(this.pathOf(session.id), JSON.stringify(session, null, 2))
+    const next = session.creativePreferences === undefined
+      ? session
+      : { ...session, creativePreferences: validateCreativePreferences(session.creativePreferences) }
+    await this.store.writeText(this.pathOf(session.id), JSON.stringify(next, null, 2))
   }
 
   async delete(id: string): Promise<void> { await this.store.remove(this.pathOf(id)) }
