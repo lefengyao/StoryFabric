@@ -9,7 +9,7 @@
 - 本 checkpoint 记录 Task 0 执行前的脏工作树、测试基线、0.1.6 正式产物和最终版本切换。
 - 未执行 git reset、git checkout、git clean，也没有覆盖计划之外的用户改动。
 - 未读取、写入或修改 E:\New项目\Novel\开局被抢课逼疯，我带全地府修仙。
-- 本任务允许提交的文件仅为本 checkpoint、package.json、根 package-lock.json；其他脏文件均不得 stage 或提交。
+- Task 0 初始提交只包含本 checkpoint、package.json、根 package-lock.json；后续规格复核修复允许提交必要的 electron-builder.yml 与本 checkpoint 更新。其他脏文件均不得 stage 或提交。
 - release/0.1.6/ 是本任务要求生成的正式产物目录；不将其内容当作源码改动，也不使用快照产物覆盖该目录。
 
 ## Git 基线
@@ -228,15 +228,26 @@ node -p require('./package-lock.json').packages[empty].version：0.1.7-snapshot
 
 当前源码版本为 0.1.7-snapshot。npm 以当前环境解析 lockfile 时额外写入了 Tailwind WASI 可选依赖的 lockfile 条目；该变化由要求执行的 npm install --package-lock-only 产生，未手工扩展其他源码文件。
 
-## 提交边界
+## 初始提交边界
 
-提交前必须再次确认只 stage：
+Task 0 初始提交前确认只 stage：
 
 docs/superpowers/checkpoints/2026-09-18-orchestration-017-baseline.md
 package.json
 package-lock.json
 
-提交信息：chore: record 0.1.6 release baseline for orchestration snapshot
+初始提交信息：chore: record 0.1.6 release baseline for orchestration snapshot
+初始提交：bd65f4b5b2bd957fd973c64b1a06716a6765d3fc
+
+## 规格复核修复提交边界
+
+本次修复只提交：
+
+electron-builder.yml
+docs/superpowers/checkpoints/2026-09-18-orchestration-017-baseline.md
+
+release/0.1.6 下的两个旧重复产物属于被忽略的生成文件，按用户要求删除但不强行纳入 Git 提交；package.json、package-lock.json 和后续功能文件均不修改、不 stage。
+本次修复提交信息：fix: align 0.1.6 installer metadata with artifact name；后续清理提交将只包含上述两个 Task 0 文件。
 
 ## 规格复核修复：latest.yml 安装器文件名
 
