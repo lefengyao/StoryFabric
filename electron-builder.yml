@@ -30,7 +30,7 @@ win:
       arch:
         - x64
 nsis:
-  artifactName: StoryFabric Setup ${version}.${ext}
+  artifactName: StoryFabric-Setup-${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

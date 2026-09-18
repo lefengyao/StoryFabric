@@ -237,3 +237,25 @@ package.json
 package-lock.json
 
 提交信息：chore: record 0.1.6 release baseline for orchestration snapshot
+
+## 规格复核修复：latest.yml 安装器文件名
+
+复核发现的根因：electron-builder.yml 原来的 nsis.artifactName 是 StoryFabric Setup ${version}.${ext}，实际生成带空格的 NSIS 文件；electron-builder 生成 latest.yml 时引用了连字符形式 StoryFabric-Setup-${version}.exe，导致 metadata 指向不存在的文件。
+
+采用的最小可复现修复：将 electron-builder.yml 的 nsis.artifactName 统一为 StoryFabric-Setup-${version}.${ext}，临时把 package.json 与根 package-lock.json 版本设为 0.1.6，重新运行 npm run dist:win，完成后恢复源码版本为 0.1.7-snapshot。没有修改后续功能源码，也没有覆盖用户脏工作树。
+
+修复验证：
+
+- npm run dist:win：退出码 0。
+- release/0.1.6/latest.yml 的 url/path 均为 StoryFabric-Setup-0.1.6.exe。
+- release/0.1.6/StoryFabric-Setup-0.1.6.exe：存在。
+- release/0.1.6/StoryFabric-Setup-0.1.6.exe.blockmap：存在。
+- release/0.1.6/server-bundle/VERSION：0.1.6。
+- 独立 tar 内 VERSION：0.1.6。
+- win-unpacked/resources/server-bundle.tar.gz 内 VERSION：0.1.6。
+- 独立服务包 SHA256：72402616BC05E5807A7EBB2B58A315AE25AB38B453ECF532FC37F75F7371451D。
+- 内嵌服务包 SHA256：72402616BC05E5807A7EBB2B58A315AE25AB38B453ECF532FC37F75F7371451D。
+- 两个服务包 SHA256：一致。
+- 当前 package.json、根 package-lock.json 顶层及 packages[empty] 版本：0.1.7-snapshot。
+
+重建不会清理 release/0.1.6 中旧的空格命名产物；旧文件仍存在但不再被 latest.yml 引用。本次不删除它们，以避免超出修复 metadata/config 缺口的最小范围。
