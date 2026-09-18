@@ -29,6 +29,7 @@ import { builtinPackages } from '../core/skills/builtin'
 import { RuleStore } from '../core/rules/ruleStore'
 import { GoalStore } from '../core/goal/goalStore'
 import type { ContentPackage } from '../core/skills/types'
+import { creativePreferencesFromOrchestrationDefaults } from '../shared/creative'
 
 const MAX_JSON_BODY_BYTES = 16 * 1024 * 1024
 const DEFAULT_SESSION_TTL = 8 * 60 * 60 * 1000
@@ -346,7 +347,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     }
 
     const { id: workspaceId, runtime } = await runtimeOf(context)
-    const needsImmediateAgentControl = method === 'agentConfirm' || method === 'agentAbort'
+    const needsImmediateAgentControl = method === 'agentConfirm' || method === 'agentAbort' || method === 'agentAnswerQuestion' || method === 'agentResolveSkillCandidate'
     if (!serialized && !needsImmediateAgentControl) return serializeWorkspace(runtime, () => dispatch(context, method, args, true))
     const { store } = runtime
     const saveChapterMeta = async (input: Partial<ChapterDoc>): Promise<unknown> => {
@@ -410,6 +411,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       }
       case 'agentConfirm': runtime.agent.confirmChange(arg<string>(), Boolean(arg<boolean>(1))); return undefined
       case 'agentAbort': runtime.agent.abort(arg<string>()); return undefined
+      case 'agentAnswerQuestion': await runtime.agent.answerQuestion(arg<import('../shared/agentQuestions').AgentQuestionAnswer>()); return undefined
+      case 'agentResolveSkillCandidate': await runtime.agent.resolveSkillCandidate(arg<string>(), arg<import('../shared/agentQuestions').SkillCandidateAction>(1)); return undefined
       case 'listGoals': return new GoalStore(store).list(workspaceId)
       case 'getGoal': {
         const goal = await new GoalStore(store).get(arg<string>())
@@ -452,7 +455,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         return { goalId: goal.id, runId: runtime.agent.getActiveRunId(goal.sessionId), planVersion: goal.planVersion + 1 }
       }
       case 'listSessions': return runtime.sessions.list()
-      case 'createSession': { const session = await runtime.sessions.create(); await runtime.sessions.save(session); return session }
+      case 'createSession': { const session = await runtime.sessions.create(); session.creativePreferences = creativePreferencesFromOrchestrationDefaults((await settings.load()).orchestrationDefaults); await runtime.sessions.save(session); return session }
       case 'exportSession': { const session = await runtime.sessions.load(arg<string>()); if (!session) throw new Error('会话不存在'); return exportSessionArchive(session) }
       case 'importSession': {
         const imported = decodeSessionArchive(arg<string>())

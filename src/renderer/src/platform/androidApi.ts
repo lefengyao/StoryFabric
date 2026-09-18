@@ -5,6 +5,7 @@ import { Directory, Filesystem } from '@capacitor/filesystem'
 import { throwIfWorkspaceRequestAborted } from '../../../shared/api'
 import type { AgentEventEnvelope, RuntimeAgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
+import type { AgentQuestionAnswer, SkillCandidateAction } from '../../../shared/agentQuestions'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, GoalRun, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
@@ -25,7 +26,7 @@ import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
 import { adaptLegacyAgentEvent } from '../../../shared/agentRuntime'
 import { RunEventBuffer, type RunReplay } from '../../../shared/runEvents'
-import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences, type CreativePackageSummary } from '../../../shared/creative'
+import { creativePreferencesFromOrchestrationDefaults, DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences, type CreativePackageSummary } from '../../../shared/creative'
 import { summarizeContentPackage } from '../../../core/skills/packageStore'
 import { GlobalSkillLibrary } from '../../../core/skills/globalSkillLibrary'
 import { builtinPackages } from '../../../core/skills/builtin'
@@ -547,6 +548,14 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
   agentConfirm(changeId: string, approved: boolean): Promise<void> { this.agent?.confirmChange(changeId, approved); return Promise.resolve() }
   agentAbort(sessionId: string): Promise<void> { this.agent?.abort(sessionId); return Promise.resolve() }
+  async agentAnswerQuestion(answer: AgentQuestionAnswer): Promise<void> {
+    if (!this.agent) throw new Error('尚未打开工作区')
+    await this.agent.answerQuestion(answer)
+  }
+  async agentResolveSkillCandidate(candidateId: string, action: SkillCandidateAction): Promise<void> {
+    if (!this.agent) throw new Error('尚未打开工作区')
+    await this.agent.resolveSkillCandidate(candidateId, action)
+  }
 
   listGoals(): Promise<GoalRun[]> { return new GoalStore(this.requireStore()).list(this.currentPath ?? '') }
   async getGoal(id: string): Promise<GoalRun | null> {
@@ -586,6 +595,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
   listSessions(): Promise<SessionMeta[]> { return this.sessions().list() }
   async createSession(): Promise<ChatSession> {
     const session = await this.sessions().create()
+    await this.loadSettingsFromPreferences()
+    session.creativePreferences = creativePreferencesFromOrchestrationDefaults(this.settings.orchestrationDefaults)
     await this.sessions().save(session)
     return session
   }

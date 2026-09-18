@@ -48,6 +48,7 @@ import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { serializeWorkspace } from './services/workspaceRuntime'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
 import type { RunReplay } from '../shared/runEvents'
+import { creativePreferencesFromOrchestrationDefaults } from '../shared/creative'
 
 export interface AppContext {
   win: () => BrowserWindow | null
@@ -278,6 +279,8 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
   ipcMain.handle(IPC.AgentConfirm, async (_e, changeId: string, approved: boolean) => ctx.agent.confirmChange(changeId, approved))
   ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abort(sessionId))
+  ipcMain.handle(IPC.AgentAnswerQuestion, async (_e, answer: import('../shared/agentQuestions').AgentQuestionAnswer) => ctx.agent.answerQuestion(requireRoot(), answer))
+  ipcMain.handle(IPC.AgentResolveSkillCandidate, async (_e, candidateId: string, action: import('../shared/agentQuestions').SkillCandidateAction) => ctx.agent.resolveSkillCandidate(requireRoot(), candidateId, action))
   ipcMain.handle(IPC.RecoverRunEvents, async (_e, runId: string, afterSeq?: number) => {
     if (!ctx.runtimeEvents) throw new Error('运行事件恢复服务尚未初始化')
     return ctx.runtimeEvents.replay(requireRoot(), runId, afterSeq)
@@ -292,6 +295,8 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.ListSessions, async () => sessionStore().list())
   ipcMain.handle(IPC.CreateSession, async () => {
     const session = await sessionStore().create()
+    const settings = await ctx.settings.load()
+    session.creativePreferences = creativePreferencesFromOrchestrationDefaults(settings.orchestrationDefaults)
     await sessionStore().save(session)
     return session
   })

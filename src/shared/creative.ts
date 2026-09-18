@@ -56,6 +56,21 @@ export const DEFAULT_CREATIVE_PREFERENCES: CreativePreferences = {
   selectedRuleSetIds: []
 }
 
+/** Creates a session-owned snapshot from the application default profile. */
+export function creativePreferencesFromOrchestrationDefaults(value: unknown): CreativePreferences {
+  const orchestration = normalizeOrchestrationPreferences(value)
+  if (!orchestration.enabled) return { ...DEFAULT_CREATIVE_PREFERENCES, selectedSkillIds: [], selectedRuleSetIds: [] }
+  return {
+    mode: 'orchestration',
+    orchestrationEnabled: true,
+    subagentsEnabled: orchestration.subagentsEnabled,
+    intensity: 'standard',
+    selectedSkillIds: [],
+    selectedRuleSetIds: [],
+    orchestration
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

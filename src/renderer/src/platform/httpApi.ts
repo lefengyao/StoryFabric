@@ -137,6 +137,8 @@ export class HttpPlatformApi implements StoryFabricApi {
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }> { return this.rpc('agentRun', [req]) }
   agentConfirm(changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [changeId, approved]) }
   agentAbort(sessionId: string): Promise<void> { return this.rpc('agentAbort', [sessionId]) }
+  agentAnswerQuestion(answer: import('../../../shared/agentQuestions').AgentQuestionAnswer): Promise<void> { return this.rpc('agentAnswerQuestion', [answer]) }
+  agentResolveSkillCandidate(candidateId: string, action: import('../../../shared/agentQuestions').SkillCandidateAction): Promise<void> { return this.rpc('agentResolveSkillCandidate', [candidateId, action]) }
   listGoals(): Promise<import('../../../shared/types').GoalRun[]> { return this.rpc('listGoals') }
   getGoal(id: string): Promise<import('../../../shared/types').GoalRun | null> { return this.rpc('getGoal', [id]) }
   continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: import('../../../shared/types').GoalStatus }> { return this.rpc('continueGoal', [id]) }

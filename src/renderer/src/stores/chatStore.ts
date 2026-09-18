@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentEventEnvelope } from '../../../shared/api'
 import type {
   Attachment,
+  ApprovalPolicy,
   ChatMessage,
   ChatSession,
   AgentBudgetSnapshot,
@@ -22,6 +23,7 @@ import { useSettings } from './settingsStore'
 import { sessionScopePatch, shouldKeepStreamingAfterAcceptance, workspaceScopePatch } from './chatScope'
 import { chatDraftScope, chatDraftStore, type DraftSendTransaction } from './chatDraftStore'
 import { getPlatformUiSource } from '../platform/platformApi'
+import { appendTextDelta } from '../lib/agentMessageReducer'
 
 /** 流式期间的临时工具调用展示项 */
 export interface LiveToolRun {
@@ -33,7 +35,7 @@ export interface LiveToolRun {
 }
 
 export type LiveTurnItem =
-  | { kind: 'text'; id: string; text: string }
+  | { kind: 'text'; id: string; text: string; messageId?: string }
   | { kind: 'tool'; callId: string; name: string; argsJson: string; status: LiveToolRun['status']; preview?: string }
   | { kind: 'stage'; id: string; stageId: string; status: 'running' | 'completed' | 'failed' }
 
@@ -41,6 +43,8 @@ interface ChatState {
   sessions: SessionMeta[]
   activeId: string | null
   messages: ChatMessage[]
+  approvalPolicy: ApprovalPolicy
+  creativePreferences?: CreativePreferences
   modelPreferences: SessionModelPreference[]
   orchestrationRuns: import('../../../shared/types').OrchestrationRunRecord[]
   budget: AgentBudgetSnapshot | null
@@ -72,6 +76,7 @@ interface ChatState {
   setAttachments: (a: Attachment[]) => void
   setMessageFiles: (files: MessageFile[]) => void
   updateModelPreference: (value: SessionModelPreference) => Promise<void>
+  updateApprovalPolicy: (value: ApprovalPolicy) => Promise<void>
   resetWorkspace: () => void
 
   send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'> & { creative?: CreativePreferences }) => Promise<void>
@@ -116,6 +121,8 @@ export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeId: null,
   messages: [],
+  approvalPolicy: 'strict',
+  creativePreferences: undefined,
   modelPreferences: [],
   orchestrationRuns: [],
   budget: null,
@@ -203,6 +210,13 @@ export const useChat = create<ChatState>((set, get) => ({
     set((state) => ({ modelPreferences: [...state.modelPreferences.filter((item) => !(item.providerId === value.providerId && item.model === value.model)), value] }))
   },
 
+  updateApprovalPolicy: async (value) => {
+    const id = get().activeId
+    if (!id) throw new Error('请先创建或打开会话')
+    await getPlatformApi().updateSession(id, { approvalPolicy: value })
+    set({ approvalPolicy: value })
+  },
+
   resetWorkspace: () => {
     workspaceGeneration += 1
     sessionLoadGeneration += 1
@@ -232,7 +246,9 @@ export const useChat = create<ChatState>((set, get) => ({
       message: text.trim() || (get().messageFiles.length ? '请分析所附资料。' : ''),
       attachments: get().attachments.length ? get().attachments : undefined,
       files: get().messageFiles.length ? get().messageFiles : undefined,
-      ...reqBase
+      approvalPolicy: get().approvalPolicy,
+      ...reqBase,
+      creative: reqBase.creative ?? get().creativePreferences
     }
     runningSessionId = req.sessionId ?? null
     try {
@@ -297,14 +313,11 @@ function pushStreamingDelta(set: SetFn, messageId: string, delta: string): void 
       const timeline = [...p.liveTimeline]
       let streamingText = p.streamingText ?? ''
       for (const chunk of chunks) {
-        const id = `live_${chunk.messageId}`
-        const last = timeline.at(-1)
-        if (last?.kind === 'text' && last.id === id) {
-          timeline[timeline.length - 1] = { ...last, text: last.text + chunk.delta }
-        } else {
-          timeline.push({ kind: 'text', id, text: chunk.delta })
-        }
-        streamingText += chunk.delta
+        const next = appendTextDelta(timeline, chunk.messageId, chunk.delta)
+        timeline.splice(0, timeline.length, ...next)
+        // Keep the legacy aggregate for the primary reply only. Child and
+        // stage messages have their own stable rows and must not be merged into it.
+        if (!chunk.messageId.includes('_child_') && !chunk.messageId.includes('_stage_')) streamingText += chunk.delta
       }
       return { streamingText, liveTimeline: timeline }
     }))
@@ -352,6 +365,21 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       break
     case 'stage-complete':
       set((p) => ({ liveTimeline: p.liveTimeline.map((item) => item.kind === 'stage' && item.stageId === ev.stageId ? { ...item, status: 'completed' as const } : item) }))
+      break
+    case 'goal-task':
+      flushStreamingDelta()
+      set((p) => ({
+        liveTimeline: [...p.liveTimeline.filter((item) => item.kind !== 'stage' || item.id !== `goal_${ev.task.id}`), {
+          kind: 'stage', id: `goal_${ev.task.id}`, stageId: `目标：${ev.task.title}`,
+          status: ev.task.status === 'completed' ? 'completed' as const : ev.task.status === 'failed' ? 'failed' as const : 'running' as const
+        }]
+      }))
+      break
+    case 'goal-validation':
+      set((p) => ({ liveTimeline: p.liveTimeline.map((item) => item.kind === 'stage' && item.id === `goal_${ev.taskId}` ? { ...item, status: ev.passed ? 'completed' as const : 'failed' as const } : item) }))
+      break
+    case 'goal-plan':
+    case 'approval-policy':
       break
     case 'tool-start':
       flushStreamingDelta()

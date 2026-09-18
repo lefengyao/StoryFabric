@@ -1,11 +1,15 @@
-import type { ChatMessage, ChatSession, OrchestrationRunRecord, SessionModelPreference } from '../../../shared/types'
+import { getSessionApprovalPolicy } from '../../../core/workspace/sessionPreferences'
+import type { AgentBudgetSnapshot, ApprovalPolicy, ChatMessage, ChatSession, OrchestrationRunRecord, SessionModelPreference } from '../../../shared/types'
+import type { CreativePreferences } from '../../../shared/creative'
 
 export interface SessionScopePatch {
   activeId: string
   messages: ChatMessage[]
+  approvalPolicy: ApprovalPolicy
+  creativePreferences?: CreativePreferences
   modelPreferences?: SessionModelPreference[]
   orchestrationRuns?: OrchestrationRunRecord[]
-  budget: null
+  budget: AgentBudgetSnapshot | null
   streamingText: string
   liveTimeline: []
   liveTools: []
@@ -22,6 +26,8 @@ export interface SessionScopePatch {
 export interface WorkspaceScopePatch {
   activeId: null
   messages: []
+  approvalPolicy: 'strict'
+  creativePreferences: undefined
   modelPreferences: []
   orchestrationRuns: []
   budget: null
@@ -46,8 +52,10 @@ export function sessionScopePatch(session: ChatSession): SessionScopePatch {
   return {
     activeId: session.id,
     messages: session.messages,
-  modelPreferences: session.modelPreferences ?? [],
-    budget: null,
+    approvalPolicy: getSessionApprovalPolicy(session),
+    ...(session.creativePreferences ? { creativePreferences: session.creativePreferences } : {}),
+    modelPreferences: session.modelPreferences ?? [],
+    budget: session.orchestrationRuns?.at(-1)?.budget ?? null,
     orchestrationRuns: session.orchestrationRuns ?? [],
     streamingText: '',
     liveTimeline: [],
@@ -67,6 +75,8 @@ export function workspaceScopePatch(): WorkspaceScopePatch {
   return {
     activeId: null,
     messages: [],
+    approvalPolicy: 'strict',
+    creativePreferences: undefined,
     modelPreferences: [],
     orchestrationRuns: [],
     budget: null,
@@ -90,4 +100,12 @@ export function workspaceScopePatch(): WorkspaceScopePatch {
 
 export function shouldKeepStreamingAfterAcceptance({ accepted, done }: { accepted: boolean; done: boolean }): boolean {
   return accepted && !done
+}
+
+/**
+ * 审批策略按会话保存；运行开始时会把策略冻结到本次请求，因此运行期间
+ * 修改只影响下一次运行，不应因为当前流仍在持续就把控件锁死。
+ */
+export function approvalPolicyPickerDisabled({ activeId }: { activeId: string | null; streaming: boolean }): boolean {
+  return !activeId
 }

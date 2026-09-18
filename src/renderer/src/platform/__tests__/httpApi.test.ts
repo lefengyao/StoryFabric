@@ -161,4 +161,22 @@ describe('web platform api', () => {
       args: ['session-1', { creativePreferences }]
     })
   })
+
+  it('forwards structured question answers and Skill candidate decisions', async () => {
+    const requests: Array<{ method: string; args: unknown[] }> = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      const payload = JSON.parse(String(init?.body ?? '{}')) as { method: string; args: unknown[] }
+      requests.push(payload)
+      return new Response(JSON.stringify({ result: undefined }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const answer = { questionId: 'question-1', answers: { direction: 'a' } }
+    await api.agentAnswerQuestion(answer)
+    await api.agentResolveSkillCandidate('candidate-1', 'install-enable')
+
+    expect(requests).toEqual([
+      { method: 'agentAnswerQuestion', args: [answer] },
+      { method: 'agentResolveSkillCandidate', args: ['candidate-1', 'install-enable'] }
+    ])
+  })
 })
