@@ -72,6 +72,11 @@ describe('agent runtime contract', () => {
     })).toThrow(/event|事件/)
   })
 
+  it('rejects incomplete non-structured runtime events', () => {
+    expect(() => validateRuntimeEvent({ type: 'text-delta' })).toThrow(/messageId|delta/)
+    expect(() => validateRuntimeEvent({ type: 'stage-start' })).toThrow(/payload/)
+  })
+
   it('requires structured question and skill-candidate payloads beyond stable identity', () => {
     expect(() => validateRuntimeEvent({ type: 'agent-question', payload: { questionId: 'question-1' } })).toThrow(/问题|question|title|description|fields/)
     expect(() => validateRuntimeEvent({ type: 'skill-candidate', payload: { candidateId: 'candidate-1' } })).toThrow(/候选|candidate|package/)
@@ -97,7 +102,7 @@ describe('agent runtime contract', () => {
 
     const candidate = {
       candidateId: 'candidate-1',
-      runId: 'run-1',
+      runId: 'r',
       sessionId: 'session-1',
       agentId: 'skill-agent',
       reason: '需要更自然的对白规则',
@@ -149,11 +154,22 @@ describe('agent runtime contract', () => {
     })).toThrow(/候选|candidate|package/)
   })
 
+  it('rejects structured events whose identity does not match the envelope', () => {
+    expect(() => adaptLegacyAgentEvent({
+      workspaceId: 'w',
+      sessionId: 's',
+      runId: 'r',
+      agentId: 'planner',
+      seq: 1,
+      event: { type: 'agent-question', question: { questionId: 'question-1', runId: 'other-run', sessionId: 's', agentId: 'planner', title: '需要确认', description: '说明', fields: [{ id: 'choice', label: '选择', type: 'single', options: [{ id: 'a', label: 'A' }] }] } }
+    })).toThrow(/身份|envelope|不匹配/)
+  })
+
   it('adapts a structured legacy agent-question event at the compatibility boundary', () => {
     const question = {
       questionId: 'question-1',
-      runId: 'run-1',
-      sessionId: 'session-1',
+      runId: 'r',
+      sessionId: 's',
       agentId: 'planner',
       title: '选择',
       description: '请选择',

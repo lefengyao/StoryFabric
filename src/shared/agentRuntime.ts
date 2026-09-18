@@ -54,28 +54,81 @@ function requiredString(value: unknown, name: string): string {
   return value
 }
 
-function validateStructuredEventPayload(event: Record<string, unknown>): void {
+function payloadRecord(event: Record<string, unknown>, name: string): Record<string, unknown> {
+  if (!isRecord(event.payload)) throw new Error(`${name} 的 payload 必须是对象`)
+  return event.payload
+}
+
+function validateStructuredEventPayload(event: Record<string, unknown>, identity?: { runId: string; sessionId: string; agentId: string; stageId?: string }): void {
   if (event.type === 'agent-question') {
-    if (!isRecord(event.payload)) throw new Error(`${event.type} 的 payload 必须是对象`)
-    const questionId = requiredString(event.payload.questionId, 'event.payload.questionId')
-    const question = parseAgentQuestion(event.payload.question)
+    const payload = payloadRecord(event, event.type)
+    const questionId = requiredString(payload.questionId, 'event.payload.questionId')
+    const question = parseAgentQuestion(payload.question)
     if (question.questionId !== questionId) throw new Error('event.payload.questionId 与 question.questionId 不匹配')
+    if (identity && (question.runId !== identity.runId || question.sessionId !== identity.sessionId || question.agentId !== identity.agentId || (question.stageId !== undefined && identity.stageId !== undefined && question.stageId !== identity.stageId))) {
+      throw new Error('agent-question 的身份字段与运行事件 envelope 不匹配')
+    }
     return
   }
   if (event.type === 'skill-candidate') {
-    if (!isRecord(event.payload)) throw new Error(`${event.type} 的 payload 必须是对象`)
-    const candidateId = requiredString(event.payload.candidateId, 'event.payload.candidateId')
-    const candidate = parseSkillCandidate(event.payload.candidate)
+    const payload = payloadRecord(event, event.type)
+    const candidateId = requiredString(payload.candidateId, 'event.payload.candidateId')
+    const candidate = parseSkillCandidate(payload.candidate)
     if (candidate.candidateId !== candidateId) throw new Error('event.payload.candidateId 与 candidate.candidateId 不匹配')
+    if (identity && (candidate.runId !== identity.runId || candidate.sessionId !== identity.sessionId || candidate.agentId !== identity.agentId)) {
+      throw new Error('skill-candidate 的身份字段与运行事件 envelope 不匹配')
+    }
     return
   }
   if (event.type === 'waiting-user') {
-    if (!isRecord(event.payload)) throw new Error('waiting-user 的 payload 必须是对象')
-    const hasQuestionId = event.payload.questionId !== undefined
-    const hasCandidateId = event.payload.candidateId !== undefined
+    const payload = payloadRecord(event, event.type)
+    const hasQuestionId = payload.questionId !== undefined
+    const hasCandidateId = payload.candidateId !== undefined
     if (hasQuestionId === hasCandidateId) throw new Error('waiting-user 的 payload 必须且只能包含 questionId 或 candidateId')
-    if (hasQuestionId) requiredString(event.payload.questionId, 'event.payload.questionId')
-    if (hasCandidateId) requiredString(event.payload.candidateId, 'event.payload.candidateId')
+    if (hasQuestionId) requiredString(payload.questionId, 'event.payload.questionId')
+    if (hasCandidateId) requiredString(payload.candidateId, 'event.payload.candidateId')
+  }
+}
+
+function validateEventShape(event: Record<string, unknown>): void {
+  switch (event.type) {
+    case 'text-delta':
+      requiredString(event.messageId, 'event.messageId')
+      if (typeof event.delta !== 'string') throw new Error('text-delta 的 delta 必须是字符串')
+      return
+    case 'run-start':
+    case 'stage-start':
+    case 'stage-complete':
+    case 'tool-generating':
+    case 'tool-complete':
+    case 'artifact-delta':
+    case 'usage-update':
+    case 'pending-change':
+    case 'change-result':
+    case 'goal-plan':
+    case 'goal-task':
+    case 'goal-validation':
+    case 'approval-policy':
+    case 'request-context':
+    case 'tool-receipt':
+    case 'skill-activity':
+    case 'run-paused':
+    case 'run-error':
+      payloadRecord(event, event.type)
+      return
+    case 'run-done':
+      if (event.payload !== undefined && !isRecord(event.payload)) throw new Error('run-done 的 payload 必须是对象')
+      return
+    case 'child-start':
+    case 'child-complete':
+      payloadRecord(event, event.type)
+      return
+    case 'agent-question':
+    case 'skill-candidate':
+    case 'waiting-user':
+      return
+    default:
+      return assertNeverRuntime(String(event.type))
   }
 }
 
@@ -84,6 +137,7 @@ export function validateRuntimeEvent(event: unknown): RuntimeEvent {
   if (event.messageId !== undefined) requiredString(event.messageId, 'event.messageId')
   if (event.artifactId !== undefined) requiredString(event.artifactId, 'event.artifactId')
   if (event.delta !== undefined && typeof event.delta !== 'string') throw new Error('event.delta 必须是字符串')
+  validateEventShape(event)
   validateStructuredEventPayload(event)
   return event as unknown as RuntimeEvent
 }
@@ -96,8 +150,23 @@ export function validateRunEventEnvelope(value: unknown): RunEventEnvelope {
   if (value.stageId !== undefined) requiredString(value.stageId, 'stageId')
   if (typeof value.seq !== 'number' || !Number.isInteger(value.seq) || value.seq < 1) throw new Error('seq 必须是正整数')
   if (typeof value.at !== 'number' || !Number.isFinite(value.at) || value.at < 0) throw new Error('at 必须是时间戳')
-  validateRuntimeEvent(value.event)
+  validateRuntimeEventWithIdentity(value.event, {
+    runId: value.runId as string,
+    sessionId: value.sessionId as string,
+    agentId: value.agentId as string,
+    ...(value.stageId === undefined ? {} : { stageId: value.stageId as string })
+  })
   return value as unknown as RunEventEnvelope
+}
+
+function validateRuntimeEventWithIdentity(event: unknown, identity: { runId: string; sessionId: string; agentId: string; stageId?: string }): RuntimeEvent {
+  if (!isRecord(event) || typeof event.type !== 'string' || !RUNTIME_EVENT_TYPE_SET.has(event.type)) throw new Error('不支持的运行事件类型')
+  if (event.messageId !== undefined) requiredString(event.messageId, 'event.messageId')
+  if (event.artifactId !== undefined) requiredString(event.artifactId, 'event.artifactId')
+  if (event.delta !== undefined && typeof event.delta !== 'string') throw new Error('event.delta 必须是字符串')
+  validateEventShape(event)
+  validateStructuredEventPayload(event, identity)
+  return event as unknown as RuntimeEvent
 }
 
 export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnvelope {
@@ -153,13 +222,13 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'approval-policy', payload: event }
       break
     case 'request-context':
-      runtime = { type: 'usage-update', payload: event.usage }
+      runtime = { type: 'request-context', payload: { usage: event.usage } }
       break
     case 'tool-receipt':
-      runtime = { type: 'tool-complete', payload: event.receipt }
+      runtime = { type: 'tool-receipt', payload: { receipt: event.receipt } }
       break
     case 'skill-activity':
-      runtime = { type: 'artifact-delta', payload: event.activity }
+      runtime = { type: 'skill-activity', payload: { activity: event.activity } }
       break
     case 'run-paused':
       runtime = { type: 'run-paused', payload: event }
@@ -210,6 +279,10 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
 
 function assertNever(value: never): never {
   throw new Error(`无法适配旧事件：${String(value)}`)
+}
+
+function assertNeverRuntime(value: string): never {
+  throw new Error(`无法校验运行事件：${String(value)}`)
 }
 
 export interface ClientRunClaim {

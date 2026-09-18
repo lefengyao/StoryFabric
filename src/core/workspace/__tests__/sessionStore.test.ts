@@ -20,11 +20,21 @@ describe('CoreSessionStore creative preferences', () => {
         enabled: true,
         subagentsEnabled: false,
         enabledStageIds: ['write'],
-        modelByStage: {}
+        modelByStage: {},
+        maxCalls: 24,
+        maxEstimatedTokens: 300000
       }
     }
 
     expect(await sessions.updateMeta(session.id, { creativePreferences })).toBe(true)
     expect((await sessions.load(session.id))?.creativePreferences).toEqual(creativePreferences)
+  })
+
+  it('rejects malformed creative preferences instead of persisting them', async () => {
+    const store = new MemoryFileStore()
+    const sessions = new CoreSessionStore(store)
+    const session = await sessions.create()
+    await sessions.save(session)
+    await expect(sessions.updateMeta(session.id, { creativePreferences: { mode: 'invalid' } as never })).rejects.toThrow(/creative\.mode/)
   })
 })

@@ -1,6 +1,7 @@
+import { normalizeApprovalPolicy, validateCreativePreferences } from '../../shared/creative'
+import { parseAgentQuestion, parseSkillCandidate } from '../../shared/agentQuestions'
 import type { ChatSession, OrchestrationRunRecord } from '../../shared/types'
 import { validateMessageFiles } from '../attachments/validation'
-import { validateCreativePreferences } from '../../shared/creative'
 
 export interface SessionArchive {
   fileName: string
@@ -26,11 +27,23 @@ function decodeOrchestrationRuns(value: unknown): OrchestrationRunRecord[] | und
   for (const run of value) {
     if (!run || typeof run !== 'object') throw new Error('编排运行记录格式无效')
     const candidate = run as Partial<OrchestrationRunRecord>
-    if (typeof candidate.runId !== 'string' || !['running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') || !Array.isArray(candidate.stages) || !Array.isArray(candidate.artifacts) || !candidate.overlay || typeof candidate.overlay !== 'object') {
+    if (typeof candidate.runId !== 'string' || !['running', 'completed', 'failed', 'cancelled', 'paused_budget'].includes(candidate.status ?? '') || !Array.isArray(candidate.stages) || !Array.isArray(candidate.artifacts) || !candidate.overlay || typeof candidate.overlay !== 'object') {
       throw new Error('编排运行记录格式无效')
     }
   }
   return value as OrchestrationRunRecord[]
+}
+
+function decodePlanningGate(value: unknown): ChatSession['planningGate'] {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object') throw new Error('规划门格式无效')
+  const candidate = value as { status?: unknown; reason?: unknown }
+  if (candidate.status !== 'pending' && candidate.status !== 'approved' && candidate.status !== 'rejected') throw new Error('规划门状态无效')
+  if (candidate.reason !== undefined && typeof candidate.reason !== 'string') throw new Error('规划门原因无效')
+  return {
+    status: candidate.status,
+    ...(candidate.reason === undefined ? {} : { reason: candidate.reason })
+  }
 }
 
 export function exportSessionArchive(session: ChatSession): SessionArchive {
@@ -65,7 +78,13 @@ export function decodeSessionArchive(base64: string): ChatSession {
     throw new Error('会话思考设置无效')
   }
   const creativePreferences = value.creativePreferences === undefined ? undefined : validateCreativePreferences(value.creativePreferences)
+  const approvalPolicy = normalizeApprovalPolicy(value.approvalPolicy)
   const orchestrationRuns = decodeOrchestrationRuns(value.orchestrationRuns)
+  const waitingQuestion = value.waitingQuestion === undefined ? undefined : parseAgentQuestion(value.waitingQuestion)
+  const skillCandidates = value.skillCandidates === undefined
+    ? undefined
+    : Array.isArray(value.skillCandidates) ? value.skillCandidates.map(parseSkillCandidate) : (() => { throw new Error('技能候选记录格式无效') })()
+  const planningGate = decodePlanningGate(value.planningGate)
   return {
     id: typeof value.id === 'string' ? value.id : '',
     title: value.title,
@@ -73,11 +92,15 @@ export function decodeSessionArchive(base64: string): ChatSession {
     updatedAt: value.updatedAt,
     archived: Boolean(value.archived),
     messages,
+    approvalPolicy,
     ...(modelPreferences === undefined ? {} : { modelPreferences }),
     ...(typeof value.contextSummary === 'string' ? { contextSummary: value.contextSummary } : {}),
     ...(typeof value.contextSummaryThrough === 'string' ? { contextSummaryThrough: value.contextSummaryThrough } : {}),
     ...(typeof value.contextSummaryUpdatedAt === 'number' ? { contextSummaryUpdatedAt: value.contextSummaryUpdatedAt } : {}),
     ...(creativePreferences ? { creativePreferences } : {}),
-    ...(orchestrationRuns ? { orchestrationRuns } : {})
+    ...(orchestrationRuns ? { orchestrationRuns } : {}),
+    ...(waitingQuestion ? { waitingQuestion } : {}),
+    ...(skillCandidates ? { skillCandidates } : {}),
+    ...(planningGate ? { planningGate } : {})
   } as ChatSession
 }
