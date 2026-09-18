@@ -3,12 +3,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, relative, resolve, sep } from 'node:path'
 import { URL } from 'node:url'
 import type { FileStore } from '../core/storage/fileStore'
+import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { createAccessKeyVerifier, createSessionStore } from './auth'
 import { ServerSettingsStore } from './settingsStore'
 import { UsageService } from '../core/usage/usageService'
 import { WorkspaceRegistry } from './workspaceRegistry'
-import type { AgentEventEnvelope, FetchModelsInput, SettingsPatch, StoryFabricApi } from '../shared/api'
+import type { AgentEventEnvelope, FetchModelsInput, RuntimeAgentEventEnvelope, SettingsPatch, StoryFabricApi } from '../shared/api'
+import { adaptLegacyAgentEvent } from '../shared/agentRuntime'
+import { RunEventBuffer, type RunReplay } from '../shared/runEvents'
+import type { RunEventEnvelope } from '../shared/agentRuntime'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
 import type { ChapterDoc, ChatSession, OutlineDoc, ProviderInput, Relationship, RunAgentRequest, SettingDoc, StoryEvent, NoteDoc, VolumeMeta, WorkspaceListItem } from '../shared/types'
 import { CoreAgentService } from '../core/agent/agentLoop'
@@ -19,9 +23,12 @@ import { exportWorkspaceArchive, WORKSPACE_ARCHIVE_MAX_BYTES, WORKSPACE_ARCHIVE_
 import { listVolumes, saveVolume, deleteVolume, moveChapter, readGraphLayout, writeGraphLayout } from '../core/workspace/workspaceService'
 import { listTrash, restoreFromTrash, purgeTrashEntry } from '../core/workspace/trash'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject, genId } from '../core/workspace/entityStore'
-import { ContentPackageStore, summarizeContentPackage } from '../core/skills/packageStore'
+import { summarizeContentPackage } from '../core/skills/packageStore'
+import { GlobalSkillLibrary } from '../core/skills/globalSkillLibrary'
 import { builtinPackages } from '../core/skills/builtin'
 import { RuleStore } from '../core/rules/ruleStore'
+import { GoalStore } from '../core/goal/goalStore'
+import type { ContentPackage } from '../core/skills/types'
 
 const MAX_JSON_BODY_BYTES = 16 * 1024 * 1024
 const DEFAULT_SESSION_TTL = 8 * 60 * 60 * 1000
@@ -67,6 +74,9 @@ interface ScopedEnvelope extends AgentEventEnvelope {
 
 class EventHub {
   private readonly listeners = new Set<{ workspaceId: () => string | undefined; send: (envelope: AgentEventEnvelope) => void }>()
+  private readonly runtimeListeners = new Set<{ workspaceId: () => string | undefined; send: (envelope: RuntimeAgentEventEnvelope) => void }>()
+  private readonly buffers = new Map<string, RunEventBuffer>()
+  private readonly sequences = new Map<string, number>()
 
   subscribe(workspaceId: () => string | undefined, send: (envelope: AgentEventEnvelope) => void): () => void {
     const listener = { workspaceId, send }
@@ -74,10 +84,32 @@ class EventHub {
     return () => this.listeners.delete(listener)
   }
 
+  subscribeRuntime(workspaceId: () => string | undefined, send: (envelope: RuntimeAgentEventEnvelope) => void): () => void {
+    const listener = { workspaceId, send }
+    this.runtimeListeners.add(listener)
+    return () => this.runtimeListeners.delete(listener)
+  }
+
   emit(envelope: ScopedEnvelope): void {
     for (const listener of this.listeners) {
       if (listener.workspaceId() === envelope.workspaceId) listener.send({ sessionId: envelope.sessionId, ...(envelope.runId ? { runId: envelope.runId } : {}), event: envelope.event })
     }
+    if (!envelope.runId) return
+    const key = `${envelope.workspaceId}\u0000${envelope.runId}`
+    const seq = (this.sequences.get(key) ?? 0) + 1
+    this.sequences.set(key, seq)
+    const runtime = adaptLegacyAgentEvent({ workspaceId: envelope.workspaceId, sessionId: envelope.sessionId, runId: envelope.runId, agentId: 'orchestration', seq, event: envelope.event })
+    const buffer = this.buffers.get(key) ?? new RunEventBuffer()
+    buffer.append(runtime)
+    buffer.setSnapshot({ workspaceId: envelope.workspaceId, sessionId: envelope.sessionId, runId: envelope.runId, lastSeq: seq, event: runtime.event })
+    this.buffers.set(key, buffer)
+    for (const listener of this.runtimeListeners) {
+      if (listener.workspaceId() === envelope.workspaceId) listener.send(runtime)
+    }
+  }
+
+  replay(workspaceId: string, runId: string, afterSeq: number): RunReplay {
+    return (this.buffers.get(`${workspaceId}\u0000${runId}`) ?? new RunEventBuffer()).replay(afterSeq)
   }
 }
 
@@ -210,6 +242,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   const authAttempts = new Map<string, { count: number; resetAt: number }>()
   const events = new EventHub()
   const runtimes = new Map<string, Runtime>()
+  const globalSkillLibrary = new GlobalSkillLibrary(new NodeFileStore(dataRoot))
 
 
   const listRecentWorkspaces = async (): Promise<WorkspaceListItem[]> => {
@@ -256,7 +289,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         settings: () => settings.agentSettings(),
         getAdapter,
         emit: (sessionId, event, runId) => events.emit({ workspaceId: id, sessionId, ...(runId ? { runId } : {}), event }),
-        onUsage: (record) => void usage.append(record).catch(() => {})
+        onUsage: (record) => void usage.append(record).catch(() => {}),
+        globalSkillLibrary
       })
       runtime = { store, sessions, agent, operationQueue: Promise.resolve() }
       runtimes.set(id, runtime)
@@ -296,6 +330,20 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     // 用量日志是服务端全局的，与工作区无关，也不该排在 agent 长任务的操作队列后面
     if (method === 'getUsageRecords') return usage.list()
     if (method === 'exportWorkspace' || method === 'importWorkspace') throw new Error('远程工作区请使用压缩包传输端点')
+    if (method === 'listCreativePackages') {
+      const installed = await globalSkillLibrary.list()
+      const summaries = builtinPackages.map((pkg) => {
+        const saved = installed.find((item) => item.manifest.id === pkg.manifest.id && item.manifest.version === pkg.manifest.version)
+        return { id: pkg.manifest.id, version: pkg.manifest.version, name: pkg.manifest.name, description: pkg.manifest.description, enabled: saved?.enabled ?? true, skills: pkg.manifest.skills.map((item) => item.id), ruleSets: pkg.manifest.ruleSets.map((item) => item.id) }
+      })
+      return [...summaries, ...installed.filter((item) => !builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version)).map(summarizeContentPackage)]
+    }
+    if (method === 'installCreativePackage') return summarizeContentPackage(await globalSkillLibrary.install(arg<ContentPackage>(), true))
+    if (method === 'setCreativePackageEnabled') {
+      const id = arg<string>(), version = arg<string>(1), enabled = Boolean(arg<boolean>(2))
+      const builtin = builtinPackages.find((pkg) => pkg.manifest.id === id && pkg.manifest.version === version)
+      return summarizeContentPackage(await (builtin ? globalSkillLibrary.install(builtin, enabled) : globalSkillLibrary.setEnabled(id, version, enabled)))
+    }
 
     const { id: workspaceId, runtime } = await runtimeOf(context)
     const needsImmediateAgentControl = method === 'agentConfirm' || method === 'agentAbort'
@@ -345,21 +393,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const provider = await settings.providerInput(input)
         return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
       }
-      case 'getCapabilities': return { protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }
-      case 'listCreativePackages': {
-        const installed = await new ContentPackageStore(store).list()
-        const summaries = builtinPackages.map((pkg) => {
-          const saved = installed.find((item) => item.manifest.id === pkg.manifest.id && item.manifest.version === pkg.manifest.version)
-          return { id: pkg.manifest.id, version: pkg.manifest.version, name: pkg.manifest.name, description: pkg.manifest.description, enabled: saved?.enabled ?? true, skills: pkg.manifest.skills.map((item) => item.id), ruleSets: pkg.manifest.ruleSets.map((item) => item.id) }
-        })
-        return [...summaries, ...installed.filter((item) => !builtinPackages.some((builtin) => builtin.manifest.id === item.manifest.id && builtin.manifest.version === item.manifest.version)).map(summarizeContentPackage)]
-      }
-      case 'setCreativePackageEnabled': {
-        const id = arg<string>(), version = arg<string>(1), enabled = Boolean(arg<boolean>(2))
-        const packageStore = new ContentPackageStore(store)
-        const builtin = builtinPackages.find((pkg) => pkg.manifest.id === id && pkg.manifest.version === version)
-        return summarizeContentPackage(await (builtin ? packageStore.save(builtin, enabled) : packageStore.setEnabled(id, version, enabled)))
-      }
+      case 'getCapabilities': return { protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }
       case 'listCreativeRules': return new RuleStore(store).load()
       case 'saveCreativeRules': await new RuleStore(store).save(arg()); return undefined
       case 'agentRun': {
@@ -376,6 +410,47 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       }
       case 'agentConfirm': runtime.agent.confirmChange(arg<string>(), Boolean(arg<boolean>(1))); return undefined
       case 'agentAbort': runtime.agent.abort(arg<string>()); return undefined
+      case 'listGoals': return new GoalStore(store).list(workspaceId)
+      case 'getGoal': {
+        const goal = await new GoalStore(store).get(arg<string>())
+        if (goal && goal.workspaceId !== workspaceId) throw new Error('目标不属于当前工作区')
+        return goal
+      }
+      case 'continueGoal': {
+        const goal = await new GoalStore(store).assertWorkspace(arg<string>(), workspaceId)
+        const publicSettings = await settings.load()
+        const preferred = publicSettings.defaultChatModel
+        const preferredProvider = preferred && publicSettings.providers.find((provider) => provider.id === preferred.providerId && provider.models.includes(preferred.model))
+        const fallbackProvider = publicSettings.providers.find((provider) => provider.models.length > 0 && provider.hasKey)
+        const selected = preferredProvider ?? fallbackProvider
+        if (!selected) throw new Error('请先配置可用的供应商和模型')
+        const request = { mode: 'goal' as const, goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, providerId: selected.id, model: preferredProvider ? preferred!.model : selected.models[0], approvalPolicy: goal.approvalPolicy }
+        void runtime.agent.run(request).catch((error) => {
+          events.emit({ workspaceId, sessionId: goal.sessionId, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
+          events.emit({ workspaceId, sessionId: goal.sessionId, event: { type: 'done' } })
+        })
+        return { goalId: goal.id, runId: runtime.agent.getActiveRunId(goal.sessionId) }
+      }
+      case 'stopGoal': {
+        const goal = await new GoalStore(store).assertWorkspace(arg<string>(), workspaceId)
+        runtime.agent.abort(goal.sessionId)
+        return undefined
+      }
+      case 'replanGoal': {
+        const goal = await new GoalStore(store).assertWorkspace(arg<string>(), workspaceId)
+        const publicSettings = await settings.load()
+        const preferred = publicSettings.defaultChatModel
+        const preferredProvider = preferred && publicSettings.providers.find((provider) => provider.id === preferred.providerId && provider.models.includes(preferred.model))
+        const fallbackProvider = publicSettings.providers.find((provider) => provider.models.length > 0 && provider.hasKey)
+        const selected = preferredProvider ?? fallbackProvider
+        if (!selected) throw new Error('请先配置可用的供应商和模型')
+        const request = { mode: 'goal' as const, goalAction: 'replan' as const, goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, providerId: selected.id, model: preferredProvider ? preferred!.model : selected.models[0], approvalPolicy: goal.approvalPolicy }
+        void runtime.agent.run(request).catch((error) => {
+          events.emit({ workspaceId, sessionId: goal.sessionId, event: { type: 'error', message: error instanceof Error ? error.message : String(error) } })
+          events.emit({ workspaceId, sessionId: goal.sessionId, event: { type: 'done' } })
+        })
+        return { goalId: goal.id, runId: runtime.agent.getActiveRunId(goal.sessionId), planVersion: goal.planVersion + 1 }
+      }
       case 'listSessions': return runtime.sessions.list()
       case 'createSession': { const session = await runtime.sessions.create(); await runtime.sessions.save(session); return session }
       case 'exportSession': { const session = await runtime.sessions.load(arg<string>()); if (!session) throw new Error('会话不存在'); return exportSessionArchive(session) }
@@ -387,7 +462,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       }
       case 'loadSession': return runtime.sessions.load(arg<string>())
       case 'deleteSession': return runtime.sessions.delete(arg<string>())
-      case 'updateSession': if (!(await runtime.sessions.updateMeta(arg<string>(), arg<{ title?: string; archived?: boolean }>(1)))) throw new Error('会话不存在'); return undefined
+      case 'updateSession': if (!(await runtime.sessions.updateMeta(arg<string>(), arg<Parameters<StoryFabricApi['updateSession']>[1]>(1)))) throw new Error('会话不存在'); return undefined
       case 'updateSessionModelPreference': if (!(await runtime.sessions.updateModelPreference(arg<string>(), arg<import('../shared/types').SessionModelPreference>(1)))) throw new Error('会话不存在'); return undefined
       default: throw new Error(`不支持的 API 方法：${method}`)
     }
@@ -463,6 +538,24 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     const context = requireAuth(req, res)
     if (!context) return
     try { await registryReady } catch (error) { sendError(res, 500, error); return }
+
+    if (pathname === '/api/runtime-events' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' })
+      res.write(': connected\n\n')
+      const unsubscribe = events.subscribeRuntime(() => authSessions.get(context.token)?.workspaceId, (envelope) => res.write(`data: ${JSON.stringify(envelope)}\n\n`))
+      const keepAlive = setInterval(() => res.write(': keepalive\n\n'), 25_000)
+      req.on('close', () => { clearInterval(keepAlive); unsubscribe() })
+      return
+    }
+    const runEventsMatch = /^\/api\/runs\/([^/]+)\/events$/.exec(pathname)
+    if (runEventsMatch && req.method === 'GET') {
+      const runId = decodeUri(runEventsMatch[1])
+      const workspaceId = authSessions.get(context.token)?.workspaceId
+      if (!runId || !workspaceId) { sendError(res, 409, '请先打开工作区'); return }
+      const after = Number(new URL(req.url ?? '/', 'http://storyfabric.local').searchParams.get('after') ?? 0)
+      sendJson(res, 200, events.replay(workspaceId, runId, Number.isFinite(after) && after >= 0 ? after : 0))
+      return
+    }
 
     if (pathname === '/api/workspaces' && req.method === 'GET') { sendJson(res, 200, await registry.list()); return }
     if (pathname === '/api/workspaces/recent' && req.method === 'GET') { sendJson(res, 200, await listRecentWorkspaces()); return }

@@ -1,8 +1,10 @@
-﻿import type { AgentEvent } from './types'
+import type { AgentEvent } from './types'
+import { parseAgentQuestion, parseSkillCandidate } from './agentQuestions'
 
 export const RUNTIME_EVENT_TYPES = [
   'run-start', 'stage-start', 'text-delta', 'tool-generating', 'tool-complete', 'artifact-delta',
   'stage-complete', 'child-start', 'child-complete', 'usage-update', 'pending-change', 'change-result',
+  'goal-plan', 'goal-task', 'goal-validation', 'approval-policy', 'request-context', 'tool-receipt', 'skill-activity',
   'run-paused', 'run-error', 'run-done', 'agent-question', 'skill-candidate', 'waiting-user'
 ] as const
 
@@ -53,21 +55,30 @@ function requiredString(value: unknown, name: string): string {
 }
 
 function validateStructuredEventPayload(event: Record<string, unknown>): void {
-  if (event.type === 'agent-question' || event.type === 'skill-candidate') {
+  if (event.type === 'agent-question') {
     if (!isRecord(event.payload)) throw new Error(`${event.type} 的 payload 必须是对象`)
-    const identity = event.type === 'agent-question' ? 'questionId' : 'candidateId'
-    requiredString(event.payload[identity], `event.payload.${identity}`)
+    const questionId = requiredString(event.payload.questionId, 'event.payload.questionId')
+    const question = parseAgentQuestion(event.payload.question)
+    if (question.questionId !== questionId) throw new Error('event.payload.questionId 与 question.questionId 不匹配')
+    return
+  }
+  if (event.type === 'skill-candidate') {
+    if (!isRecord(event.payload)) throw new Error(`${event.type} 的 payload 必须是对象`)
+    const candidateId = requiredString(event.payload.candidateId, 'event.payload.candidateId')
+    const candidate = parseSkillCandidate(event.payload.candidate)
+    if (candidate.candidateId !== candidateId) throw new Error('event.payload.candidateId 与 candidate.candidateId 不匹配')
     return
   }
   if (event.type === 'waiting-user') {
     if (!isRecord(event.payload)) throw new Error('waiting-user 的 payload 必须是对象')
     const hasQuestionId = event.payload.questionId !== undefined
     const hasCandidateId = event.payload.candidateId !== undefined
+    if (hasQuestionId === hasCandidateId) throw new Error('waiting-user 的 payload 必须且只能包含 questionId 或 candidateId')
     if (hasQuestionId) requiredString(event.payload.questionId, 'event.payload.questionId')
     if (hasCandidateId) requiredString(event.payload.candidateId, 'event.payload.candidateId')
-    if (!hasQuestionId && !hasCandidateId) throw new Error('waiting-user 的 payload 必须包含 questionId 或 candidateId')
   }
 }
+
 export function validateRuntimeEvent(event: unknown): RuntimeEvent {
   if (!isRecord(event) || typeof event.type !== 'string' || !RUNTIME_EVENT_TYPE_SET.has(event.type)) throw new Error('不支持的运行事件类型')
   if (event.messageId !== undefined) requiredString(event.messageId, 'event.messageId')
@@ -115,7 +126,7 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'artifact-delta', payload: { callId: event.callId, preview: event.preview } }
       break
     case 'budget':
-      runtime = { type: 'usage-update', payload: event.snapshot }
+      runtime = { type: 'usage-update', payload: event.goalId ? { snapshot: event.snapshot, goalId: event.goalId } : event.snapshot }
       break
     case 'tool-done':
       runtime = { type: 'tool-complete', payload: { callId: event.callId, ok: event.ok, resultPreview: event.resultPreview } }
@@ -129,11 +140,41 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
     case 'change-result':
       runtime = { type: 'change-result', payload: event }
       break
+    case 'goal-plan':
+      runtime = { type: 'goal-plan', payload: event.goal }
+      break
+    case 'goal-task':
+      runtime = { type: 'goal-task', payload: { goalId: event.goalId, task: event.task } }
+      break
+    case 'goal-validation':
+      runtime = { type: 'goal-validation', payload: { goalId: event.goalId, taskId: event.taskId, passed: event.passed, reason: event.reason } }
+      break
+    case 'approval-policy':
+      runtime = { type: 'approval-policy', payload: event }
+      break
+    case 'request-context':
+      runtime = { type: 'usage-update', payload: event.usage }
+      break
+    case 'tool-receipt':
+      runtime = { type: 'tool-complete', payload: event.receipt }
+      break
+    case 'skill-activity':
+      runtime = { type: 'artifact-delta', payload: event.activity }
+      break
+    case 'run-paused':
+      runtime = { type: 'run-paused', payload: event }
+      break
     case 'agent-question':
-      runtime = { type: 'agent-question', payload: { questionId: event.question.questionId, question: event.question } }
+      {
+        const question = parseAgentQuestion(event.question)
+        runtime = { type: 'agent-question', payload: { questionId: question.questionId, question } }
+      }
       break
     case 'skill-candidate':
-      runtime = { type: 'skill-candidate', payload: { candidateId: event.candidate.candidateId, candidate: event.candidate } }
+      {
+        const candidate = parseSkillCandidate(event.candidate)
+        runtime = { type: 'skill-candidate', payload: { candidateId: candidate.candidateId, candidate } }
+      }
       break
     case 'waiting-user':
       runtime = { type: 'waiting-user', payload: event }

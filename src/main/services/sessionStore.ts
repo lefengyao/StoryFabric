@@ -2,8 +2,9 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { ChatMessage, ChatSession, SessionMeta } from '../../shared/types'
+import type { CreativePreferences } from '../../shared/creative'
 import { genId } from './entityStore'
-import { setSessionModelPreference } from '../../core/workspace/sessionPreferences'
+import { setSessionApprovalPolicy, setSessionModelPreference } from '../../core/workspace/sessionPreferences'
 
 export function titleFromMessage(text: string): string {
   const t = text.replace(/\s+/g, ' ').trim()
@@ -25,16 +26,18 @@ export class SessionStore {
 
   async create(): Promise<ChatSession> {
     const now = Date.now()
-    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, archived: false, messages: [] }
+    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, archived: false, approvalPolicy: 'strict', messages: [] }
   }
 
   /** 更新会话元信息（重命名 / 归档），文件不存在返回 false */
-  async updateMeta(id: string, patch: { title?: string; archived?: boolean }): Promise<boolean> {
+  async updateMeta(id: string, patch: { title?: string; archived?: boolean; approvalPolicy?: import('../../shared/types').ApprovalPolicy; creativePreferences?: CreativePreferences }): Promise<boolean> {
     const session = await this.load(id)
     if (!session) return false
     if (patch.title !== undefined) session.title = patch.title.trim() || session.title
     if (patch.archived !== undefined) session.archived = patch.archived
-    await this.save(session)
+    let next = patch.approvalPolicy === undefined ? session : setSessionApprovalPolicy(session, patch.approvalPolicy)
+    if (patch.creativePreferences !== undefined) next = { ...next, creativePreferences: patch.creativePreferences, updatedAt: Date.now() }
+    await this.save(next)
     return true
   }
 

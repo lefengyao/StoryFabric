@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_ORCHESTRATION_PREFERENCES,
+  normalizeCreativePreferences,
   normalizeOrchestrationPreferences
 } from '../creative'
+import type { RunAgentRequest } from '../types'
 
 describe('orchestration preferences mode', () => {
   it('defaults the shared orchestration profile to multi-agent mode', () => {
@@ -53,5 +55,25 @@ describe('orchestration preferences mode', () => {
       maxCalls: 3,
       maxEstimatedTokens: 12000
     })
+  })
+
+  it('uses creativePreferences.orchestration.mode as the only run mode source', () => {
+    const request = {
+      sessionId: 'session-1',
+      message: '继续',
+      providerId: 'provider-1',
+      model: 'model-1',
+      creative: normalizeCreativePreferences({
+        mode: 'orchestration',
+        orchestration: { mode: 'single', enabled: true, subagentsEnabled: false, enabledStageIds: ['write'], modelByStage: {} }
+      })
+    } satisfies RunAgentRequest
+
+    expect(request.creative?.orchestration?.mode).toBe('single')
+    expect(request).not.toHaveProperty('orchestrationMode')
+
+    // @ts-expect-error orchestrationMode was removed; creative preferences own this mode.
+    const duplicateMode: RunAgentRequest = { ...request, orchestrationMode: 'single' }
+    expect(duplicateMode).toHaveProperty('orchestrationMode', 'single')
   })
 })

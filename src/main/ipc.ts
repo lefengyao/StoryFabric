@@ -34,7 +34,7 @@ import type {
   PublicAppSettings,
   RunAgentRequest
 } from '../shared/types'
-import type { FetchModelsInput, SettingsPatch, WorkspaceImportTarget } from '../shared/api'
+import type { FetchModelsInput, SettingsPatch, StoryFabricApi, WorkspaceImportTarget } from '../shared/api'
 import { fetchProviderModels } from '../core/llm'
 import { decryptApiKey } from './services/settingsService'
 import type { PlatformCapabilities } from '../shared/platformCapabilities'
@@ -47,6 +47,7 @@ import { IPC } from '../shared/ipc'
 import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { serializeWorkspace } from './services/workspaceRuntime'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
+import type { RunReplay } from '../shared/runEvents'
 
 export interface AppContext {
   win: () => BrowserWindow | null
@@ -54,6 +55,7 @@ export interface AppContext {
   agent: AgentService
   usage: UsageService
   deploy: DeployService
+  runtimeEvents: { replay: (workspaceId: string, runId: string, afterSeq?: number) => RunReplay }
 }
 
 let currentRoot: string | null = null
@@ -265,9 +267,10 @@ export function registerIpc(ctx: AppContext): void {
     const provider = await ctx.settings.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   })
-  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
-  ipcMain.handle(IPC.ListCreativePackages, async () => ctx.agent.listCreativePackages(requireRoot()))
-  ipcMain.handle(IPC.SetCreativePackageEnabled, async (_e, id: string, version: string, enabled: boolean) => ctx.agent.setCreativePackageEnabled(requireRoot(), id, version, enabled))
+  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
+  ipcMain.handle(IPC.ListCreativePackages, async () => ctx.agent.listCreativePackages())
+  ipcMain.handle(IPC.InstallCreativePackage, async (_e, input) => ctx.agent.installCreativePackage(undefined, input))
+  ipcMain.handle(IPC.SetCreativePackageEnabled, async (_e, id: string, version: string, enabled: boolean) => ctx.agent.setCreativePackageEnabled(undefined, id, version, enabled))
   ipcMain.handle(IPC.ListCreativeRules, async () => ctx.agent.listCreativeRules(requireRoot()))
   ipcMain.handle(IPC.SaveCreativeRules, async (_e, layers) => ctx.agent.saveCreativeRules(requireRoot(), layers))
 
@@ -275,6 +278,12 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
   ipcMain.handle(IPC.AgentConfirm, async (_e, changeId: string, approved: boolean) => ctx.agent.confirmChange(changeId, approved))
   ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abort(sessionId))
+  ipcMain.handle(IPC.RecoverRunEvents, async (_e, runId: string, afterSeq?: number) => ctx.runtimeEvents.replay(requireRoot(), runId, afterSeq))
+  ipcMain.handle(IPC.ListGoals, async () => ctx.agent.listGoals(requireRoot()))
+  ipcMain.handle(IPC.GetGoal, async (_e, id: string) => ctx.agent.getGoal(requireRoot(), id))
+  ipcMain.handle(IPC.ContinueGoal, async (_e, id: string) => ctx.agent.continueGoal(requireRoot(), id))
+  ipcMain.handle(IPC.StopGoal, async (_e, id: string) => ctx.agent.stopGoal(requireRoot(), id))
+  ipcMain.handle(IPC.ReplanGoal, async (_e, id: string) => ctx.agent.replanGoal(requireRoot(), id))
 
   const sessionStore = (): SessionStore => new SessionStore(requireRoot())
   ipcMain.handle(IPC.ListSessions, async () => sessionStore().list())
@@ -296,7 +305,7 @@ export function registerIpc(ctx: AppContext): void {
   })
   ipcMain.handle(IPC.LoadSession, async (_e, id: string) => sessionStore().load(id))
   ipcMain.handle(IPC.DeleteSession, async (_e, id: string) => sessionStore().delete(id))
-  ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: { title?: string; archived?: boolean }) => {
+  ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: Parameters<StoryFabricApi['updateSession']>[1]) => {
     const okFlag = await sessionStore().updateMeta(id, patch)
     if (!okFlag) throw new Error('会话不存在')
   })

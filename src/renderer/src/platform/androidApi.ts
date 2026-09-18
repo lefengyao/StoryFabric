@@ -3,10 +3,10 @@ import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { Share } from '@capacitor/share'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { throwIfWorkspaceRequestAborted } from '../../../shared/api'
-import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
+import type { AgentEventEnvelope, RuntimeAgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
-import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, GoalRun, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
@@ -23,10 +23,15 @@ import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 import { keyPreview } from '../../../shared/keyPreview'
 import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
-import type { CreativePackageSummary } from '../../../shared/creative'
-import { ContentPackageStore, summarizeContentPackage } from '../../../core/skills/packageStore'
+import { adaptLegacyAgentEvent } from '../../../shared/agentRuntime'
+import { RunEventBuffer, type RunReplay } from '../../../shared/runEvents'
+import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences, type CreativePackageSummary } from '../../../shared/creative'
+import { summarizeContentPackage } from '../../../core/skills/packageStore'
+import { GlobalSkillLibrary } from '../../../core/skills/globalSkillLibrary'
 import { builtinPackages } from '../../../core/skills/builtin'
+import type { ContentPackage } from '../../../shared/skillPackage'
 import type { RuleLayer } from '../../../core/rules/types'
+import { GoalStore } from '../../../core/goal/goalStore'
 import { RuleStore } from '../../../core/rules/ruleStore'
 
 const SETTINGS_KEY = 'storyfabric.settings'
@@ -89,6 +94,7 @@ function withAndroidSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
 
 const DEFAULT_PUBLIC: PublicAppSettings = {
   providers: [],
+  orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -115,11 +121,11 @@ export class AndroidPlatformApi implements StoryFabricApi {
 
   getUiSource(): string { return 'android-local' }
   getCapabilities(): Promise<PlatformCapabilities> {
-    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: false, eventRecovery: false, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
+    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
   }
 
   async listCreativePackages(): Promise<CreativePackageSummary[]> {
-    const packageStore = new ContentPackageStore(this.requireStore())
+    const packageStore = new GlobalSkillLibrary(new CapacitorFileStore())
     const installed = await packageStore.list()
     const builtins = builtinPackages.map((pkg) => {
       const saved = installed.find((item) => item.manifest.id === pkg.manifest.id && item.manifest.version === pkg.manifest.version)
@@ -129,9 +135,13 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   async setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary> {
-    const packageStore = new ContentPackageStore(this.requireStore())
+    const packageStore = new GlobalSkillLibrary(new CapacitorFileStore())
     const builtin = builtinPackages.find((pkg) => pkg.manifest.id === id && pkg.manifest.version === version)
-    return summarizeContentPackage(await (builtin ? packageStore.save(builtin, enabled) : packageStore.setEnabled(id, version, enabled)))
+    return summarizeContentPackage(await (builtin ? packageStore.install(builtin, enabled) : packageStore.setEnabled(id, version, enabled)))
+  }
+
+  async installCreativePackage(input: ContentPackage): Promise<CreativePackageSummary> {
+    return summarizeContentPackage(await new GlobalSkillLibrary(new CapacitorFileStore()).install(input, true))
   }
 
   listCreativeRules(): Promise<RuleLayer[]> { return new RuleStore(this.requireStore()).load() }
@@ -176,7 +186,15 @@ export class AndroidPlatformApi implements StoryFabricApi {
       ? parsed.providers.map(normalizeProvider).filter((provider): provider is ProviderPublic => provider !== null)
       : []
     const lastWorkspacePath = typeof parsed.lastWorkspacePath === 'string' ? parsed.lastWorkspacePath : undefined
-    return { ...DEFAULT_PUBLIC, ...parsed, providers, recentWorkspaces, recentWorkspaceOpenedAt, lastWorkspacePath }
+    return {
+      ...DEFAULT_PUBLIC,
+      ...parsed,
+      providers,
+      recentWorkspaces,
+      recentWorkspaceOpenedAt,
+      lastWorkspacePath,
+      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
+    }
   }
 
   private async saveSettings(): Promise<void> {
@@ -202,7 +220,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
         return { customPrompt: s.customPrompt, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
       },
       emit: (sessionId, event, runId) => this.emitAgentEvent(sessionId, event, runId),
-      onUsage: (record) => { void this.usage?.append(record).catch(() => undefined) }
+      onUsage: (record) => { void this.usage?.append(record).catch(() => undefined) },
+      globalSkillLibrary: new GlobalSkillLibrary(new CapacitorFileStore())
     })
   }
 
@@ -331,7 +350,23 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   private eventListeners = new Set<(envelope: AgentEventEnvelope) => void>()
-  private emitAgentEvent(sessionId: string, event: AgentEventEnvelope['event'], runId?: string): void { for (const listener of this.eventListeners) listener({ sessionId, ...(runId ? { runId } : {}), event }) }
+  private runtimeEventListeners = new Set<(envelope: RuntimeAgentEventEnvelope) => void>()
+  private runtimeBuffers = new Map<string, RunEventBuffer>()
+  private runtimeSequences = new Map<string, number>()
+  private emitAgentEvent(sessionId: string, event: AgentEventEnvelope['event'], runId?: string): void {
+    for (const listener of this.eventListeners) listener({ sessionId, ...(runId ? { runId } : {}), event })
+    if (!runId) return
+    const workspaceId = this.currentPath ?? 'android'
+    const key = `${workspaceId}\u0000${runId}`
+    const seq = (this.runtimeSequences.get(key) ?? 0) + 1
+    this.runtimeSequences.set(key, seq)
+    const envelope = adaptLegacyAgentEvent({ workspaceId, sessionId, runId, agentId: 'orchestration', seq, event })
+    const buffer = this.runtimeBuffers.get(key) ?? new RunEventBuffer()
+    buffer.append(envelope)
+    buffer.setSnapshot({ workspaceId, sessionId, runId, lastSeq: seq, event: envelope.event })
+    this.runtimeBuffers.set(key, buffer)
+    for (const listener of this.runtimeEventListeners) listener(envelope)
+  }
 
   getChapterBody(id: string): Promise<string | null> { return getChapterBody(this.requireStore(), id) }
   searchProject(query: string) { return searchProject(this.requireStore(), query) }
@@ -454,7 +489,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async updateSettings(patch: SettingsPatch): Promise<PublicAppSettings> {
     return withAndroidSettingsLock(async () => {
       await this.loadSettingsFromPreferences()
-      this.settings = { ...this.settings, ...patch }
+      this.settings = this.normalizeSettings({ ...this.settings, ...patch })
       await this.saveSettings()
       return this.settings
     })
@@ -506,12 +541,46 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const provider = await this.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
   }
-  async agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId: string }> {
+  async agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }> {
     if (!this.agent) throw new Error('尚未打开工作区')
     return this.agent.run(req)
   }
   agentConfirm(changeId: string, approved: boolean): Promise<void> { this.agent?.confirmChange(changeId, approved); return Promise.resolve() }
   agentAbort(sessionId: string): Promise<void> { this.agent?.abort(sessionId); return Promise.resolve() }
+
+  listGoals(): Promise<GoalRun[]> { return new GoalStore(this.requireStore()).list(this.currentPath ?? '') }
+  async getGoal(id: string): Promise<GoalRun | null> {
+    const goal = await new GoalStore(this.requireStore()).get(id)
+    if (!goal) return null
+    if (goal.workspaceId !== (this.currentPath ?? '')) throw new Error('目标不属于当前工作区')
+    return goal
+  }
+  private async goalModel(): Promise<{ providerId: string; model: string }> {
+    const settings = await this.loadSettings()
+    const preferred = settings.defaultChatModel
+    if (preferred && settings.providers.some((provider) => provider.id === preferred.providerId && provider.models.includes(preferred.model) && provider.hasKey)) return preferred
+    const provider = settings.providers.find((item) => item.models.length > 0 && item.hasKey)
+    if (!provider) throw new Error('请先配置可用的供应商和模型')
+    return { providerId: provider.id, model: provider.models[0] }
+  }
+  async continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: GoalRun['status'] }> {
+    const goal = await new GoalStore(this.requireStore()).assertWorkspace(id, this.currentPath ?? '')
+    const model = await this.goalModel()
+    const result = await this.agentRun({ mode: 'goal', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
+    if (!result.goalId) throw new Error('目标运行未返回目标 ID')
+    return { ...result, goalId: result.goalId }
+  }
+  async stopGoal(id: string): Promise<void> {
+    const goal = await new GoalStore(this.requireStore()).assertWorkspace(id, this.currentPath ?? '')
+    this.agentAbort(goal.sessionId)
+  }
+  async replanGoal(id: string): Promise<{ goalId: string; planVersion?: number; status?: GoalRun['status'] }> {
+    const goal = await new GoalStore(this.requireStore()).assertWorkspace(id, this.currentPath ?? '')
+    const model = await this.goalModel()
+    const result = await this.agentRun({ mode: 'goal', goalAction: 'replan', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
+    if (!result.goalId) throw new Error('目标运行未返回目标 ID')
+    return { ...result, goalId: result.goalId }
+  }
 
   private sessions(): CoreSessionStore { return new CoreSessionStore(this.requireStore()) }
   listSessions(): Promise<SessionMeta[]> { return this.sessions().list() }
@@ -522,9 +591,14 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
   loadSession(id: string): Promise<ChatSession | null> { return this.sessions().load(id) }
   deleteSession(id: string): Promise<void> { return this.sessions().delete(id) }
-  async updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { if (!(await this.sessions().updateMeta(id, patch))) throw new Error('会话不存在') }
+  async updateSession(id: string, patch: Parameters<StoryFabricApi['updateSession']>[1]): Promise<void> { if (!(await this.sessions().updateMeta(id, patch))) throw new Error('会话不存在') }
   async updateSessionModelPreference(id: string, value: import('../../../shared/types').SessionModelPreference): Promise<void> { if (!(await this.sessions().updateModelPreference(id, value))) throw new Error('会话不存在') }
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void { this.eventListeners.add(cb); return () => this.eventListeners.delete(cb) }
+  onRuntimeAgentEvent(cb: (envelope: RuntimeAgentEventEnvelope) => void): () => void { this.runtimeEventListeners.add(cb); return () => this.runtimeEventListeners.delete(cb) }
+  recoverRunEvents(runId: string, afterSeq = 0): Promise<RunReplay> {
+    const key = `${this.currentPath ?? 'android'}\u0000${runId}`
+    return Promise.resolve((this.runtimeBuffers.get(key) ?? new RunEventBuffer()).replay(afterSeq))
+  }
 
   /* 远程部署仅桌面端可用 */
   private unsupported(): never {

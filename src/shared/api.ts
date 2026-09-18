@@ -1,4 +1,4 @@
-﻿/** 渲染进程可调用的完整 API 面（preload 实现它，renderer 通过 window.api 使用） */
+/** 渲染进程可调用的完整 API 面（preload 实现它，renderer 通过 window.api 使用） */
 import type {
   AgentEvent,
   ChapterBox,
@@ -23,15 +23,18 @@ import type {
   SettingMeta,
   NoteDoc,
   NoteMeta,
-  UsageRecord
+  UsageRecord,
+  GoalRun
 } from './types'
 import type { WorkspaceArchive } from '../core/workspace/archive'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
 import type { RunEventEnvelope } from './agentRuntime'
+import type { RunReplay } from './runEvents'
 import type { PlatformCapabilities } from './platformCapabilities'
 import type { CreativePackageSummary, CreativePreferences } from './creative'
 import type { AgentQuestionAnswer, SkillCandidateAction } from './agentQuestions'
 import type { RuleLayer } from '../core/rules/types'
+import type { ContentPackage } from './skillPackage'
 
 export interface AgentEventEnvelope {
   sessionId: string
@@ -48,6 +51,7 @@ export type SettingsPatch = Partial<
     | 'theme'
     | 'defaultChatModel'
     | 'quickActionModel'
+    | 'orchestrationDefaults'
     | 'customPrompt'
     | 'showSessionLength'
     | 'completionSound'
@@ -156,6 +160,7 @@ export interface StoryFabricApi {
   /** 模型用量记录（最近若干次调用，按时间升序） */
   getUsageRecords(): Promise<UsageRecord[]>
   listCreativePackages(): Promise<CreativePackageSummary[]>
+  installCreativePackage(input: ContentPackage): Promise<CreativePackageSummary>
   setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary>
   listCreativeRules(): Promise<RuleLayer[]>
   saveCreativeRules(layers: RuleLayer[]): Promise<void>
@@ -164,7 +169,12 @@ export interface StoryFabricApi {
   fetchModels(input: FetchModelsInput): Promise<string[]>
 
   /* 智能体 */
-  agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }>
+  agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }>
+  listGoals(): Promise<GoalRun[]>
+  getGoal(id: string): Promise<GoalRun | null>
+  continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: GoalRun['status'] }>
+  stopGoal(id: string): Promise<void>
+  replanGoal(id: string): Promise<{ goalId: string; planVersion?: number; status?: GoalRun['status'] }>
   agentConfirm(changeId: string, approved: boolean): Promise<void>
   agentAbort(sessionId: string): Promise<void>
   /** Optional until each platform bridge wires the corresponding IPC handlers. */
@@ -176,9 +186,12 @@ export interface StoryFabricApi {
   loadSession(id: string): Promise<ChatSession | null>
   deleteSession(id: string): Promise<void>
   /** 更新会话元信息：重命名 / 归档 */
-  updateSession(id: string, patch: { title?: string; archived?: boolean; creativePreferences?: CreativePreferences }): Promise<void>
+  updateSession(id: string, patch: { title?: string; archived?: boolean; approvalPolicy?: import('./types').ApprovalPolicy; creativePreferences?: CreativePreferences }): Promise<void>
   updateSessionModelPreference(id: string, value: SessionModelPreference): Promise<void>
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void
+  /** 新运行协议：用于断线重连时按 runId/seq 恢复事件。 */
+  onRuntimeAgentEvent?: (cb: (envelope: RuntimeAgentEventEnvelope) => void) => () => void
+  recoverRunEvents?: (runId: string, afterSeq?: number) => Promise<RunReplay>
 
   /* 远程部署（仅桌面端；其它平台实现为抛出「仅支持桌面端」） */
   deployTestConnection(input: import('./types').DeployConnectionInput): Promise<import('./types').DeployTestResult>

@@ -1,7 +1,8 @@
 import type { ChatMessage, ChatSession, SessionMeta } from '../../shared/types'
+import type { CreativePreferences } from '../../shared/creative'
 import type { FileStore } from '../storage/fileStore'
 import { genId } from './entityStore'
-import { setSessionModelPreference } from './sessionPreferences'
+import { setSessionApprovalPolicy, setSessionModelPreference } from './sessionPreferences'
 
 export function titleFromMessage(text: string): string {
   const t = text.replace(/\s+/g, ' ').trim()
@@ -13,7 +14,7 @@ export class CoreSessionStore {
 
   async create(): Promise<ChatSession> {
     const now = Date.now()
-    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, archived: false, messages: [] }
+    return { id: genId('sess'), title: '新会话', createdAt: now, updatedAt: now, archived: false, approvalPolicy: 'strict', messages: [] }
   }
 
   private pathOf(id: string): string { return `.storyfabric/sessions/${id.replace(/[^a-zA-Z0-9_-]/g, '')}.json` }
@@ -31,12 +32,14 @@ export class CoreSessionStore {
 
   async delete(id: string): Promise<void> { await this.store.remove(this.pathOf(id)) }
 
-  async updateMeta(id: string, patch: { title?: string; archived?: boolean }): Promise<boolean> {
+  async updateMeta(id: string, patch: { title?: string; archived?: boolean; approvalPolicy?: import('../../shared/types').ApprovalPolicy; creativePreferences?: CreativePreferences }): Promise<boolean> {
     const session = await this.load(id)
     if (!session) return false
     if (patch.title !== undefined) session.title = patch.title.trim() || session.title
     if (patch.archived !== undefined) session.archived = patch.archived
-    await this.save(session)
+    let next = patch.approvalPolicy === undefined ? session : setSessionApprovalPolicy(session, patch.approvalPolicy)
+    if (patch.creativePreferences !== undefined) next = { ...next, creativePreferences: patch.creativePreferences, updatedAt: Date.now() }
+    await this.save(next)
     return true
   }
 

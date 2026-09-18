@@ -1,4 +1,4 @@
-import type { ContentPackage } from '../core/skills/types'
+import type { ContentPackage, RuleSetManifestEntry, SkillManifestEntry, SkillPackageManifest, SupportedPlatform } from './skillPackage'
 
 export type AgentQuestionFieldType = 'single' | 'multi' | 'text'
 
@@ -67,6 +67,45 @@ function requiredString(value: unknown, name: string): string {
 function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined
   return requiredString(value, name)
+}
+
+function parsePackageEntry(value: unknown, name: string): SkillManifestEntry | RuleSetManifestEntry {
+  if (!isRecord(value)) throw new Error(`${name} 必须是对象`)
+  return { id: requiredString(value.id, `${name}.id`), path: requiredString(value.path, `${name}.path`) }
+}
+
+function parseContentPackage(value: unknown): ContentPackage {
+  if (!isRecord(value)) throw new Error('候选 package 必须是对象')
+  if (!isRecord(value.manifest)) throw new Error('候选 package.manifest 必须是对象')
+  const rawManifest = value.manifest
+  if (rawManifest.schemaVersion !== 1) throw new Error('候选 package.manifest.schemaVersion 无效')
+  if (!Array.isArray(rawManifest.platforms) || rawManifest.platforms.length === 0 || rawManifest.platforms.some((platform) => platform !== 'windows' && platform !== 'web' && platform !== 'android')) {
+    throw new Error('候选 package.manifest.platforms 无效')
+  }
+  if (!Array.isArray(rawManifest.skills) || !Array.isArray(rawManifest.ruleSets)) throw new Error('候选 package.manifest 的 skills/ruleSets 必须是数组')
+  if (!Array.isArray(value.files)) throw new Error('候选 package.files 必须是数组')
+
+  const manifest: SkillPackageManifest = {
+    schemaVersion: 1,
+    id: requiredString(rawManifest.id, '候选 package.manifest.id'),
+    version: requiredString(rawManifest.version, '候选 package.manifest.version'),
+    name: requiredString(rawManifest.name, '候选 package.manifest.name'),
+    description: requiredString(rawManifest.description, '候选 package.manifest.description'),
+    author: requiredString(rawManifest.author, '候选 package.manifest.author'),
+    license: requiredString(rawManifest.license, '候选 package.manifest.license'),
+    minAppVersion: requiredString(rawManifest.minAppVersion, '候选 package.manifest.minAppVersion'),
+    platforms: rawManifest.platforms as SupportedPlatform[],
+    skills: rawManifest.skills.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.skills[${index}]`)) as SkillManifestEntry[],
+    ruleSets: rawManifest.ruleSets.map((entry, index) => parsePackageEntry(entry, `候选 package.manifest.ruleSets[${index}]`)) as RuleSetManifestEntry[]
+  }
+  const files = value.files.map((file, index) => {
+    if (!isRecord(file)) throw new Error(`候选 package.files[${index}] 必须是对象`)
+    return {
+      path: requiredString(file.path, `候选 package.files[${index}].path`),
+      content: typeof file.content === 'string' ? file.content : (() => { throw new Error(`候选 package.files[${index}].content 必须是字符串`) })()
+    }
+  })
+  return { manifest, files }
 }
 
 function parseOptions(fieldId: string, value: unknown): AgentQuestionOption[] | undefined {
@@ -144,6 +183,27 @@ export function parseAgentQuestion(value: unknown): AgentQuestion {
     title,
     description,
     fields
+  }
+}
+
+/** Parses the complete candidate identity and the basic ContentPackage shape. */
+export function parseSkillCandidate(value: unknown): SkillCandidate {
+  if (!isRecord(value)) throw new Error('技能候选必须是对象')
+  const candidateId = requiredString(value.candidateId, '候选 candidateId')
+  const runId = requiredString(value.runId, '候选 runId')
+  const sessionId = requiredString(value.sessionId, '候选 sessionId')
+  const agentId = requiredString(value.agentId, '候选 agentId')
+  const reason = requiredString(value.reason, '候选 reason')
+  const status = value.status
+  if (status !== undefined && status !== 'pending' && status !== 'accepted' && status !== 'rejected') throw new Error('候选 status 无效')
+  return {
+    candidateId,
+    runId,
+    sessionId,
+    agentId,
+    package: parseContentPackage(value.package),
+    reason,
+    ...(status !== undefined ? { status } : {})
   }
 }
 

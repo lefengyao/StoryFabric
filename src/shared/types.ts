@@ -1,4 +1,7 @@
-﻿/** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
+/** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
+
+import type { RequestContextUsage, SkillApplicationEvent, ToolReceipt } from './agentEvidence'
+import type { AgentQuestion, PlanningGate, SkillCandidate } from './agentQuestions'
 
 export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note' | 'projectDoc'
 
@@ -182,8 +185,7 @@ export interface TrashEntry {
   }
 }
 
-import type { AgentQuestion, PlanningGate, SkillCandidate } from './agentQuestions'
-import type { CreativePreferences, OrchestrationMode } from './creative'
+import type { CreativePreferences, OrchestrationPreferences } from './creative'
 
 /* ---------------- 应用设置 ---------------- */
 
@@ -198,6 +200,8 @@ export interface AppSettings {
   providers: ProviderStored[]
   defaultChatModel?: ModelRef
   quickActionModel?: ModelRef
+  /** 默认的智能体编排计划；会话发送时从这里读取阶段、模型和预算。 */
+  orchestrationDefaults: OrchestrationPreferences
   theme: 'light' | 'dark' | 'system'
   recentWorkspaces: string[]
   recentWorkspaceOpenedAt: Record<string, string>
@@ -336,8 +340,7 @@ export interface ChatMessage {
 /** 可持久化的编排运行摘要；只保存候选产物，不代表已写回工作区。 */
 export interface OrchestrationRunRecord {
   runId: string
-  orchestrationMode?: OrchestrationMode
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused_budget'
   sourceRevision: string | number
   originalText: string
   stages: Array<{ stageId: string; status: string; reason?: string; artifactId?: string }>
@@ -359,6 +362,13 @@ export interface OrchestrationRunRecord {
   overlay: Record<string, unknown>
   businessText: string
   updatedAt: number
+  /** 本次编排的总预算快照，供会话重新打开后继续展示调用量。 */
+  budget?: AgentBudgetSnapshot
+  toolReceipts?: ToolReceipt[]
+  requestContexts?: RequestContextUsage[]
+  skillEvents?: SkillApplicationEvent[]
+  error?: string
+  currentStage?: string
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
@@ -389,6 +399,8 @@ export interface ChatSession {
   updatedAt: number
   archived: boolean
   messages: ChatMessage[]
+  /** 本会话的智能体写入审批策略；旧会话缺省按严格审批处理。 */
+  approvalPolicy?: ApprovalPolicy
   modelPreferences?: SessionModelPreference[]
   /** 自动压缩后的较早对话摘要；仅用于模型请求，不替换界面历史。 */
   contextSummary?: string
@@ -397,7 +409,6 @@ export interface ChatSession {
   contextSummaryUpdatedAt?: number
   /** 本会话的创作模式与扩展选择；缺省时按基础模式读取。 */
   creativePreferences?: CreativePreferences
-  orchestrationMode?: OrchestrationMode
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
@@ -423,7 +434,14 @@ export interface RunAgentRequest {
   clientRunId?: string
   /** 本次运行的创作模式；缺省时必须按基础模式处理。 */
   creative?: CreativePreferences
-  orchestrationMode?: OrchestrationMode
+  /** 缺省时回落为一般模式。 */
+  mode?: AgentMode
+  /** 继续目标时绑定已有目标运行。 */
+  goalRunId?: string
+  /** 继续目标或重新生成任务计划。 */
+  goalAction?: 'continue' | 'replan'
+  /** 本次运行冻结的审批策略；缺省时回落为严格审批。 */
+  approvalPolicy?: ApprovalPolicy
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
@@ -440,6 +458,42 @@ export interface PendingChange {
   title: string
   beforeText: string
   afterText: string
+  /** 目标运行所属身份；普通对话缺省。 */
+  goalId?: string
+  goalTaskId?: string
+  mutationKind?: 'create' | 'update' | 'move' | 'restore' | 'delete'
+}
+
+export type AgentMode = 'normal' | 'goal'
+export type ApprovalPolicy = 'strict' | 'delete-confirm' | 'auto'
+export type GoalStatus = 'planning' | 'running' | 'awaiting-approval' | 'validating' | 'completed' | 'needs-attention' | 'cancelled'
+export type GoalTaskStatus = 'pending' | 'running' | 'awaiting-approval' | 'validating' | 'completed' | 'failed' | 'skipped'
+
+export interface GoalTask {
+  id: string
+  title: string
+  instructions: string
+  acceptanceCriteria: string[]
+  dependsOn: string[]
+  status: GoalTaskStatus
+  attempts: number
+  resultSummary?: string
+  validationReason?: string
+}
+
+export interface GoalRun {
+  id: string
+  workspaceId: string
+  sessionId: string
+  goal: string
+  status: GoalStatus
+  planVersion: number
+  tasks: GoalTask[]
+  approvalPolicy: ApprovalPolicy
+  createdAt: number
+  updatedAt: number
+  completedReason?: string
+  needsAttentionReason?: string
 }
 
 /* ---------------- 智能体流式事件 ---------------- */
@@ -452,15 +506,24 @@ export type AgentEvent =
   | { type: 'tool-start'; callId: string; name: string; argsJson: string }
   | { type: 'tool-args-delta'; callId: string; delta: string }
   | { type: 'tool-preview'; callId: string; preview: string }
-  | { type: 'budget'; snapshot: AgentBudgetSnapshot }
+  | { type: 'budget'; snapshot: AgentBudgetSnapshot; goalId?: string }
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }
   | { type: 'change-result'; changeId: string; status: 'applied' | 'rejected' | 'conflict' | 'failed'; message: string }
+  | { type: 'goal-plan'; goal: GoalRun }
+  | { type: 'goal-task'; goalId: string; task: GoalTask }
+  | { type: 'goal-validation'; goalId: string; taskId: string; passed: boolean; reason: string }
+  | { type: 'approval-policy'; policy: ApprovalPolicy; goalId?: string }
+  | { type: 'request-context'; usage: RequestContextUsage }
+  | { type: 'tool-receipt'; receipt: ToolReceipt }
+  | { type: 'skill-activity'; activity: SkillApplicationEvent }
+  | { type: 'run-paused'; reason: 'budget' | 'cancelled' | 'error'; message: string; stageId?: string }
   | { type: 'agent-question'; question: AgentQuestion }
   | { type: 'skill-candidate'; candidate: SkillCandidate }
   | { type: 'waiting-user'; questionId: string; reason?: string; planningGate?: PlanningGate }
-  | { type: 'waiting-user'; candidateId: string; reason?: string; planningGate?: PlanningGate }  | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
+  | { type: 'waiting-user'; candidateId: string; reason?: string; planningGate?: PlanningGate }
+  | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
   | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
   | { type: 'error'; message: string }
   | { type: 'done'; session?: ChatSession }
@@ -520,7 +583,7 @@ export interface UsageRecord {
   stageId?: string
   agentId?: string
   parentAgentId?: string
-  purpose?: 'basic' | 'stage' | 'child' | 'compression' | 'retry'
+  purpose?: 'basic' | 'stage' | 'child' | 'compression' | 'retry' | 'goal-plan' | 'goal-task' | 'goal-validation'
   attempt?: number
   status?: 'completed' | 'failed' | 'cancelled' | 'missing'
   usageSource?: 'actual' | 'estimated' | 'missing'

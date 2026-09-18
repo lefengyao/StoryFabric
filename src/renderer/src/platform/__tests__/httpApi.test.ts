@@ -48,6 +48,15 @@ describe('web platform api', () => {
     await expect(api.getCurrentWorkspace()).rejects.toBeInstanceOf(WebAuthRequiredError)
   })
 
+  it('explains when a web host returns HTML instead of the StoryFabric API response', async () => {
+    const api = new HttpPlatformApi(async () => new Response('<!doctype html><title>Vite</title>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' }
+    }))
+
+    await expect(api.getCurrentWorkspace()).rejects.toThrow('未连接到 StoryFabric 服务')
+  })
+
   it('uploads raw workspace ZIP bytes to the binary endpoint', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = []
     const api = new HttpPlatformApi(async (input, init) => {
@@ -110,5 +119,46 @@ describe('web platform api', () => {
     expect(request?.signal?.aborted).toBe(false)
     unsubscribe()
     expect(request?.signal?.aborted).toBe(true)
+  })
+
+  it('recovers unified runtime events from a sequence cursor', async () => {
+    const requests: string[] = []
+    const api = new HttpPlatformApi(async (input) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({ replayable: true, events: [], snapshotSeq: 8 }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+
+    await expect(api.recoverRunEvents('run/1', 7)).resolves.toMatchObject({ replayable: true, snapshotSeq: 8 })
+    expect(requests[0]).toBe('https://server.example/api/runs/run%2F1/events?after=7')
+  })
+
+  it('forwards creative preferences through the session update RPC', async () => {
+    const requests: Array<{ url: string; body: string }> = []
+    const api = new HttpPlatformApi(async (input, init) => {
+      requests.push({ url: String(input), body: String(init?.body ?? '') })
+      return new Response(JSON.stringify({ result: undefined }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const creativePreferences = {
+      mode: 'orchestration' as const,
+      orchestrationEnabled: true,
+      subagentsEnabled: false,
+      intensity: 'standard' as const,
+      selectedSkillIds: [],
+      selectedRuleSetIds: [],
+      orchestration: {
+        mode: 'single' as const,
+        enabled: true,
+        subagentsEnabled: false,
+        enabledStageIds: ['write'],
+        modelByStage: {}
+      }
+    }
+
+    await api.updateSession('session-1', { creativePreferences })
+
+    expect(JSON.parse(requests[0].body)).toEqual({
+      method: 'updateSession',
+      args: ['session-1', { creativePreferences }]
+    })
   })
 })

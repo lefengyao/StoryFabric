@@ -1,10 +1,12 @@
-import type { AgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
+import type { AgentEventEnvelope, RuntimeAgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { ChapterBox, ChapterDoc, ChatSession, CharacterDoc, NoteDoc, OutlineDoc, Relationship, RunAgentRequest, SettingDoc, StoryEvent, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import { normalizeHttpSource } from '../lib/workspaceUiScope'
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
 import type { CreativePackageSummary } from '../../../shared/creative'
 import type { RuleLayer } from '../../../core/rules/types'
+import type { ContentPackage } from '../../../shared/skillPackage'
+import type { RunReplay } from '../../../shared/runEvents'
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 export type HttpAuth = { kind: 'cookie' } | { kind: 'bearer'; token: string }
@@ -14,6 +16,7 @@ export class WebAuthRequiredError extends Error {
 }
 
 interface RpcResponse<T> { result?: T; error?: string }
+const NON_JSON_RESPONSE_ERROR = '未连接到 StoryFabric 服务：服务端返回了非 JSON 数据'
 
 export class HttpPlatformApi implements StoryFabricApi {
   private readonly auth: HttpAuth
@@ -25,6 +28,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   getUiSource(): string { return normalizeHttpSource(this.baseUrl) }
   getCapabilities(): Promise<PlatformCapabilities> { return this.rpc('getCapabilities') }
   listCreativePackages(): Promise<CreativePackageSummary[]> { return this.rpc('listCreativePackages') }
+  installCreativePackage(input: ContentPackage): Promise<CreativePackageSummary> { return this.rpc('installCreativePackage', [input]) }
   setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary> { return this.rpc('setCreativePackageEnabled', [id, version, enabled]) }
   listCreativeRules(): Promise<RuleLayer[]> { return this.rpc('listCreativeRules') }
   saveCreativeRules(layers: RuleLayer[]): Promise<void> { return this.rpc('saveCreativeRules', [layers]) }
@@ -40,12 +44,20 @@ export class HttpPlatformApi implements StoryFabricApi {
     throw new Error(payload.error || `请求失败 HTTP ${response.status}`)
   }
 
+  private async responseJson<T>(response: Response): Promise<T> {
+    try {
+      return await response.json() as T
+    } catch {
+      throw new Error(NON_JSON_RESPONSE_ERROR)
+    }
+  }
+
   private async rpc<T>(method: string, args: unknown[] = []): Promise<T> {
     const init: RequestInit = { method: 'POST', headers: this.headers({ 'content-type': 'application/json' }), body: JSON.stringify({ method, args }) }
     if (this.auth.kind === 'cookie') init.credentials = 'include'
     const response = await this.fetcher(`${this.baseUrl}/api/rpc`, init)
     if (!response.ok) return this.responseError<T>(response)
-    return (await response.json() as RpcResponse<T>).result as T
+    return (await this.responseJson<RpcResponse<T>>(response)).result as T
   }
 
   private async rest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -54,7 +66,7 @@ export class HttpPlatformApi implements StoryFabricApi {
     if (this.auth.kind === 'cookie') request.credentials = 'include'
     const response = await this.fetcher(`${this.baseUrl}${path}`, request)
     if (!response.ok) return this.responseError<T>(response)
-    return response.json() as Promise<T>
+    return this.responseJson<T>(response)
   }
 
   pickFolder(): Promise<string | null> { return Promise.resolve(null) }
@@ -125,12 +137,21 @@ export class HttpPlatformApi implements StoryFabricApi {
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }> { return this.rpc('agentRun', [req]) }
   agentConfirm(changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [changeId, approved]) }
   agentAbort(sessionId: string): Promise<void> { return this.rpc('agentAbort', [sessionId]) }
+  listGoals(): Promise<import('../../../shared/types').GoalRun[]> { return this.rpc('listGoals') }
+  getGoal(id: string): Promise<import('../../../shared/types').GoalRun | null> { return this.rpc('getGoal', [id]) }
+  continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: import('../../../shared/types').GoalStatus }> { return this.rpc('continueGoal', [id]) }
+  stopGoal(id: string): Promise<void> { return this.rpc('stopGoal', [id]) }
+  replanGoal(id: string): Promise<{ goalId: string; planVersion?: number; status?: import('../../../shared/types').GoalStatus }> { return this.rpc('replanGoal', [id]) }
   listSessions(): Promise<import('../../../shared/types').SessionMeta[]> { return this.rpc('listSessions') }
   createSession(): Promise<ChatSession> { return this.rpc('createSession') }
   loadSession(id: string): Promise<ChatSession | null> { return this.rpc('loadSession', [id]) }
   deleteSession(id: string): Promise<void> { return this.rpc('deleteSession', [id]) }
-  updateSession(id: string, patch: { title?: string; archived?: boolean }): Promise<void> { return this.rpc('updateSession', [id, patch]) }
+  updateSession(id: string, patch: Parameters<StoryFabricApi['updateSession']>[1]): Promise<void> { return this.rpc('updateSession', [id, patch]) }
   updateSessionModelPreference(id: string, value: import('../../../shared/types').SessionModelPreference): Promise<void> { return this.rpc('updateSessionModelPreference', [id, value]) }
+
+  recoverRunEvents(runId: string, afterSeq = 0): Promise<RunReplay> {
+    return this.rest(`/api/runs/${encodeURIComponent(runId)}/events?after=${Math.max(0, Math.floor(afterSeq))}`)
+  }
 
   /* 远程部署仅桌面端可用 */
   private unsupported(): never {
@@ -170,6 +191,38 @@ export class HttpPlatformApi implements StoryFabricApi {
         for (const chunk of chunks) for (const line of chunk.split('\n')) {
           if (!line.startsWith('data: ')) continue
           try { callback(JSON.parse(line.slice(6)) as AgentEventEnvelope) } catch { /* ignore malformed event */ }
+        }
+      }
+    }).catch(() => undefined)
+    return () => {
+      controller.abort()
+      void reader?.cancel().catch(() => undefined)
+    }
+  }
+
+  onRuntimeAgentEvent(callback: (envelope: RuntimeAgentEventEnvelope) => void): () => void {
+    if (this.auth.kind === 'cookie' && typeof EventSource !== 'undefined') {
+      const source = new EventSource(`${this.baseUrl}/api/runtime-events`, { withCredentials: true })
+      source.onmessage = (event) => { try { callback(JSON.parse(event.data) as RuntimeAgentEventEnvelope) } catch { /* ignore malformed event */ } }
+      return () => source.close()
+    }
+    const controller = new AbortController()
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    void this.fetcher(`${this.baseUrl}/api/runtime-events`, { headers: this.headers(), signal: controller.signal }).then(async (response) => {
+      if (!response.ok || !response.body) return
+      const streamReader = response.body.getReader()
+      reader = streamReader
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!controller.signal.aborted) {
+        const next = await streamReader.read()
+        if (next.done) break
+        buffer += decoder.decode(next.value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          try { callback(JSON.parse(line.slice(6)) as RuntimeAgentEventEnvelope) } catch { /* ignore malformed event */ }
         }
       }
     }).catch(() => undefined)
