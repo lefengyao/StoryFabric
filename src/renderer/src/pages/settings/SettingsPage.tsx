@@ -8,12 +8,12 @@ import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
 import { EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS } from '../../lib/editorStyle'
+import { CHAT_FONT_SIZES } from '../../lib/chatTypography'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
 import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
-import { CreativeExtensionsView } from './CreativeExtensionsView'
-import { RuleSetEditor } from './RuleSetEditor'
+import { OrchestrationSettingsView } from './OrchestrationSettingsView'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
 
@@ -26,6 +26,7 @@ const PROTOCOL_HINTS: Record<Protocol, string> = {
 const TABS = [
   { key: 'models', label: '模型与供应商' },
   { key: 'agent', label: '智能体' },
+  { key: 'orchestration', label: '编排' },
   { key: 'appearance', label: '外观' },
   { key: 'notifications', label: '通知' }
 ] as const
@@ -254,10 +255,10 @@ export function SettingsPage(): React.ReactElement {
                   在会话顶部显示会话长度（消息数与约计字数）
                 </label>
               </Card>
-              <CreativeExtensionsView />
-              <RuleSetEditor />
             </section>
           )}
+
+          {active === 'orchestration' && <OrchestrationSettingsView settings={settings} update={update} />}
 
           {active === 'appearance' && (
             <>
@@ -403,6 +404,17 @@ export function SettingsPage(): React.ReactElement {
                       <option value="compact">紧凑</option>
                       <option value="comfortable">舒适</option>
                       <option value="spacious">宽松</option>
+                    </select>
+                  </Field>
+                  <Field label="会话窗口字号" hint="只影响聊天消息、输入框、工具回执、编排信息和智能体活动信息">
+                    <select
+                      value={settings.chatFontSize}
+                      onChange={(e) => void update({ chatFontSize: Number(e.target.value) })}
+                      className="set-select max-w-32"
+                    >
+                      {CHAT_FONT_SIZES.map((size) => (
+                        <option key={size} value={size}>{size}px</option>
+                      ))}
                     </select>
                   </Field>
                   <Field label="发送快捷键">
