@@ -1,7 +1,7 @@
 import { AtSign, Bot, Check, ChevronDown, ExternalLink, FileText, History, MessageSquarePlus, Plus, Send, Settings, Sparkles, Square, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { ChatMessage, MessageFile } from '../../../../shared/types'
+import type { AgentMode, ApprovalPolicy, ChatMessage, MessageFile } from '../../../../shared/types'
 import { Markdown } from '../markdown/Markdown'
 import { ContextUsageMeter, shouldShowThinking, ThinkingRow, ToolRunRow } from './AgentActivity'
 import { Button, Input } from '../ui/primitives'
@@ -18,11 +18,8 @@ import { resolveContextWindow } from '../../lib/modelCapability'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
-import { getPlatformApi } from '../../platform/platformApi'
-import type { StageId } from '../../../../core/orchestration/types'
-import type { CreativeSelection } from './CreativeOptions'
-import { CreativeOptions } from './CreativeOptions'
-import { OrchestrationPanel } from './OrchestrationPanel'
+import { creativePreferencesForSurface } from '../../lib/creativePreferences'
+import { approvalPolicyPickerDisabled } from '../../stores/chatScope'
 
 const QUICK_QUESTIONS = [
   '检查当前章节与前文的设定冲突。',
@@ -40,18 +37,11 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [referenceQuery, setReferenceQuery] = useState('')
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [agentMode, setAgentMode] = useState<AgentMode>('normal')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const referencePanelRef = useRef<HTMLDivElement | null>(null)
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
-  const [capabilities, setCapabilities] = useState<import('../../../../shared/platformCapabilities').PlatformCapabilities | undefined>()
-  const [creativeSelection, setCreativeSelection] = useState<CreativeSelection>({ selectedSkillIds: [], selectedRuleSetIds: [] })
-
-  useEffect(() => {
-    let active = true
-    const platform = getPlatformApi()
-    void (platform.getCapabilities ? platform.getCapabilities() : Promise.resolve(undefined)).then((value) => { if (active) setCapabilities(value) }).catch(() => { if (active) setCapabilities(undefined) })
-    return () => { active = false }
-  }, [uiSource])
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((provider) => provider.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -89,6 +79,22 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   }, [open])
 
   useEffect(() => {
+    if (!referenceOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (referencePanelRef.current && !referencePanelRef.current.contains(event.target as Node)) setReferenceOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setReferenceOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [referenceOpen])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape' || !open || chat.pendingChange) return
       if (detailsOpen) setDetailsOpen(false)
@@ -105,19 +111,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
       useChat.setState({ error: '请先配置默认对话模型' })
       return
     }
-    await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model })
-  }
-
-  const startOrchestration = (stageIds: StageId[]): void => {
-    if (!input.text.trim() || !defaultModel) {
-      useChat.setState({ error: defaultModel ? '请先在输入框写下本次编排目标' : '请先配置默认对话模型' })
-      return
-    }
-    void chat.send(input.text, {
-      providerId: defaultModel.providerId,
-      model: defaultModel.model,
-      creative: { mode: 'orchestration', orchestrationEnabled: true, subagentsEnabled: false, intensity: 'standard', ...creativeSelection, orchestration: { enabled: true, subagentsEnabled: false, enabledStageIds: stageIds, modelByStage: {}, maxCalls: 24, maxEstimatedTokens: 100000 } }
-    })
+    await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model, mode: agentMode, creative: creativePreferencesForSurface(settings ?? undefined, 'sidebar') })
   }
 
   const createSession = async (): Promise<void> => {
@@ -133,7 +127,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   return (
     <div
       className={cn(
-        'chat-sidebar-flyout fixed inset-0 z-50 overflow-hidden transition-[width,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:relative sm:inset-auto sm:z-auto sm:h-full sm:shrink-0',
+        'chat-sidebar-flyout chat-surface fixed inset-0 z-50 overflow-hidden transition-[width,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:relative sm:inset-auto sm:z-auto sm:h-full sm:shrink-0',
         open
           ? 'pointer-events-auto w-full opacity-100 sm:w-[420px] lg:w-[460px]'
           : 'pointer-events-none w-0 opacity-0 sm:w-0'
@@ -147,11 +141,11 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
           <Sparkles size={17} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <strong className="text-sm font-semibold">智能体</strong>
+              <div className="flex items-center gap-2">
+                <strong className="chat-text-body font-semibold">智能体</strong>
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           </div>
-          <p className="truncate text-[11px] text-muted">
+          <p className="chat-text-meta truncate text-muted">
             {chat.streaming
               ? '正在处理工作区资料…'
               : `${activeSession?.title ?? '创建会话后开始提问'}${defaultModel ? ` · ${defaultModel.model}` : ''}`}
@@ -221,6 +215,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
             <Link to="/chat" onClick={() => { setDetailsOpen(false); close() }} className="mt-2 flex h-8 items-center justify-center gap-1.5 rounded-lg text-[11px] text-muted transition hover:bg-elevated hover:text-fg">
               打开完整智能体工作台 <ExternalLink size={12} />
             </Link>
+            {settings?.orchestrationDefaults?.enabled && <p className="mt-1 px-2 text-center text-[10px] leading-4 text-warning">小窗口默认使用一般模式；如需编排协作，请打开完整智能体工作台。</p>}
           </section>
 
           <div className="flex flex-wrap items-center gap-2 bg-app/50 px-3 py-3">
@@ -238,6 +233,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               </div>
             )}
             {providerOptions.length > 0 ? (
+              <>
               <select
                 value={modelValue}
                 onChange={(event) => {
@@ -253,20 +249,35 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                   </optgroup>
                 ))}
               </select>
+              <select
+                value={agentMode}
+                onChange={(event) => setAgentMode(event.target.value as AgentMode)}
+                disabled={chat.streaming}
+                className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent disabled:opacity-60"
+                aria-label="运行模式"
+              >
+                <option value="normal">一般模式</option>
+                <option value="goal">目标模式（多步骤）</option>
+              </select>
+              <select
+                value={chat.approvalPolicy}
+                onChange={(event) => void chat.updateApprovalPolicy(event.target.value as ApprovalPolicy).catch((error) => useChat.setState({ error: error instanceof Error ? error.message : String(error) }))}
+                disabled={approvalPolicyPickerDisabled({ activeId: chat.activeId, streaming: chat.streaming })}
+                className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent disabled:opacity-60"
+                aria-label="写入审批策略"
+              >
+                <option value="strict">严格审批</option>
+                <option value="delete-confirm">自动审批（删除确认）</option>
+                <option value="auto">自动执行</option>
+              </select>
+              {agentMode === 'goal' && <span className="w-full text-[10px] text-warning">目标模式可能消耗更多额度</span>}
+              </>
             ) : (
               <Link to="/settings" onClick={() => setDetailsOpen(false)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger-soft px-2.5 text-xs text-danger">
                 <Settings size={12} /> 配置模型
               </Link>
             )}
-            {activeSession && <span className="ml-auto text-[10px] text-faint">{formatTime(activeSession.updatedAt)}</span>}
-            <div className="w-full pt-1">
-              <ContextUsageMeter
-                usedTokens={contextUsage.usedTokens}
-                contextTokens={contextUsage.contextTokens}
-                compressing={chat.contextCompressing}
-                compressedMessages={chat.contextCompression?.summarizedMessages}
-              />
-            </div>
+            {activeSession && <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] text-faint">{formatTime(activeSession.updatedAt)}</span>}
           </div>
         </div>
       )}
@@ -324,7 +335,6 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
         </div>
 
         <div className="shrink-0 border-t border-line p-3">
-          <div className="mb-2 space-y-2"><CreativeOptions value={creativeSelection} onChange={setCreativeSelection} /><OrchestrationPanel capabilities={capabilities} running={chat.streaming} budget={chat.budget} onStart={startOrchestration} onStop={() => void chat.abort()} /></div>
           {chat.messageFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {chat.messageFiles.map((file) => (
@@ -353,7 +363,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               }}
               rows={3}
               placeholder="随时问智能体…"
-              className="w-full resize-none bg-transparent px-3.5 py-3 pr-14 text-sm outline-none placeholder:text-faint"
+              className="chat-text-body w-full resize-none bg-transparent px-3.5 py-3 pr-14 outline-none placeholder:text-faint"
             />
             <div className="absolute bottom-2 left-2">
               <AttachmentMenu
@@ -377,7 +387,14 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 }}
               />
             </div>
-            <div className="absolute bottom-2 right-2">
+            <div className="absolute bottom-2 right-2 flex items-center gap-1">
+              <ContextUsageMeter
+                ringOnly
+                usedTokens={contextUsage.usedTokens}
+                contextTokens={contextUsage.contextTokens}
+                compressing={chat.contextCompressing}
+                compressedMessages={chat.contextCompression?.summarizedMessages}
+              />
               {chat.streaming ? (
                 <Button variant="outline" size="sm" onClick={() => void chat.abort()} title="中止生成"><Square size={12} /></Button>
               ) : (
@@ -385,7 +402,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               )}
             </div>
             {referenceOpen && (
-              <div className="absolute bottom-14 left-2 z-40 w-[min(330px,calc(100vw-2rem))] rounded-xl border border-line bg-panel p-2 shadow-2xl">
+              <div ref={referencePanelRef} className="absolute bottom-14 left-2 z-40 w-[min(330px,calc(100vw-2rem))] rounded-xl border border-line bg-panel p-2 shadow-2xl">
                 <div className="mb-1.5 flex items-center gap-2">
                   <AtSign size={14} className="text-accent" />
                   <Input autoFocus value={referenceQuery} onChange={(event) => setReferenceQuery(event.target.value)} placeholder="搜索人物、章节、事件或大纲…" className="h-8 text-xs" />
@@ -447,7 +464,7 @@ function SidebarMessage({ message }: { message: ChatMessage }): React.ReactEleme
   if (message.role === 'user') {
     return (
       <div className="flex justify-end gap-2">
-        <div className="max-w-[86%] whitespace-pre-wrap rounded-xl bg-accent px-3.5 py-2.5 text-sm leading-relaxed text-accent-fg">{message.text}</div>
+        <div className="chat-text-body max-w-[86%] whitespace-pre-wrap rounded-xl bg-accent px-3.5 py-2.5 leading-relaxed text-accent-fg">{message.text}</div>
         <SidebarAvatar />
       </div>
     )

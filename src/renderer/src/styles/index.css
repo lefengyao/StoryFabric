@@ -356,6 +356,41 @@ button {
   animation: chat-message-enter 220ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
+/* 会话字号只在完整聊天页和小窗口的 chat-surface 内生效，不污染全局 UI 或编辑器。 */
+.chat-surface {
+  font-size: var(--chat-font-size, 14px);
+}
+
+.chat-surface [class~="text-xs"],
+.chat-surface [class~="text-[13px]"] {
+  font-size: var(--chat-font-meta-size, 12px);
+}
+
+.chat-surface [class~="text-sm"],
+.chat-surface [class~="text-[15px]"],
+.chat-surface [class~="text-[16px]"] {
+  font-size: var(--chat-font-size, 14px);
+}
+
+.chat-surface [class~="text-[9px]"],
+.chat-surface [class~="text-[10px]"],
+.chat-surface [class~="text-[11px]"],
+.chat-surface [class~="text-[12px]"] {
+  font-size: var(--chat-font-micro-size, 10px);
+}
+
+.chat-surface .chat-text-body {
+  font-size: var(--chat-font-size, 14px);
+}
+
+.chat-surface .chat-text-meta {
+  font-size: var(--chat-font-meta-size, 12px);
+}
+
+.chat-surface .chat-text-micro {
+  font-size: var(--chat-font-micro-size, 10px);
+}
+
 .event-timeline-node {
   cursor: pointer;
 }
@@ -390,14 +425,6 @@ button {
 
 .react-flow__node-volumeBand {
   pointer-events: none !important;
-}
-
-.context-meter {
-  min-width: 7rem;
-  padding: 0.35rem 0.55rem;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
 }
 
 [data-app-shell] button:not(:disabled),
