@@ -4,6 +4,7 @@ import type { SettingsPatch } from '../../../shared/api'
 import { getPlatformApi } from '../platform/platformApi'
 import { accentStyle } from '../lib/accent'
 import { editorStyle } from '../lib/editorStyle'
+import { chatTypographyStyle } from '../lib/chatTypography'
 
 interface SettingsState {
   settings: PublicAppSettings | null
@@ -36,6 +37,7 @@ function applyAppearance(settings: PublicAppSettings | null): void {
   applyTheme(settings?.theme)
   applyAccent(settings)
   applyEditor(settings)
+  applyChatTypography(settings)
 }
 
 const EDITOR_VARS = ['--editor-font-size', '--editor-line-height', '--editor-font']
@@ -44,6 +46,13 @@ const EDITOR_VARS = ['--editor-font-size', '--editor-line-height', '--editor-fon
 function applyEditor(settings: PublicAppSettings | null): void {
   const style = editorStyle(settings ?? {})
   for (const key of EDITOR_VARS) document.documentElement.style.setProperty(key, style[key])
+}
+
+const CHAT_TYPOGRAPHY_VARS = ['--chat-font-size', '--chat-font-meta-size', '--chat-font-micro-size']
+
+function applyChatTypography(settings: PublicAppSettings | null): void {
+  const style = chatTypographyStyle(settings ?? {})
+  for (const key of CHAT_TYPOGRAPHY_VARS) document.documentElement.style.setProperty(key, style[key])
 }
 
 export const useSettings = create<SettingsState>((set) => ({

@@ -228,6 +228,8 @@ export interface AppSettings {
   sendShortcut: SendShortcut
   /** 消息气泡密度 */
   chatDensity: ChatDensity
+  /** 会话窗口字号（px），只作用于聊天区域 */
+  chatFontSize: number
 }
 
 export type EditorFontFamily = 'sans' | 'serif' | 'mono'
@@ -372,6 +374,11 @@ export interface OrchestrationRunRecord {
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
+  pendingChange?: PendingChange
+  errorCode?: string
+  recoverable?: boolean
+  recoveryHint?: string
+  lastToolReceipt?: ToolReceipt
 }
 
 export interface AgentBudgetSnapshot {
@@ -395,6 +402,8 @@ export interface SessionMeta {
 export interface ChatSession {
   id: string
   title: string
+  /** 受控的会话目录名；旧 JSON 会话迁移后补齐。 */
+  storageDir?: string
   createdAt: number
   updatedAt: number
   archived: boolean
@@ -412,6 +421,8 @@ export interface ChatSession {
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
+  /** 严格审批等待中的写入；刷新后仍能定位到会话。 */
+  pendingChange?: PendingChange
   /** 最近的编排候选运行，供刷新后查看各阶段结果。 */
   orchestrationRuns?: OrchestrationRunRecord[]
 }
@@ -462,6 +473,9 @@ export interface PendingChange {
   goalId?: string
   goalTaskId?: string
   mutationKind?: 'create' | 'update' | 'move' | 'restore' | 'delete'
+  sessionId?: string
+  runId?: string
+  stageId?: string
 }
 
 export type AgentMode = 'normal' | 'goal'
@@ -525,7 +539,7 @@ export type AgentEvent =
   | { type: 'waiting-user'; candidateId: string; reason?: string; planningGate?: PlanningGate }
   | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
   | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; stageId?: string; code?: string; recoverable?: boolean }
   | { type: 'done'; session?: ChatSession }
 
 /* ---------------- 工具定义 ---------------- */

@@ -247,4 +247,23 @@ describe('SettingsService 每模型参数', () => {
       })).resolves.toEqual({ protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', apiKey: 'attacker-key' })
     })
   })
+
+  it('旧设置文件缺少 chatFontSize 时使用 14px', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], theme: 'system', recentWorkspaces: [] }), 'utf-8')
+      expect((await service.load()).chatFontSize).toBe(14)
+    })
+  })
+
+  it.each([
+    ['过小', 1, 13],
+    ['过大', 99, 20],
+    ['非数字', '18', 14],
+    ['空值', null, 14]
+  ])('chatFontSize %s 时回退或夹紧为 %s', async (_label, value, expected) => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ chatFontSize: value }), 'utf-8')
+      expect((await service.load()).chatFontSize).toBe(expected)
+    })
+  })
 })

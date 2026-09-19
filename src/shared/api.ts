@@ -63,6 +63,7 @@ export type SettingsPatch = Partial<
     | 'autosaveSeconds'
     | 'sendShortcut'
     | 'chatDensity'
+    | 'chatFontSize'
   >
 >
 
@@ -175,7 +176,7 @@ export interface StoryFabricApi {
   continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: GoalRun['status'] }>
   stopGoal(id: string): Promise<void>
   replanGoal(id: string): Promise<{ goalId: string; planVersion?: number; status?: GoalRun['status'] }>
-  agentConfirm(changeId: string, approved: boolean): Promise<void>
+  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void>
   agentAbort(sessionId: string): Promise<void>
   /** Optional until each platform bridge wires the corresponding IPC handlers. */
   agentAnswerQuestion?(answer: AgentQuestionAnswer): Promise<void>

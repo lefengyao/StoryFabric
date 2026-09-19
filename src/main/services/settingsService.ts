@@ -55,7 +55,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   editorFontFamily: 'sans',
   autosaveSeconds: 0,
   sendShortcut: 'enter',
-  chatDensity: 'comfortable'
+  chatDensity: 'comfortable',
+  chatFontSize: 14
+}
+
+const DEFAULT_CHAT_FONT_SIZE = 14
+
+function normalizeChatFontSize(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_CHAT_FONT_SIZE
+  return Math.round(Math.min(20, Math.max(13, value)))
 }
 
 const PLAIN_PREFIX = 'plain:'
@@ -106,7 +114,8 @@ function normalizeSettings(raw: unknown): AppSettings {
     providers,
     recentWorkspaces,
     recentWorkspaceOpenedAt,
-    orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
+    orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
+    chatFontSize: normalizeChatFontSize(parsed.chatFontSize)
   }
 }
 
