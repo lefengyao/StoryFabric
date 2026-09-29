@@ -24,4 +24,8 @@ describe('modelParamOptions', () => {
   it('档案值已在预设中时不重复', () => {
     expect(modelParamOptions([4096, 8192], 8192)).toEqual([4096, 8192])
   })
+
+  it('保留 JSON 导入的自定义数值供表单继续编辑', () => {
+    expect(modelParamOptions([4096, 8192], 8192, 6000)).toEqual([4096, 6000, 8192])
+  })
 })

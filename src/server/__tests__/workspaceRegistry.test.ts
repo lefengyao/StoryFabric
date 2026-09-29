@@ -33,6 +33,16 @@ async function snapshotFiles(root: string): Promise<Array<{ path: string; conten
 }
 
 describe('server workspace registry', () => {
+  it('renames the display name without moving or deleting the workspace directory', async () => {
+    const root = await dataRoot()
+    const registry = await WorkspaceRegistry.open(root)
+    const created = await registry.create('原名称')
+    await expect(registry.rename(created.path, '  新名称  ')).resolves.toMatchObject({ path: created.path, name: '新名称' })
+    await expect(registry.rename(created.path, '  ')).rejects.toThrow('项目名称不能为空')
+    const reopened = await WorkspaceRegistry.open(root)
+    expect(await reopened.summary(created.path)).toMatchObject({ path: created.path, name: '新名称' })
+    await expect(stat(join(root, 'workspaces', created.path, 'storyfabric.json'))).resolves.toBeDefined()
+  })
   it('migrates one valid legacy workspace to the default managed ID without overwriting data', async () => {
     const root = await dataRoot()
     const legacy = join(root, 'workspace')

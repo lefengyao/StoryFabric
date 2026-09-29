@@ -1,7 +1,7 @@
 import type { ChapterMeta, CharacterDoc, OutlineDoc, Relationship, SettingMeta, StoryEvent } from '../../shared/types'
 import type { SourceRef } from '../../shared/agentEvidence'
 import { contentRevision } from '../workspace/resourceRevision'
-import { getChapterBody, listChapters, listCharacters, listEvents, listOutline, listSettings, loadRelationships } from '../workspace/entityStore'
+import { getChapterBody, listChapters, listCharacters, listEvents, listSettings, loadOutlineDocuments, loadRelationships } from '../workspace/entityStore'
 import type { FileStore } from '../storage/fileStore'
 
 export interface ProjectContext {
@@ -55,14 +55,15 @@ function sourceRef(workspaceId: string, sourcePath: string, entityId: string, te
 
 export async function loadProjectContext(store: FileStore, input: { workspaceId: string; goal: string; radius?: number }): Promise<ProjectContext> {
   const radius = input.radius ?? 2
-  const [chapters, outlines, characters, settings, events, relationships] = await Promise.all([
+  const [chapters, outlineDocs, characters, settings, events, relationships] = await Promise.all([
     listChapters(store),
-    listOutline(store),
+    loadOutlineDocuments(store),
     listCharacters(store),
     listSettings(store),
     listEvents(store),
     loadRelationships(store)
   ])
+  const outlines = outlineDocs.map(({ doc }) => doc)
   const sorted = chapters.filter((chapter) => chapter.box !== 'trash').sort((a, b) => a.order - b.order)
   const wanted = targetNumbers(input.goal)
   const matchesByNumber = wanted.map((number) => sorted.filter((chapter) => chapter.order === number || chapter.title.includes(`第${number}章`)))
@@ -90,7 +91,9 @@ export async function loadProjectContext(store: FileStore, input: { workspaceId:
   for (const item of selectedContents) sourceRefs.push(sourceRef(input.workspaceId, `chapters/${item.meta.id}.md`, item.meta.id, item.content))
   for (const item of nextChapters) sourceRefs.push(sourceRef(input.workspaceId, `chapters/${item.meta.id}.md`, item.meta.id, item.content))
   const targetIds = new Set(targetChapters.map((chapter) => chapter.id))
-  if (outlines.length) sourceRefs.push(...outlines.filter((outline) => !targetChapters.length || outline.kind !== 'chapter' || targetIds.has(outline.chapterId ?? '')).map((outline) => sourceRef(input.workspaceId, `outline/${outline.id}.md`, outline.id, outline.content)))
+  if (outlineDocs.length) sourceRefs.push(...outlineDocs
+    .filter(({ doc }) => !targetChapters.length || doc.kind !== 'chapter' || !doc.chapterId || targetIds.has(doc.chapterId))
+    .map(({ doc, fileName }) => sourceRef(input.workspaceId, `outline/${fileName}`, doc.id, doc.content)))
   if (characters.length) sourceRefs.push(sourceRef(input.workspaceId, 'characters/index', 'characters', JSON.stringify(characters.map(({ id, name, summary }) => ({ id, name, summary })))))
   if (settings.length) sourceRefs.push(sourceRef(input.workspaceId, 'settings/index', 'settings', JSON.stringify(settings)))
   if (events.length) sourceRefs.push(sourceRef(input.workspaceId, 'events/index', 'events', JSON.stringify(events.map(({ id, title, characterIds }) => ({ id, title, characterIds })))))

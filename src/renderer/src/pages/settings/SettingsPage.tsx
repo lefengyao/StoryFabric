@@ -1,6 +1,6 @@
-import { KeyRound, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Brain, KeyRound, Pencil, Plus, Settings2, Trash2, UserRound } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { ModelManagerView } from './ModelManagerView'
@@ -14,13 +14,14 @@ import { playCompletionSound } from '../../lib/completionSound'
 import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
 import { useSettings } from '../../stores/settingsStore'
 import { OrchestrationSettingsView } from './OrchestrationSettingsView'
+import { useWorkspace } from '../../stores/workspaceStore'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
 
 const PROTOCOL_HINTS: Record<Protocol, string> = {
-  openai: 'Base URL 通常以 /v1 结尾，如 https://api.deepseek.com/v1',
+  openai: 'Base URL 通常以 /v1 结尾；Gemini 的 OpenAI 兼容模式填写 https://generativelanguage.googleapis.com/v1beta/openai',
   anthropic: 'Base URL 如 https://api.anthropic.com',
-  gemini: 'Base URL 如 https://generativelanguage.googleapis.com'
+  gemini: 'Gemini 原生协议填写 https://generativelanguage.googleapis.com/v1beta；也接受主机根地址'
 }
 
 const TABS = [
@@ -39,6 +40,7 @@ export function SettingsPage(): React.ReactElement {
   const settings = useSettings((s) => s.settings)
   const reload = useSettings((s) => s.load)
   const update = useSettings((s) => s.update)
+  const workspace = useWorkspace((s) => s.summary)
   const previewAccent = useSettings((s) => s.previewAccent)
   // 两个取色器各有独立定时器：先改浅色再改深色时不会取消前者；离开页面时让定时器照常落盘。
   const accentCommit = useRef<ReturnType<typeof createKeyedDebounce<'accentColorLight' | 'accentColorDark'>> | null>(null)
@@ -52,6 +54,19 @@ export function SettingsPage(): React.ReactElement {
   const [savingProvider, setSavingProvider] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState<string | null>(null)
+  const [projectPrompt, setProjectPrompt] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const workspaceKey = workspace?.path ?? null
+    setPromptDraft(null)
+    setProjectPrompt(null)
+    if (!workspaceKey || !api.readInspirationDoc) return () => { cancelled = true }
+    void api.readInspirationDoc('system-prompt.md').then((content) => {
+      if (!cancelled) setProjectPrompt(content ?? '')
+    }).catch(() => { if (!cancelled) setProjectPrompt('') })
+    return () => { cancelled = true }
+  }, [workspace?.path])
 
   if (!settings) return <div className="flex h-full items-center justify-center"><Spinner /></div>
 
@@ -105,7 +120,7 @@ export function SettingsPage(): React.ReactElement {
   const modelOptions = settings.providers.filter((p) => p.models.length > 0)
   const modelValue = (ref?: { providerId: string; model: string }): string => (ref ? `${ref.providerId}::${ref.model}` : '')
   const modelOnChange =
-    (key: 'defaultChatModel' | 'quickActionModel') =>
+    (key: 'defaultChatModel') =>
     async (v: string): Promise<void> => {
       const [providerId, model] = v.split('::')
       await update({ [key]: { providerId, model } })
@@ -206,18 +221,6 @@ export function SettingsPage(): React.ReactElement {
                       ))}
                     </select>
                   </Field>
-                  <Field label="快捷操作模型（续写/润色等轻量任务）">
-                    <select value={modelValue(settings.quickActionModel)} onChange={(e) => void modelOnChange('quickActionModel')(e.target.value)} className="set-select">
-                      <option value="">请选择</option>
-                      {modelOptions.map((p) => (
-                        <optgroup key={p.id} label={p.name}>
-                          {p.models.map((m) => (
-                            <option key={m} value={`${p.id}::${m}`}>{m}</option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </Field>
                 </Card>
               </section>
             </>
@@ -228,18 +231,88 @@ export function SettingsPage(): React.ReactElement {
               <h2 className="mb-3 text-sm font-semibold">智能体</h2>
               <Card className="space-y-4 p-4">
                 <Field
+                  label="智能体温度"
+                  hint="数值越高越精准稳定，越低越发散创新。当前值会映射到模型原始 temperature。"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={settings.agentGeneration.agentTemperature}
+                      onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, agentTemperature: Number(e.target.value) } })}
+                      className="min-w-0 flex-1 accent-[var(--accent)]"
+                      aria-label="智能体温度"
+                    />
+                    <output className="w-12 rounded-md border border-line bg-panel px-2 py-1 text-center text-xs tabular-nums">{settings.agentGeneration.agentTemperature}</output>
+                  </div>
+                  <div className="mt-1 flex justify-between text-[11px] text-faint"><span>发散 / 创新</span><span>精准 / 稳定</span></div>
+                </Field>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={settings.agentGeneration.proseAlternativesEnabled}
+                    onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, proseAlternativesEnabled: e.target.checked } })}
+                    className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                  />
+                  <span><span className="block">正文生成提供多种方案</span><span className="mt-0.5 block text-xs text-muted">开启后，智能体在写正文时给出多个候选供你挑选；不会自动覆盖章节。</span></span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input type="checkbox" checked={settings.agentGeneration.polishAgentEnabled !== false} onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, polishAgentEnabled: e.target.checked } })} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" />
+                  <span><span className="block">AI 润色智能体</span><span className="mt-0.5 block text-xs text-muted">普通模式下对选定章节提出润色候选，确认后再写回。</span></span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input type="checkbox" checked={settings.agentGeneration.deAiAgentEnabled !== false} onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, deAiAgentEnabled: e.target.checked } })} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" />
+                  <span><span className="block">去 AI 风格智能体</span><span className="mt-0.5 block text-xs text-muted">普通模式下减少模板化表达，不改变事实和人物关系。</span></span>
+                </label>
+                <Field label="普通模式连续工具调用轮次上限" hint="默认 100，范围 1 至 1000。仅控制普通模式的连续工具循环，与编排模式的模型调用预算分开。">
+                  <Input
+                    key={settings.agentGeneration.maxToolRounds ?? 100}
+                    type="number"
+                    min={1}
+                    max={1000}
+                    step={1}
+                    defaultValue={settings.agentGeneration.maxToolRounds ?? 100}
+                    onBlur={(event) => {
+                      const input = event.currentTarget
+                      const current = settings.agentGeneration.maxToolRounds ?? 100
+                      const raw = input.value.trim()
+                      const value = raw ? Number(raw) : current
+                      const next = Number.isInteger(value) ? Math.max(1, Math.min(1000, value)) : current
+                      input.value = String(next)
+                      if (next !== current) {
+                        void update({ agentGeneration: { ...settings.agentGeneration, maxToolRounds: next } }).catch(() => {
+                          input.value = String(current)
+                        })
+                      }
+                    }}
+                    className="max-w-32"
+                  />
+                </Field>
+                <div className="flex flex-wrap items-center gap-4 text-sm">
+                  <Link to="/user" className="inline-flex min-h-9 items-center gap-2 text-accent hover:underline">
+                    <UserRound size={15} />用户偏好
+                  </Link>
+                  <Link to="/memory" className="inline-flex min-h-9 items-center gap-2 text-accent hover:underline">
+                    <Brain size={15} />项目记忆
+                  </Link>
+                </div>
+                <Field
                   label="自定义提示词"
-                  hint="将附加在内置系统提示词之后，用于注入文风偏好、世界观规则等；失焦时自动保存，留空则不附加"
+                  hint={workspace ? '仅保存到当前项目 docs/system-prompt.md；用于注入文风偏好、世界观规则等，失焦时自动保存。' : '请先打开项目；系统提示词按项目分别保存。'}
                 >
                   <textarea
-                    value={promptDraft ?? settings.customPrompt ?? ''}
+                    value={promptDraft ?? projectPrompt ?? ''}
                     onChange={(e) => setPromptDraft(e.target.value)}
                     onBlur={() => {
-                      if (promptDraft !== null) {
-                        void update({ customPrompt: promptDraft })
+                      if (promptDraft !== null && workspace && api.saveInspirationDoc) {
+                        const value = promptDraft
+                        void api.saveInspirationDoc('system-prompt.md', value).then(() => setProjectPrompt(value)).catch(() => undefined)
                         setPromptDraft(null)
                       }
                     }}
+                    disabled={!workspace || !api.saveInspirationDoc}
                     rows={6}
                     className="w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
                     placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
@@ -458,7 +531,7 @@ export function SettingsPage(): React.ReactElement {
             </section>
           )}
 
-          <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
+          <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.2.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
         </div>
       </div>
 

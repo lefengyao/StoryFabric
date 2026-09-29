@@ -1,10 +1,10 @@
 import type { MessageFile } from '../../shared/types'
 
-export const MAX_IMAGE_BYTES = 3 * 1024 * 1024
-export const MAX_TEXT_BYTES = 256 * 1024
+export const MAX_IMAGE_BYTES = 100 * 1024 * 1024
+export const MAX_TEXT_BYTES = 100 * 1024 * 1024
 export const MAX_FILES_PER_MESSAGE = 8
-export const MAX_MESSAGE_BYTES = 6 * 1024 * 1024
-export const MAX_SESSION_IMAGE_BYTES = 6 * 1024 * 1024
+export const MAX_MESSAGE_BYTES = 100 * 1024 * 1024
+export const MAX_SESSION_IMAGE_BYTES = 100 * 1024 * 1024
 
 const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
   '.txt': 'text/plain',

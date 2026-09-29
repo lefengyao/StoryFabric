@@ -1,36 +1,17 @@
 import type { UsageRecord } from '../../shared/types'
 import type { FileStore } from '../storage/fileStore'
-import { appendUsage, USAGE_LIMIT } from './usageLog'
+import { UsageArchiveStore, type UsageBucket } from './usageArchive'
 
 const USAGE_PATH = '.storyfabric/usage-records.json'
 
-function isUsageRecord(value: unknown): value is UsageRecord {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Record<string, unknown>
-  return typeof item.at === 'number' && typeof item.providerId === 'string' && typeof item.providerName === 'string' && typeof item.model === 'string' &&
-    typeof item.promptTokens === 'number' && typeof item.completionTokens === 'number' && typeof item.cachedTokens === 'number' && typeof item.cacheWriteTokens === 'number'
-}
-
 export class PortableUsageStore {
-  private writeQueue: Promise<void> = Promise.resolve()
+  private readonly archive: UsageArchiveStore
 
-  constructor(private readonly store: FileStore, private readonly path = USAGE_PATH) {}
-
-  async list(): Promise<UsageRecord[]> {
-    const text = await this.store.readText(this.path)
-    if (!text) return []
-    try {
-      const parsed = JSON.parse(text) as unknown
-      return Array.isArray(parsed) ? parsed.filter(isUsageRecord) : []
-    } catch { return [] }
+  constructor(store: FileStore, path = USAGE_PATH) {
+    this.archive = new UsageArchiveStore(store, path, '.storyfabric/usage-stats')
   }
 
-  async append(record: UsageRecord): Promise<void> {
-    const operation = this.writeQueue.catch(() => undefined).then(async () => {
-      const next = appendUsage(await this.list(), record, USAGE_LIMIT)
-      await this.store.writeText(this.path, JSON.stringify(next, null, 2))
-    })
-    this.writeQueue = operation
-    await operation
-  }
+  list(): Promise<UsageRecord[]> { return this.archive.list() }
+  listBuckets(): Promise<UsageBucket[]> { return this.archive.listBuckets() }
+  append(record: UsageRecord): Promise<void> { return this.archive.append(record) }
 }

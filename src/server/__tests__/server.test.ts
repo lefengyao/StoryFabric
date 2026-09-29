@@ -8,6 +8,7 @@ import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { initializeWorkspace } from '../../core/workspace/workspaceService'
 import { createStoryFabricServer, recordRecentWorkspaceBestEffort } from '../server'
 import { ServerSettingsStore } from '../settingsStore'
+import { WorkspaceRegistry } from '../workspaceRegistry'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -20,6 +21,40 @@ describe('linux web server', () => {
     await expect(recordRecentWorkspaceBestEffort(async () => { throw new Error('settings unavailable') })).resolves.toBe(false)
     await expect(recordRecentWorkspaceBestEffort(async () => undefined)).resolves.toBe(true)
   })
+
+  it('aborts a request body that stops making progress', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-request-timeout-'))
+    const workspaceRegistry = await WorkspaceRegistry.open(root)
+    const server = createStoryFabricServer({ accessKey: 'request-timeout-test-key', dataDir: root, workspaceRegistry, bodyIdleTimeoutMs: 1_000 })
+
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      const closed = new Promise<void>((resolve, reject) => {
+        const request = httpRequest(`http://127.0.0.1:${address.port}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-length': '3' }
+        })
+        const timer = setTimeout(() => {
+          request.destroy()
+          reject(new Error('request body timeout was not enforced'))
+        }, 5_000)
+        const finish = (): void => { clearTimeout(timer); resolve() }
+        request.once('error', finish)
+        request.once('close', finish)
+        request.write('{')
+      })
+      await closed
+      expect((await fetch(`http://127.0.0.1:${address.port}/healthz`)).status).toBe(200)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    }
+  }, 15_000)
 
   it('rolls back an imported workspace when the client disconnects after registry publish', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-import-cancel-'))
@@ -113,6 +148,16 @@ describe('linux web server', () => {
       expect(listed.status).toBe(200)
       const workspaces = await listed.json() as Array<{ path: string; name: string }>
       expect(workspaces).toMatchObject([{ path: 'default', name: '服务测试' }])
+
+      // Global settings must be available immediately after login. The web
+      // shell loads them before a workspace is selected.
+      const settingsBeforeOpen = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookie ?? '' },
+        body: JSON.stringify({ method: 'getSettings', args: [] })
+      })
+      expect(settingsBeforeOpen.status).toBe(200)
+      expect((await settingsBeforeOpen.json() as { result: { providers: unknown[] } }).result.providers).toEqual([])
 
       const opened = await fetch(`${base}/api/workspaces/default/open`, { method: 'POST', headers: { cookie: cookie ?? '' } })
       expect(opened.status).toBe(200)

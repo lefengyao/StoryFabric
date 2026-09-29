@@ -3,6 +3,13 @@ export interface BudgetOptions {
   maxEstimatedTokens: number
 }
 
+export interface BudgetSeed {
+  callsStarted?: number
+  callsSettled?: number
+  actualTokens?: number
+  estimatedTokens?: number
+}
+
 export interface ReservationInput {
   callId: string
   estimatedInputTokens: number
@@ -55,9 +62,13 @@ export class RunBudget {
   private estimatedTokens = 0
   private reservedTokens = 0
 
-  constructor(private readonly options: BudgetOptions) {
+  constructor(private readonly options: BudgetOptions, seed: BudgetSeed = {}) {
     if (!Number.isInteger(options.maxCalls) || options.maxCalls < 1) throw new Error('maxCalls 必须是正整数')
     if (!Number.isInteger(options.maxEstimatedTokens) || options.maxEstimatedTokens < 1) throw new Error('maxEstimatedTokens 必须是正整数')
+    this.callsStarted = Math.max(0, Math.floor(seed.callsStarted ?? 0))
+    this.callsSettled = Math.max(0, Math.min(this.callsStarted, Math.floor(seed.callsSettled ?? this.callsStarted)))
+    this.actualTokens = Math.max(0, Math.floor(seed.actualTokens ?? 0))
+    this.estimatedTokens = Math.max(0, Math.floor(seed.estimatedTokens ?? 0))
   }
 
   async reserve(input: ReservationInput): Promise<ReservationResult> {

@@ -1,6 +1,7 @@
 import { getSessionApprovalPolicy } from '../../../core/workspace/sessionPreferences'
-import type { AgentBudgetSnapshot, ApprovalPolicy, ChatMessage, ChatSession, OrchestrationRunRecord, SessionModelPreference } from '../../../shared/types'
+import type { AgentBudgetSnapshot, ApprovalPolicy, ChatMessage, ChatSession, OrchestrationRunRecord, PendingChange, SessionModelPreference } from '../../../shared/types'
 import type { CreativePreferences } from '../../../shared/creative'
+import type { AgentQuestion, SkillCandidate } from '../../../shared/agentQuestions'
 
 export interface SessionScopePatch {
   activeId: string
@@ -13,11 +14,16 @@ export interface SessionScopePatch {
   streamingText: string
   liveTimeline: []
   liveTools: []
+  liveSkillEvents: []
+  liveRuleEvents: []
   contextSummary?: string
   contextSummaryThrough?: string
   contextSummaryUpdatedAt?: number
   contextCompressing: false
-  pendingChange: null
+  pendingQuestion: AgentQuestion | null
+  pendingSkillCandidate: SkillCandidate | null
+  waitingRunId: string | null
+  pendingChange: PendingChange | null
   attachments: []
   messageFiles: []
   error: null
@@ -35,11 +41,16 @@ export interface WorkspaceScopePatch {
   streaming: false
   liveTimeline: []
   liveTools: []
+  liveSkillEvents: []
+  liveRuleEvents: []
   contextSummary: undefined
   contextSummaryThrough: undefined
   contextSummaryUpdatedAt: undefined
   contextCompressing: false
   contextCompression: null
+  pendingQuestion: null
+  pendingSkillCandidate: null
+  waitingRunId: null
   pendingChange: null
   lastPendingChange: null
   lastAppliedChange: null
@@ -53,18 +64,23 @@ export function sessionScopePatch(session: ChatSession): SessionScopePatch {
     activeId: session.id,
     messages: session.messages,
     approvalPolicy: getSessionApprovalPolicy(session),
-    ...(session.creativePreferences ? { creativePreferences: session.creativePreferences } : {}),
+    creativePreferences: session.creativePreferences,
     modelPreferences: session.modelPreferences ?? [],
     budget: session.orchestrationRuns?.at(-1)?.budget ?? null,
     orchestrationRuns: session.orchestrationRuns ?? [],
     streamingText: '',
     liveTimeline: [],
     liveTools: [],
-    ...(session.contextSummary ? { contextSummary: session.contextSummary } : {}),
-    ...(session.contextSummaryThrough ? { contextSummaryThrough: session.contextSummaryThrough } : {}),
-    ...(session.contextSummaryUpdatedAt ? { contextSummaryUpdatedAt: session.contextSummaryUpdatedAt } : {}),
+    liveSkillEvents: [],
+    liveRuleEvents: [],
+    contextSummary: session.contextSummary,
+    contextSummaryThrough: session.contextSummaryThrough,
+    contextSummaryUpdatedAt: session.contextSummaryUpdatedAt,
     contextCompressing: false,
-    pendingChange: null,
+    pendingQuestion: null,
+    pendingSkillCandidate: null,
+    waitingRunId: null,
+    pendingChange: session.pendingChange ?? null,
     attachments: [],
     messageFiles: [],
     error: null
@@ -84,11 +100,16 @@ export function workspaceScopePatch(): WorkspaceScopePatch {
     streaming: false,
     liveTimeline: [],
     liveTools: [],
+    liveSkillEvents: [],
+    liveRuleEvents: [],
     contextSummary: undefined,
     contextSummaryThrough: undefined,
     contextSummaryUpdatedAt: undefined,
     contextCompressing: false,
     contextCompression: null,
+    pendingQuestion: null,
+    pendingSkillCandidate: null,
+    waitingRunId: null,
     pendingChange: null,
     lastPendingChange: null,
     lastAppliedChange: null,

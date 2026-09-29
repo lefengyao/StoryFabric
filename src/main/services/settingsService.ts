@@ -16,9 +16,10 @@ import type {
 import type { FetchModelsInput } from '../../shared/api'
 import { pruneModelSettings } from '../../core/llm/modelCatalog'
 import { keyPreview } from '../../shared/keyPreview'
-import { markRecentWorkspace } from '../../shared/recentWorkspaces'
+import { forgetRecentWorkspace, markRecentWorkspace } from '../../shared/recentWorkspaces'
 import { throwIfWorkspaceRequestAborted } from '../../shared/api'
 import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../../shared/creative'
+import { DEFAULT_AGENT_GENERATION_PREFERENCES, normalizeAgentGenerationPreferences } from '../../shared/agentGeneration'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -42,6 +43,7 @@ function getSafeStorage(): SafeStorageLike | null {
 export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
   orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
+  agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -57,6 +59,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sendShortcut: 'enter',
   chatDensity: 'comfortable',
   chatFontSize: 14
+}
+
+function defaultSettings(): AppSettings {
+  return { ...DEFAULT_SETTINGS, agentGeneration: normalizeAgentGenerationPreferences({}) }
 }
 
 const DEFAULT_CHAT_FONT_SIZE = 14
@@ -115,6 +121,7 @@ function normalizeSettings(raw: unknown): AppSettings {
     recentWorkspaces,
     recentWorkspaceOpenedAt,
     orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
+    agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration),
     chatFontSize: normalizeChatFontSize(parsed.chatFontSize)
   }
 }
@@ -158,11 +165,22 @@ export class SettingsService {
     return this.serialized(() => this.loadRaw())
   }
 
+  consumeLegacyCustomPrompt(migrate: (prompt: string) => Promise<void>): Promise<string | undefined> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      const prompt = settings.customPrompt.trim()
+      if (!prompt) return undefined
+      await migrate(prompt)
+      await this.saveRaw({ ...settings, customPrompt: '' })
+      return prompt
+    })
+  }
+
   private async loadRaw(): Promise<AppSettings> {
     try {
       return normalizeSettings(JSON.parse(await fs.readFile(this.filePath, 'utf-8')))
     } catch {
-      return { ...DEFAULT_SETTINGS }
+      return defaultSettings()
     }
   }
 
@@ -203,6 +221,16 @@ export class SettingsService {
         if (signal?.aborted) await this.saveRaw(settings)
         throw error
       }
+      return next
+    })
+  }
+
+  forgetRecentWorkspace(path: string): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      const recent = forgetRecentWorkspace(settings, path)
+      const next = { ...settings, ...recent, lastWorkspacePath: settings.lastWorkspacePath === path ? undefined : settings.lastWorkspacePath }
+      await this.saveRaw(next)
       return next
     })
   }
@@ -249,7 +277,6 @@ export class SettingsService {
       const providers = settings.providers.filter((p) => p.id !== id)
       const patch: Partial<AppSettings> = { providers }
       if (settings.defaultChatModel?.providerId === id) patch.defaultChatModel = undefined
-      if (settings.quickActionModel?.providerId === id) patch.quickActionModel = undefined
       const next = { ...settings, ...patch }
       await this.saveRaw(next)
       return next
@@ -259,6 +286,7 @@ export class SettingsService {
   toPublic(settings: AppSettings): PublicAppSettings {
     return {
       ...settings,
+      agentGeneration: normalizeAgentGenerationPreferences(settings.agentGeneration),
       providers: settings.providers.map(
         (p): ProviderPublic => {
           const plain = decryptApiKey(p.apiKeyEncrypted)

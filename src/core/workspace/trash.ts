@@ -4,6 +4,7 @@ import { normalizeRelativePath } from '../storage/fileStore'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 import { commitTextChanges, type JournalTextChange } from './mutationJournal'
 import { buildEventGraph } from './eventGraph'
+import { recordChapterWriting } from '../usage/writingStats'
 
 const INDEX_PATH = '.storyfabric/trash/index.json'
 const TRASH_KINDS = new Set<EntityKind>(['character', 'outline', 'event', 'chapter', 'setting', 'note'])
@@ -236,6 +237,18 @@ export async function restoreFromTrash(store: FileStore, id: string, placement?:
   } else await store.move(source, entry.originalPath)
   await restoreRelatedRelationships(store, entry.relatedRelationships)
   await writeIndex(store, entries.filter((item) => item.id !== id))
+  if (entry.kind === 'chapter') {
+    const raw = await store.readText(entry.originalPath)
+    if (raw !== null) {
+      const content = parseFrontMatter(raw).content.replace(/^\n+/, '')
+      let totalAfter = 0
+      for (const path of await listMarkdown(store, 'chapters')) {
+        const chapter = await store.readText(path)
+        if (chapter !== null) totalAfter += parseFrontMatter(chapter).content.replace(/^\n+/, '').replace(/\s/g, '').length
+      }
+      await recordChapterWriting(store, '', content, totalAfter)
+    }
+  }
 }
 
 export async function purgeTrashEntry(store: FileStore, id: string): Promise<void> {

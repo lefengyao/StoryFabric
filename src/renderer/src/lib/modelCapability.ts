@@ -14,9 +14,11 @@ export function resolveCapability(model: string, settings?: ModelSettings): { re
 
 export function resolveContextWindow(model: string, settings?: ModelSettings): { contextTokens: number; maxOutputTokens: number } {
   const profile = profileForModel(model)
+  const positive = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
   return {
-    contextTokens: settings?.contextTokens ?? profile.contextTokens,
-    maxOutputTokens: settings?.maxOutputTokens ?? profile.maxOutputTokens
+    contextTokens: positive(settings?.contextTokens, profile.contextTokens),
+    maxOutputTokens: positive(settings?.maxOutputTokens, profile.maxOutputTokens)
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAccessKeyVerifier, createSessionStore } from '../auth'
+import { createAccessKeyVerifier, createAuthAttemptTracker, createSessionStore } from '../auth'
 
 describe('server authentication', () => {
   it('accepts only the configured access key', () => {
@@ -8,6 +8,23 @@ describe('server authentication', () => {
     expect(verifier.verify('correct-horse-battery-staple')).toBe(true)
     expect(verifier.verify('wrong-key')).toBe(false)
     expect(verifier.verify('')).toBe(false)
+  })
+
+  it('keeps failed-login tracking bounded and removes expired entries', () => {
+    let now = 1_000
+    const tracker = createAuthAttemptTracker({ windowMs: 100, maxEntries: 2, now: () => now })
+
+    tracker.recordFailure('first')
+    tracker.recordFailure('second')
+    expect(tracker.size()).toBe(2)
+
+    tracker.recordFailure('third')
+    expect(tracker.size()).toBe(2)
+    expect(tracker.isBlocked('first')).toBe(false)
+
+    now += 101
+    expect(tracker.isBlocked('second')).toBe(false)
+    expect(tracker.size()).toBe(0)
   })
 
   it('issues and expires server sessions', () => {
@@ -23,5 +40,16 @@ describe('server authentication', () => {
 
     now += 101
     expect(sessions.has(token)).toBe(false)
+  })
+
+  it('bounds active session storage while retaining the newest sessions', () => {
+    const sessions = createSessionStore({ maxEntries: 2 })
+    const first = sessions.issue()
+    const second = sessions.issue()
+    const third = sessions.issue()
+
+    expect(sessions.has(first)).toBe(false)
+    expect(sessions.has(second)).toBe(true)
+    expect(sessions.has(third)).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
 /** StoryFabric 共享领域类型（主进程 / 渲染进程共用） */
 
-import type { RequestContextUsage, SkillApplicationEvent, ToolReceipt } from './agentEvidence'
+import type { RequestContextUsage, RuleApplicationEvent, SkillApplicationEvent, ToolReceipt } from './agentEvidence'
 import type { AgentQuestion, PlanningGate, SkillCandidate } from './agentQuestions'
 
 export type EntityKind = 'character' | 'outline' | 'event' | 'chapter' | 'setting' | 'note' | 'projectDoc'
@@ -76,7 +76,7 @@ export interface StoryEvent {
   content: string
 }
 
-export type ChapterStatus = 'draft' | 'revised' | 'final'
+export type ChapterStatus = 'draft' | 'revised' | 'body' | 'final'
 
 export interface ChapterMeta {
   id: string
@@ -147,6 +147,7 @@ export interface SettingDoc {
   title: string
   category: SettingCategory
   tags: string[]
+  parentId?: string
   content: string
 }
 
@@ -186,6 +187,7 @@ export interface TrashEntry {
 }
 
 import type { CreativePreferences, OrchestrationPreferences } from './creative'
+import type { AgentGenerationPreferences } from './agentGeneration'
 
 /* ---------------- 应用设置 ---------------- */
 
@@ -199,9 +201,10 @@ export interface ModelRef {
 export interface AppSettings {
   providers: ProviderStored[]
   defaultChatModel?: ModelRef
-  quickActionModel?: ModelRef
   /** 默认的智能体编排计划；会话发送时从这里读取阶段、模型和预算。 */
   orchestrationDefaults: OrchestrationPreferences
+  /** 面向产品的智能体生成偏好，不属于单个模型的供应商参数。 */
+  agentGeneration: AgentGenerationPreferences
   theme: 'light' | 'dark' | 'system'
   recentWorkspaces: string[]
   recentWorkspaceOpenedAt: Record<string, string>
@@ -322,6 +325,15 @@ export interface ToolCallData {
   id: string
   name: string
   argsJson: string
+  /** Gemini thought signature required when replaying a thinking function call. */
+  thoughtSignature?: string
+}
+
+/** Attached to the final assistant message of a run and saved with the session. */
+export interface RunActivitySummary {
+  skills: Array<{ packageId: string; skillId: string; version: string; stages: string[] }>
+  tools: Array<{ name: string; count: number; failed: number }>
+  rules: Array<{ id: string; source: string; target: string; key: string }>
 }
 
 export interface ChatMessage {
@@ -337,11 +349,19 @@ export interface ChatMessage {
   thinkingBlocks?: unknown[]
   files?: MessageFile[]
   runSettings?: { providerId: string; model: string; reasoning: ReasoningLevel }
+  /** 普通模式专用智能体的可见运行身份。 */
+  agentIdentity?: { id: 'polish' | 'anti-ai'; label: string; model: string }
+  /** Evidence of skills, tools and rules used to produce this completed reply. */
+  runActivity?: RunActivitySummary
 }
 
 /** 可持久化的编排运行摘要；只保存候选产物，不代表已写回工作区。 */
 export interface OrchestrationRunRecord {
   runId: string
+  /** 本次执行由哪个非终态 checkpoint 恢复；新运行仍使用新的 runId。 */
+  resumedFromRunId?: string
+  /** 原始用户目标；旧 checkpoint 可能尚无此字段。 */
+  goal?: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused_budget'
   sourceRevision: string | number
   originalText: string
@@ -369,6 +389,7 @@ export interface OrchestrationRunRecord {
   toolReceipts?: ToolReceipt[]
   requestContexts?: RequestContextUsage[]
   skillEvents?: SkillApplicationEvent[]
+  ruleEvents?: RuleApplicationEvent[]
   error?: string
   currentStage?: string
   waitingQuestion?: AgentQuestion
@@ -432,6 +453,7 @@ export interface Attachment {
   kind: EntityKind
   id: string
   label: string
+  purpose?: 'chapter-text-candidate' | 'chapter-polish-candidate' | 'chapter-de-ai-candidate'
 }
 
 export interface RunAgentRequest {
@@ -439,6 +461,8 @@ export interface RunAgentRequest {
   message: string
   providerId: string
   model: string
+  /** 本次对话使用的联网搜索服务。缺省时关闭。 */
+  webSearchMode?: 'off' | 'auto' | 'native' | 'free' | 'self-hosted'
   attachments?: Attachment[]
   files?: MessageFile[]
   reasoning?: ReasoningLevel
@@ -453,6 +477,8 @@ export interface RunAgentRequest {
   goalAction?: 'continue' | 'replan'
   /** 本次运行冻结的审批策略；缺省时回落为严格审批。 */
   approvalPolicy?: ApprovalPolicy
+  /** 从同一会话中指定的非终态编排 checkpoint 继续；不会重复执行已完成阶段。 */
+  resumeOrchestrationRunId?: string
   waitingQuestion?: AgentQuestion
   skillCandidates?: SkillCandidate[]
   planningGate?: PlanningGate
@@ -478,7 +504,13 @@ export interface PendingChange {
   stageId?: string
 }
 
-export type AgentMode = 'normal' | 'goal'
+/** 已落盘变更的轻量身份；避免在运行事件中重复发送完整文档正文。 */
+export interface AppliedChange {
+  entityKind: EntityKind | 'relationship'
+  entityId: string
+}
+
+export type AgentMode = 'normal' | 'orchestration' | 'goal' | 'inspiration'
 export type ApprovalPolicy = 'strict' | 'delete-confirm' | 'auto'
 export type GoalStatus = 'planning' | 'running' | 'awaiting-approval' | 'validating' | 'completed' | 'needs-attention' | 'cancelled'
 export type GoalTaskStatus = 'pending' | 'running' | 'awaiting-approval' | 'validating' | 'completed' | 'failed' | 'skipped'
@@ -524,7 +556,7 @@ export type AgentEvent =
   | { type: 'tool-done'; callId: string; ok: boolean; resultPreview: string }
   | { type: 'pending-change'; change: PendingChange }
   | { type: 'change-applied'; changeId: string; approved: boolean }
-  | { type: 'change-result'; changeId: string; status: 'applied' | 'rejected' | 'conflict' | 'failed'; message: string }
+  | { type: 'change-result'; changeId: string; status: 'applied' | 'rejected' | 'conflict' | 'failed'; message: string; appliedChange?: AppliedChange }
   | { type: 'goal-plan'; goal: GoalRun }
   | { type: 'goal-task'; goalId: string; task: GoalTask }
   | { type: 'goal-validation'; goalId: string; taskId: string; passed: boolean; reason: string }
@@ -532,13 +564,14 @@ export type AgentEvent =
   | { type: 'request-context'; usage: RequestContextUsage }
   | { type: 'tool-receipt'; receipt: ToolReceipt }
   | { type: 'skill-activity'; activity: SkillApplicationEvent }
+  | { type: 'rule-activity'; activity: RuleApplicationEvent }
   | { type: 'run-paused'; reason: 'budget' | 'cancelled' | 'error'; message: string; stageId?: string }
   | { type: 'agent-question'; question: AgentQuestion }
   | { type: 'skill-candidate'; candidate: SkillCandidate }
   | { type: 'waiting-user'; questionId: string; reason?: string; planningGate?: PlanningGate }
   | { type: 'waiting-user'; candidateId: string; reason?: string; planningGate?: PlanningGate }
   | { type: 'context-compression-start'; beforeTokens: number; contextTokens: number }
-  | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number }
+  | { type: 'context-compressed'; beforeTokens: number; afterTokens: number; summarizedMessages: number; throughMessageId: string; summaryUpdatedAt: number; summary?: string }
   | { type: 'error'; message: string; stageId?: string; code?: string; recoverable?: boolean }
   | { type: 'done'; session?: ChatSession }
 
@@ -581,6 +614,8 @@ export interface ToolFailure {
 export interface UsageRecord {
   /** 调用完成时间（epoch ms） */
   at: number
+  /** 所属项目的工作区路径或服务端工作区 ID；旧全局记录可能缺失。 */
+  workspaceId?: string
   providerId: string
   /** 供应商显示名快照：供应商被删除后仍可读 */
   providerName: string
@@ -605,106 +640,3 @@ export interface UsageRecord {
 
 /** 防止模型进入病态循环的安全上限；正常批量改稿远低于此值。 */
 export const MAX_TOOL_ROUNDS = 100
-
-/* ---------------- 远程部署（仅桌面端） ---------------- */
-
-export type DeployStep = 'connect' | 'probe' | 'upload' | 'build' | 'run' | 'healthcheck'
-export type DeployStepStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
-
-/** 单步进度（主进程 → 渲染进程） */
-export interface DeployProgress {
-  runId: string
-  step: DeployStep
-  status: DeployStepStatus
-  message?: string
-  output?: string
-  at: number
-}
-
-export interface DeployProbeResult {
-  os: string
-  arch: string
-  distro?: string
-  isRoot: boolean
-  /** `sudo -n true` 成功（免密 sudo） */
-  passwordlessSudo: boolean
-  dockerVersion?: string
-  /** docker 探测失败时的 stderr，用于区分「未安装 / 无权限 / 守护进程未运行」 */
-  dockerError?: string
-  /** 非 root 且 sudo 不可用时的 stderr（例如密码错误 / 不在 sudoers） */
-  sudoError?: string
-  portFree: boolean
-  portOwner?: string
-  /** 服务器上现有 storyfabric 容器的镜像 tag */
-  installedImage?: string
-}
-
-export interface DeployConnectionInput {
-  targetId?: string
-  host: string
-  port: number
-  username: string
-  /** 缺省表示使用已保存密码 */
-  password?: string
-}
-
-export interface DeployTestResult {
-  fingerprint: string
-  probe: DeployProbeResult
-  /** 已保存目标且指纹不一致 */
-  fingerprintChanged: boolean
-  /** 本地部署包版本，用于和服务器上实际镜像比对 */
-  bundleVersion: string
-}
-
-export interface DeployRunResult {
-  ok: boolean
-  version?: string
-  url?: string
-  accessKey?: string
-  failedStep?: DeployStep
-  error?: string
-}
-
-export interface DeployTargetStored {
-  id: string
-  label: string
-  host: string
-  port: number
-  username: string
-  passwordEncrypted: string
-  hostKeyFingerprint: string
-  installDir: string
-  servicePort: number
-  baseImage: string
-  bundleSource: 'bundled' | 'url'
-  os: 'linux'
-  arch?: string
-  distro?: string
-  dockerVersion?: string
-  installedVersion?: string
-  /** 部署用户是否为 root（决定后续命令是否加 sudo） */
-  isRoot?: boolean
-  lastDeployedAt?: number
-  lastStatus?: 'ok' | 'failed'
-  lastError?: string
-}
-
-export type DeployTargetPublic = Omit<DeployTargetStored, 'passwordEncrypted'> & {
-  hasPassword: boolean
-  /** 密码存储方式：系统级加密 / 降级明文 / 未保存 */
-  passwordStorage: 'encrypted' | 'plain' | 'none'
-}
-
-export interface DeployTargetInput {
-  id?: string
-  label: string
-  host: string
-  port: number
-  username: string
-  password?: string
-  hostKeyFingerprint?: string
-  installDir: string
-  servicePort: number
-  baseImage: string
-}

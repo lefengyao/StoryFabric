@@ -1,12 +1,13 @@
 import type { ChapterDoc, OutlineDoc } from '../../shared/types'
 import type { FileStore } from '../storage/fileStore'
-import { getChapterBody, listChapters, listOutline } from '../workspace/entityStore'
-import { resourceRevision } from '../workspace/resourceRevision'
+import { getChapterBody, listChapters, loadOutlineDocuments, serializeChapter, serializeOutlineDoc } from '../workspace/entityStore'
+import { contentRevision } from '../workspace/resourceRevision'
 
 export interface DocumentSlice {
   id: string
   title: string
   sourcePath: string
+  writeRevision: string
   revision: string
   offset: number
   content: string
@@ -53,11 +54,11 @@ function sliceDocument(input: {
   title: string
   sourcePath: string
   content: string
-  revision: string
+  writeRevision: string
 }, options: ReadSliceOptions): DocumentSlice {
   const offset = boundedInteger(options.offset, 0, 'offset', 0, Number.MAX_SAFE_INTEGER)
   const maxChars = boundedInteger(options.maxChars, DEFAULT_MAX_CHARS, 'maxChars', 1, MAX_MAX_CHARS)
-  if (options.expectedRevision && options.expectedRevision !== input.revision) {
+  if (options.expectedRevision && options.expectedRevision !== input.writeRevision) {
     throw new DocumentReaderError('SOURCE_CHANGED', '源文档已变化，请从第一页重新读取')
   }
   if (offset > input.content.length) {
@@ -70,7 +71,8 @@ function sliceDocument(input: {
     id: input.id,
     title: input.title,
     sourcePath: input.sourcePath,
-    revision: input.revision,
+    writeRevision: input.writeRevision,
+    revision: input.writeRevision,
     offset,
     content,
     returnedChars: content.length,
@@ -80,12 +82,12 @@ function sliceDocument(input: {
   }
 }
 
-function chapterRevision(chapter: ChapterDoc, chapterPath: string): string {
-  return resourceRevision(chapterPath, chapter.id, chapter.title, chapter.volumeId ?? '', chapter.box ?? '', chapter.order, chapter.status ?? '', chapter.content)
+function chapterRevision(chapter: ChapterDoc): string {
+  return contentRevision(serializeChapter(chapter))
 }
 
-function outlineRevision(outline: OutlineDoc, sourcePath: string): string {
-  return resourceRevision(sourcePath, outline.id, outline.title, outline.kind ?? 'total', outline.chapterId ?? '', outline.order, outline.content)
+function outlineRevision(outline: OutlineDoc): string {
+  return contentRevision(serializeOutlineDoc(outline))
 }
 
 export async function readChapterSlice(
@@ -111,7 +113,7 @@ export async function readChapterSlice(
     title: meta.title,
     sourcePath,
     content,
-    revision: chapterRevision({ ...meta, content } as ChapterDoc, sourcePath)
+    writeRevision: chapterRevision({ ...meta, content } as ChapterDoc)
   }, options)
 }
 
@@ -120,27 +122,25 @@ export async function readOutlineSlice(
   ref: { outlineId?: string; chapterId?: string; kind?: 'total' | 'chapter' },
   options: ReadSliceOptions = {}
 ): Promise<DocumentSlice> {
-  const outlines = await listOutline(store)
+  const outlines = await loadOutlineDocuments(store)
   let matches = ref.outlineId
-    ? outlines.filter((outline) => outline.id === ref.outlineId)
+    ? outlines.filter(({ doc }) => doc.id === ref.outlineId)
     : ref.chapterId
-      ? outlines.filter((outline) => outline.kind === 'chapter' && outline.chapterId === ref.chapterId)
+      ? outlines.filter(({ doc }) => doc.kind === 'chapter' && doc.chapterId === ref.chapterId)
       : ref.kind
-        ? outlines.filter((outline) => (outline.kind ?? 'total') === ref.kind)
+        ? outlines.filter(({ doc }) => (doc.kind ?? 'total') === ref.kind)
         : []
   if (!matches.length) throw new DocumentReaderError('NOT_FOUND', '未找到大纲文档')
   if (matches.length > 1) {
-    throw new DocumentReaderError('AMBIGUOUS_TARGET', `大纲目标存在多个候选：${matches.map((outline) => `${outline.id} ${outline.title}`).join('；')}`)
+    throw new DocumentReaderError('AMBIGUOUS_TARGET', `大纲目标存在多个候选：${matches.map(({ doc }) => `${doc.id} ${doc.title}`).join('；')}`)
   }
-  const outline = matches[0]
-  const sourcePath = outline.kind === 'chapter'
-    ? `outline/chapters/${outline.chapterId ?? 'unknown'}/${outline.id}.md`
-    : `outline/total/${outline.id}.md`
+  const { doc: outline, fileName } = matches[0]
+  const sourcePath = `outline/${fileName}`
   return sliceDocument({
     id: outline.id,
     title: outline.title,
     sourcePath,
     content: outline.content,
-    revision: outlineRevision(outline, sourcePath)
+    writeRevision: outlineRevision(outline)
   }, options)
 }

@@ -12,3 +12,13 @@ export function resourceRevision(...parts: Array<string | number | boolean | nul
 export function contentRevision(content: string): string {
   return resourceRevision(content)
 }
+
+/** Stable revision for binary workspace documents without materializing an encoded copy. */
+export function bytesContentRevision(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5
+  for (const byte of bytes) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `b1-${(hash >>> 0).toString(36)}-${bytes.byteLength.toString(36)}`
+}

@@ -10,3 +10,7 @@ export function canSwitchDocument({ currentId, targetId, dirty, confirmDiscard }
   if (!targetId || currentId === targetId || !dirty) return true
   return confirmDiscard()
 }
+
+export function shouldFocusEditorOnDocumentSwitch(previousId: string | undefined, nextId: string | undefined): boolean {
+  return Boolean(previousId && nextId && previousId !== nextId)
+}

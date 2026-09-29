@@ -13,7 +13,13 @@ const doubles = vi.hoisted(() => ({
   loadSummary: vi.fn(),
   importWorkspaceArchive: vi.fn(),
   setWorkspaceName: vi.fn(),
-  fetchProviderModels: vi.fn()
+  fetchProviderModels: vi.fn(),
+  clipboardRead: vi.fn(),
+  clipboardWrite: vi.fn(),
+  readText: vi.fn(),
+  initializeWorkspace: vi.fn(),
+  pickDirectory: vi.fn(),
+  safMkdir: vi.fn()
 }))
 
 vi.mock('@capacitor/preferences', () => ({
@@ -28,6 +34,13 @@ vi.mock('@capacitor/filesystem', () => ({
   Filesystem: { mkdir: doubles.mkdir }
 }))
 
+vi.mock('@capacitor/clipboard', () => ({
+  Clipboard: {
+    read: doubles.clipboardRead,
+    write: doubles.clipboardWrite
+  }
+}))
+
 vi.mock('../capacitorFileStore', () => ({
   CapacitorFileStore: class FakeCapacitorFileStore {
     constructor(readonly path: string) {}
@@ -35,12 +48,29 @@ vi.mock('../capacitorFileStore', () => ({
     exists(path: string): Promise<boolean> { return doubles.exists(this.path, path) }
     ensureDir(path: string): Promise<void> { return doubles.ensureDir(this.path, path) }
     remove(path: string): Promise<void> { return doubles.remove(this.path, path) }
+    readText(path: string): Promise<string | null> { return doubles.readText(this.path, path) }
   }
 }))
 
+vi.mock('../safFileStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../safFileStore')>()
+  return {
+    ...actual,
+    documentTree: { pickDirectory: doubles.pickDirectory, mkdir: doubles.safMkdir },
+    SafFileStore: class FakeSafFileStore {
+      constructor(readonly path: string) {}
+      listDirs(subdir: string): Promise<string[]> { return doubles.listDirs(this.path, subdir) }
+      exists(path: string): Promise<boolean> { return doubles.exists(this.path, path) }
+      ensureDir(path: string): Promise<void> { return doubles.ensureDir(this.path, path) }
+      remove(path: string): Promise<void> { return doubles.remove(this.path, path) }
+      readText(path: string): Promise<string | null> { return doubles.readText(this.path, path) }
+    }
+  }
+})
+
 vi.mock('../../../../core/workspace/workspaceService', () => ({
   deleteVolume: vi.fn(),
-  initializeWorkspace: vi.fn(),
+  initializeWorkspace: doubles.initializeWorkspace,
   listVolumes: vi.fn(),
   loadSummary: doubles.loadSummary,
   loadWorkspaceListItem: doubles.loadWorkspaceListItem,
@@ -63,6 +93,7 @@ vi.mock('../../../../core/llm', async (importOriginal) => ({
 }))
 
 import { AndroidPlatformApi, normalizeAndroidWorkspacePath } from '../androidApi'
+import { makeSafPath } from '../safFileStore'
 
 function storedSettings(value: unknown): void {
   doubles.preferencesGet.mockResolvedValue({ value: JSON.stringify(value) })
@@ -91,6 +122,25 @@ beforeEach(() => {
   doubles.importWorkspaceArchive.mockResolvedValue(undefined)
   doubles.setWorkspaceName.mockResolvedValue(undefined)
   doubles.fetchProviderModels.mockResolvedValue([])
+  doubles.clipboardRead.mockResolvedValue({ type: 'text/plain', value: '' })
+  doubles.clipboardWrite.mockResolvedValue(undefined)
+  doubles.initializeWorkspace.mockResolvedValue(undefined)
+  doubles.pickDirectory.mockResolvedValue({ uri: null })
+  doubles.safMkdir.mockResolvedValue(undefined)
+  doubles.readText.mockResolvedValue(null)
+})
+
+it('collects usage from every Android project and attributes legacy project-local records', async () => {
+  doubles.listDirs.mockResolvedValue(['alpha', 'beta'])
+  doubles.readText.mockImplementation(async (root: string, path: string) => {
+    if (path !== '.storyfabric/usage-records.json') return null
+    const promptTokens = root === 'workspaces/alpha' ? 10 : root === 'workspaces/beta' ? 20 : 0
+    return JSON.stringify([{ at: promptTokens, providerId: 'p', providerName: 'P', model: 'm', promptTokens, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }])
+  })
+  const records = await freshApi().getUsageRecords()
+  expect(records.map((record) => [record.workspaceId, record.promptTokens])).toEqual([
+    ['workspaces/alpha', 10], ['workspaces/beta', 20]
+  ])
 })
 
 afterEach(() => {
@@ -134,13 +184,13 @@ describe('normalizeAndroidWorkspacePath', () => {
 })
 
 describe('AndroidPlatformApi capabilities', () => {
-  it('reports the creative rules and sensor-landscape capabilities it actually implements', async () => {
+  it('reports the creative rules and flexible orientation capabilities it actually implements', async () => {
     await expect(freshApi().getCapabilities()).resolves.toMatchObject({
       skills: true,
       rules: true,
       orchestration: true,
       budgets: true,
-      orientation: 'sensor-landscape'
+      orientation: 'best-effort'
     })
   })
 })
@@ -327,6 +377,21 @@ describe('AndroidPlatformApi recent workspaces', () => {
     ])
   })
 
+  it('renames an Android project and forgets its recent entry without removing its files', async () => {
+    let preferencesValue = JSON.stringify({ recentWorkspaces: ['workspaces/demo'], recentWorkspaceOpenedAt: { 'workspaces/demo': '2026-09-01T00:00:00.000Z' }, lastWorkspacePath: 'workspaces/demo' })
+    doubles.preferencesGet.mockImplementation(async () => ({ value: preferencesValue }))
+    doubles.preferencesSet.mockImplementation(async (input: { value: string }) => { preferencesValue = input.value })
+    const api = freshApi()
+    await api.renameWorkspace('workspaces/demo', '新名称')
+    expect(doubles.setWorkspaceName).toHaveBeenCalledWith(expect.objectContaining({ path: 'workspaces/demo' }), '新名称')
+    await api.forgetRecentWorkspace('workspaces/demo')
+    const saved = JSON.parse(preferencesValue) as { recentWorkspaces: string[]; recentWorkspaceOpenedAt: Record<string, string>; lastWorkspacePath?: string }
+    expect(saved.recentWorkspaces).toEqual([])
+    expect(saved.recentWorkspaceOpenedAt).toEqual({})
+    expect(saved.lastWorkspacePath).toBeUndefined()
+    expect(doubles.remove).not.toHaveBeenCalled()
+  })
+
   it('跳过非法或已删除的路径，并用后面的有效工作区补足五条', async () => {
     storedSettings({
       recentWorkspaces: [
@@ -432,6 +497,119 @@ describe('AndroidPlatformApi fetchModels', () => {
     })
 
     expect(result).toEqual(['claude-3'])
-    expect(doubles.fetchProviderModels).toHaveBeenCalledWith('anthropic', 'https://saved.example/v1', 'input-key')
+    expect(doubles.fetchProviderModels).toHaveBeenCalledWith('anthropic', 'https://saved.example/v1', 'input-key', { fetcher: expect.any(Function) })
+  })
+})
+
+describe('AndroidPlatformApi clipboard', () => {
+  it('uses the Android system clipboard for reading and writing text', async () => {
+    const api = freshApi()
+    doubles.clipboardRead.mockResolvedValue({ type: 'text/plain', value: '来自系统剪贴板' })
+
+    await api.clipboardWriteText!('写入系统剪贴板')
+    await expect(api.clipboardReadText!()).resolves.toBe('来自系统剪贴板')
+
+    expect(doubles.clipboardWrite).toHaveBeenCalledWith({ string: '写入系统剪贴板' })
+    expect(doubles.clipboardRead).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Android external workspaces', () => {
+  const treeUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments'
+
+  it('creates a project under the directory selected through Android SAF', async () => {
+    doubles.pickDirectory.mockResolvedValue({ uri: treeUri })
+    const api = freshApi()
+    const parent = await api.pickFolder()
+    expect(parent).toBe(makeSafPath(treeUri))
+
+    const path = await api.createWorkspace(parent!, '星海拾遗')
+    expect(path).toMatch(/^saf:/)
+    expect(doubles.safMkdir).toHaveBeenCalledWith(expect.objectContaining({ treeUri, root: '', exclusive: true }))
+    expect(doubles.initializeWorkspace).toHaveBeenCalledWith(expect.objectContaining({ path }), '星海拾遗')
+  })
+
+  it('lists a previously registered external project alongside internal projects', async () => {
+    const externalPath = makeSafPath(treeUri, '星海拾遗_123')
+    doubles.preferencesGet.mockImplementation(async ({ key }: { key: string }) => ({ value: key === 'storyfabric.external-workspaces' ? JSON.stringify([externalPath]) : null }))
+    doubles.listDirs.mockResolvedValue(['internal'])
+    const list = await freshApi().listWorkspaces()
+    expect(list.map((item) => item.path).sort()).toEqual([externalPath, 'workspaces/internal'].sort())
+  })
+
+  it('registers an opened external project for the all-projects view', async () => {
+    const externalPath = makeSafPath(treeUri)
+    await freshApi().openWorkspace(externalPath)
+    expect(doubles.preferencesSet).toHaveBeenCalledWith({
+      key: 'storyfabric.external-workspaces', value: JSON.stringify([externalPath])
+    })
+  })
+
+  it('imports a ZIP directly into a selected external parent folder', async () => {
+    const parent = makeSafPath(treeUri)
+    await freshApi().importWorkspace(new Uint8Array([1, 2]), 'archive.storyfabric.zip', { parentDir: parent, name: '外部导入' })
+    expect(doubles.importWorkspaceArchive).toHaveBeenCalledWith(expect.objectContaining({ path: makeSafPath(treeUri, '外部导入') }), new Uint8Array([1, 2]))
+    expect(doubles.safMkdir).toHaveBeenCalledWith({ treeUri, root: '', path: '外部导入', exclusive: true })
+  })
+})
+
+describe('AndroidPlatformApi generation preferences', () => {
+  it('returns fresh generation defaults when Preferences has no stored value', async () => {
+    const api = freshApi()
+    const first = await api.getSettings()
+    first.agentGeneration.agentTemperature = 0
+
+    await expect(api.getSettings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 }
+    })
+  })
+
+  it('returns isolated generation defaults after malformed Preferences', async () => {
+    doubles.preferencesGet.mockResolvedValue({ value: '{' })
+    const api = freshApi()
+    const first = await api.getSettings()
+    try {
+      first.agentGeneration.agentTemperature = 0
+
+      await expect(api.getSettings()).resolves.toMatchObject({
+        agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 }
+      })
+    } finally {
+      first.agentGeneration.agentTemperature = 70
+    }
+  })
+
+  it('passes normalized generation preferences through its CoreAgentService settings callback', async () => {
+    storedSettings({ agentGeneration: { agentTemperature: 101, proseAlternativesEnabled: 'true', maxToolRounds: 250 } })
+    const api = freshApi()
+    await (api as unknown as { installWorkspace(path: string, store: unknown): Promise<void> }).installWorkspace('workspaces/generation', { path: 'workspaces/generation' })
+    const coreAgent = (api as unknown as {
+      agent: { options: { settings: () => Promise<{ agentGeneration?: unknown }> } } | null
+    }).agent
+
+    await expect(coreAgent?.options.settings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 100, proseAlternativesEnabled: false, maxToolRounds: 250 }
+    })
+  })
+
+  it('defaults and normalizes persisted generation preferences', async () => {
+    storedSettings({ agentGeneration: { agentTemperature: 101, proseAlternativesEnabled: 'true', maxToolRounds: 250 } })
+
+    await expect(freshApi().getSettings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 100, proseAlternativesEnabled: false, maxToolRounds: 250 }
+    })
+    storedSettings({})
+    await expect(freshApi().getSettings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 }
+    })
+  })
+
+  it('persists normalized generation preferences', async () => {
+    const api = freshApi()
+    await api.updateSettings({ agentGeneration: { agentTemperature: -1, proseAlternativesEnabled: true, maxToolRounds: 250 } })
+
+    expect(JSON.parse(doubles.preferencesSet.mock.calls.at(-1)?.[0].value ?? '{}')).toMatchObject({
+      agentGeneration: { agentTemperature: 0, proseAlternativesEnabled: true, maxToolRounds: 250 }
+    })
   })
 })

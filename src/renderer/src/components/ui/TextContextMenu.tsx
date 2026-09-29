@@ -1,5 +1,6 @@
 import { ClipboardPaste, Copy, Scissors, TextSelect } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { copyPlainText, readPlainText } from '../../lib/clipboard'
 import { clampContextMenuPosition } from '../../lib/contextMenuPosition'
 
@@ -128,23 +129,18 @@ function selectAll(snapshot: SelectionSnapshot): void {
 }
 
 async function writeClipboard(text: string): Promise<void> {
-  const nativeWriter = window.api?.clipboardWriteText
-    ? { writeText: window.api.clipboardWriteText.bind(window.api) }
-    : undefined
-  await copyPlainText(text, nativeWriter)
+  await copyPlainText(text)
 }
 
 async function readClipboard(): Promise<string> {
-  const nativeReader = window.api?.clipboardReadText
-    ? { readText: window.api.clipboardReadText.bind(window.api) }
-    : undefined
-  return readPlainText(nativeReader)
+  return readPlainText()
 }
 
 export function TextContextMenu(): React.ReactElement | null {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const longPress = useRef<{ timer: number; pointerId: number; x: number; y: number; target: EventTarget | null } | null>(null)
   const suppressContextUntil = useRef(0)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const open = (x: number, y: number, target: EventTarget | null): void => {
@@ -170,6 +166,7 @@ export function TextContextMenu(): React.ReactElement | null {
     }
 
     const onPointerDown = (event: PointerEvent): void => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenu(null)
       if (event.pointerType !== 'touch') return
       const editable = findEditableElement(event.target)
       if (!editable) return
@@ -238,12 +235,13 @@ export function TextContextMenu(): React.ReactElement | null {
 
   const itemClass = 'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-xs transition hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-35'
 
-  return (
+  const menuElement = (
     <div
+      ref={menuRef}
       role="menu"
       aria-label="文本快捷操作"
-      className="fixed z-[100] w-[172px] rounded-lg border border-line bg-panel p-1.5 shadow-2xl"
-      style={{ left: menu.x, top: menu.y }}
+      className="pointer-events-auto fixed z-[2147483647] w-[172px] rounded-lg border border-line bg-panel p-1.5 shadow-2xl"
+      style={{ left: menu.x, top: menu.y, isolation: 'isolate' }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -264,4 +262,8 @@ export function TextContextMenu(): React.ReactElement | null {
       </button>
     </div>
   )
+
+  // Mount outside app/page stacking contexts so a context menu can never be
+  // visually above a control while still losing pointer hit testing to it.
+  return typeof document === 'undefined' ? menuElement : createPortal(menuElement, document.body)
 }

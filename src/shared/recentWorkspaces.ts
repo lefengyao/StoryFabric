@@ -27,6 +27,14 @@ export function markRecentWorkspace(
   return { recentWorkspaces, recentWorkspaceOpenedAt }
 }
 
+export function forgetRecentWorkspace(state: Partial<RecentWorkspaceState>, path: string): RecentWorkspaceState {
+  const recentWorkspaces = (state.recentWorkspaces ?? []).filter((item) => item !== path)
+  const recentWorkspaceOpenedAt = Object.fromEntries(
+    Object.entries(state.recentWorkspaceOpenedAt ?? {}).filter(([item]) => item !== path && recentWorkspaces.includes(item))
+  )
+  return { recentWorkspaces, recentWorkspaceOpenedAt }
+}
+
 function parseIsoTimestamp(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined
 

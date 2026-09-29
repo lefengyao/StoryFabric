@@ -6,6 +6,8 @@ import { base64ToBytes, bytesToBase64 } from './archiveTransfer'
 export class CapacitorFileStore implements FileStore {
   constructor(private readonly root = '') {}
 
+  storageIdentity(): string { return `capacitor:data:${this.root}` }
+
   private path(path: string, allowRoot = false): string {
     const clean = normalizeRelativePath(path, allowRoot)
     return this.root ? (clean ? `${this.root}/${clean}` : this.root) : clean
@@ -108,6 +110,22 @@ export class CapacitorFileStore implements FileStore {
       await Filesystem.rmdir({ path: target, directory: Directory.Data, recursive: true })
     } catch {
       /* 删除不存在路径视为成功 */
+    }
+  }
+
+  async removeFile(path: string): Promise<void> {
+    const target = this.path(path)
+    const info = await Filesystem.stat({ path: target, directory: Directory.Data })
+    if (info.type !== 'file') throw new Error('目标不是文件')
+    await Filesystem.deleteFile({ path: target, directory: Directory.Data })
+  }
+
+  async fileSize(path: string): Promise<number | null> {
+    try {
+      const info = await Filesystem.stat({ path: this.path(path), directory: Directory.Data })
+      return info.type === 'file' && typeof info.size === 'number' ? info.size : null
+    } catch {
+      return null
     }
   }
 

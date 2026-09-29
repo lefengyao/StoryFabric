@@ -9,6 +9,7 @@ import {
   ListTree,
   MessageSquarePlus,
   Network,
+  PanelLeftOpen,
   Pencil,
   Send,
   Square,
@@ -19,7 +20,7 @@ import {
   X
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentMode, ApprovalPolicy, Attachment, ChatDensity, ChatMessage, MessageFile, ReasoningPreference, SessionMeta } from '../../../../shared/types'
+import type { AgentMode, ApprovalPolicy, Attachment, ChatDensity, ChatMessage, MessageFile, ReasoningPreference, RunAgentRequest, SessionMeta } from '../../../../shared/types'
 import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
 import { AgentQuestionDialog } from '../../components/chat/AgentQuestionDialog'
@@ -37,6 +38,7 @@ import { bytesToBase64 } from '../../platform/archiveTransfer'
 import { getPlatformApi } from '../../platform/platformApi'
 import { prepareMessageFiles } from '../../lib/prepareMessageFiles'
 import { AttachmentMenu } from '../../components/chat/AttachmentMenu'
+import { WebSearchModeMenu } from '../../components/chat/WebSearchModeMenu'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
@@ -46,7 +48,12 @@ import { ChatWorkbenchIdentity } from '../../components/chat/ChatWorkbenchIdenti
 import { workbenchColumnsClass, workbenchShellClass, workbenchTopbarClass } from '../../lib/layoutPresentation'
 import { normalizeOrchestrationPreferences } from '../../../../shared/creative'
 import { creativePreferencesForMode } from '../../lib/creativePreferences'
+import { agentStageLabel, agentThinkingLabel, isOrdinaryChapterAgentStage } from '../../lib/agentStagePresentation'
 import { approvalPolicyPickerDisabled } from '../../stores/chatScope'
+import { parseProseAlternatives } from '../../lib/proseAlternatives'
+import { SkillActivity } from '../../components/chat/SkillActivity'
+import { RuleActivity } from '../../components/chat/RuleActivity'
+import { RunActivityDetails } from '../../components/chat/RunActivityDetails'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -71,6 +78,7 @@ export function ChatPage(): React.ReactElement {
   const [attachOpen, setAttachOpen] = useState(false)
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [tab, setTab] = useState<'recent' | 'archived'>('recent')
+  const [sessionListOpen, setSessionListOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -81,6 +89,9 @@ export function ChatPage(): React.ReactElement {
   const latestQuestionId = useRef<string | null>(null)
   const latestCandidateId = useRef<string | null>(null)
   const [agentMode, setAgentMode] = useState<AgentMode>('normal')
+  const [webSearchMode, setWebSearchMode] = useState<NonNullable<RunAgentRequest['webSearchMode']>>('off')
+  const [modeSwitching, setModeSwitching] = useState(false)
+  const modeSwitchingRef = useRef(false)
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
 
@@ -96,8 +107,14 @@ export function ChatPage(): React.ReactElement {
     ? chat.modelPreferences.find((item) => item.providerId === defaultModel.providerId && item.model === defaultModel.model)?.reasoning ?? 'inherit'
     : 'inherit'
   const orchestrationEnabled = chat.creativePreferences?.orchestrationEnabled === true
+  useEffect(() => {
+    setAgentMode(orchestrationEnabled ? 'orchestration' : 'normal')
+  }, [orchestrationEnabled, chat.activeId])
   const orchestrationProfile = useMemo(() => normalizeOrchestrationPreferences(chat.creativePreferences?.orchestration), [chat.creativePreferences])
   const latestOrchestrationRun = chat.orchestrationRuns.at(-1)
+  const activeStreaming = Boolean(chat.activeId && chat.runningSessionIds.includes(chat.activeId)) || (chat.streaming && (!chat.runningSessionId || chat.runningSessionId === chat.activeId))
+  const backgroundStreaming = chat.runningSessionIds.some((id) => id !== chat.activeId) || (chat.streaming && !!chat.runningSessionId && chat.runningSessionId !== chat.activeId)
+  const activeLiveStage = [...chat.liveTimeline].reverse().find((item): item is Extract<typeof item, { kind: 'stage' }> => item.kind === 'stage' && item.status === 'running')?.stageId
   const liveOrchestrationStages = useMemo(
     () => chat.liveTimeline
       .filter((item): item is Extract<typeof item, { kind: 'stage' }> => item.kind === 'stage')
@@ -111,7 +128,10 @@ export function ChatPage(): React.ReactElement {
       latestQuestionId.current = id
       setQuestionDialogOpen(true)
     }
-    if (!id) setQuestionDialogOpen(false)
+    if (!id) {
+      latestQuestionId.current = null
+      setQuestionDialogOpen(false)
+    }
   }, [chat.pendingQuestion?.questionId])
 
   useEffect(() => {
@@ -120,7 +140,10 @@ export function ChatPage(): React.ReactElement {
       latestCandidateId.current = id
       setSkillCandidateDialogOpen(true)
     }
-    if (!id) setSkillCandidateDialogOpen(false)
+    if (!id) {
+      latestCandidateId.current = null
+      setSkillCandidateDialogOpen(false)
+    }
   }, [chat.pendingSkillCandidate?.candidateId])
 
   /* 从未选择过模型时，自动采用第一个可用模型作为默认 */
@@ -145,7 +168,7 @@ export function ChatPage(): React.ReactElement {
 
   const send = async (): Promise<void> => {
     const text = input.text
-    if ((!text && !chat.messageFiles.length && !chat.attachments.length) || chat.streaming) return
+    if ((!text && !chat.messageFiles.length && !chat.attachments.length) || (chat.activeId && chat.runningSessionIds.includes(chat.activeId)) || modeSwitchingRef.current) return
     if (!defaultModel) {
       useChat.setState({ error: '请先在“设置”中配置供应商、API Key 和默认模型' })
       return
@@ -153,18 +176,39 @@ export function ChatPage(): React.ReactElement {
     await chat.send(text, {
       providerId: defaultModel.providerId,
       model: defaultModel.model,
+      webSearchMode,
       reasoning: selectedReasoning === 'inherit' ? undefined : selectedReasoning,
-      mode: agentMode,
+      mode: orchestrationEnabled ? 'orchestration' : agentMode,
+      creative: chat.creativePreferences
+    })
+  }
+
+  const resumeOrchestration = async (): Promise<void> => {
+    const run = chat.orchestrationRuns.at(-1)
+    if (!run || chat.streaming || !defaultModel) return
+    await chat.send('继续当前编排 checkpoint', {
+      providerId: defaultModel.providerId,
+      model: defaultModel.model,
+      webSearchMode,
+      reasoning: selectedReasoning === 'inherit' ? undefined : selectedReasoning,
+      mode: 'orchestration',
+      resumeOrchestrationRunId: run.runId,
       creative: chat.creativePreferences
     })
   }
 
   const setCreativeMode = async (enabled: boolean): Promise<void> => {
-    if (chat.streaming) return
+    if (chat.streaming || modeSwitchingRef.current) return
+    modeSwitchingRef.current = true
+    setModeSwitching(true)
     try {
       await chat.updateCreativePreferences(creativePreferencesForMode(chat.creativePreferences, settings ?? undefined, enabled))
+      setAgentMode(enabled ? 'orchestration' : 'normal')
     } catch (error) {
       useChat.setState({ error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      modeSwitchingRef.current = false
+      setModeSwitching(false)
     }
   }
 
@@ -228,12 +272,13 @@ export function ChatPage(): React.ReactElement {
   return (
     <div className={cn(workbenchShellClass(), 'chat-surface')}>
       <div className={workbenchTopbarClass()}>
+        <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2 text-xs text-muted lg:hidden" aria-label="打开会话列表" onClick={() => setSessionListOpen(true)}><PanelLeftOpen size={15} />会话</button>
         <ChatWorkbenchIdentity showSessionLength={Boolean(settings?.showSessionLength)} messageCount={chat.messages.length} totalChars={totalChars} />
         <span className="chat-text-meta hidden truncate text-faint xl:inline">资料不进提示词 · 需要时自动查阅</span>
         <select
           value={orchestrationEnabled ? 'orchestration' : 'basic'}
           onChange={(event) => void setCreativeMode(event.target.value === 'orchestration')}
-          disabled={chat.streaming || !chat.activeId}
+          disabled={chat.streaming || modeSwitching || !chat.activeId}
           aria-label="会话创作模式"
           className="chat-text-meta h-8 shrink-0 rounded-lg border border-line bg-panel px-2 text-muted outline-none focus:border-accent disabled:opacity-60"
         >
@@ -242,16 +287,17 @@ export function ChatPage(): React.ReactElement {
         </select>
         {orchestrationEnabled
           ? <div className="ml-auto min-w-0 w-full sm:w-auto sm:max-w-[min(100%,54rem)]">
-              <OrchestrationPanel profile={orchestrationProfile} defaultModel={defaultModel} compact running={chat.streaming} budget={chat.budget} run={latestOrchestrationRun} liveStages={liveOrchestrationStages} approvalPolicy={chat.approvalPolicy} />
+              <OrchestrationPanel profile={orchestrationProfile} defaultModel={defaultModel} compact running={activeStreaming} budget={chat.budget} run={latestOrchestrationRun} liveStages={liveOrchestrationStages} approvalPolicy={chat.approvalPolicy} onResume={() => void resumeOrchestration()} />
             </div>
           : providerOptions.length === 0 && <Badge tone="danger">尚未配置供应商，请前往设置</Badge>}
       </div>
       <div className={workbenchColumnsClass()}>
       {/* 会话列表 */}
-      <aside className="flex h-48 w-full shrink-0 flex-col border-b border-line bg-[#f1efe9] sm:h-auto sm:w-60 sm:border-b-0 sm:border-r">
+      {sessionListOpen && <button type="button" className="fixed inset-0 z-30 bg-[#071024]/50 lg:hidden" aria-label="关闭会话列表" onClick={() => setSessionListOpen(false)} />}
+      <aside className={cn('chat-session-drawer shrink-0 flex-col border-r border-line bg-[#f1efe9] lg:relative lg:flex lg:h-auto lg:w-60', sessionListOpen ? 'fixed inset-y-0 left-0 z-40 flex w-[min(84vw,20rem)] shadow-2xl' : 'hidden')}>
         <div className="p-3 pb-2">
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="min-w-0 flex-1 justify-center" onClick={chat.newSession} disabled={sessionTransferBusy}>
+                <Button size="sm" variant="outline" className="min-w-0 flex-1 justify-center" onClick={() => { setSessionListOpen(false); void chat.newSession() }} disabled={sessionTransferBusy}>
             <MessageSquarePlus size={14} /> 新会话
             </Button>
             <Button size="sm" variant="ghost" className="shrink-0" title="导入会话" onClick={() => sessionImportRef.current?.click()} disabled={sessionTransferBusy}>
@@ -304,14 +350,23 @@ export function ChatPage(): React.ReactElement {
                   className="min-w-0 flex-1 rounded-md border border-accent bg-panel px-2 py-1.5 text-xs outline-none"
                 />
               ) : (
-                <button onClick={() => void chat.openSession(s.id)} onDoubleClick={() => startRename(s)} className="min-w-0 flex-1 cursor-pointer px-2.5 py-2 text-left">
+                <button onClick={() => { setSessionListOpen(false); void chat.openSession(s.id) }} onDoubleClick={() => startRename(s)} className="min-w-0 flex-1 cursor-pointer px-2.5 py-2 text-left">
                   <div className={cn('truncate text-xs font-medium', chat.activeId === s.id ? 'text-accent' : 'text-fg')}>{s.title}</div>
                   <div className="text-[10px] text-faint">
-                    {formatTime(s.updatedAt)} · {s.messageCount} 条
+                    {formatTime(s.updatedAt)} · {s.messageCount} 条{chat.runningSessionIds.includes(s.id) ? ' · 运行中' : ''}{chat.backgroundAttentionSessionIds.includes(s.id) ? ' · 待处理' : ''}
                   </div>
                 </button>
               )}
-              <div className="mr-1 hidden shrink-0 gap-0.5 group-hover:flex">
+              <div className="mr-1 flex shrink-0 gap-0.5 lg:hidden lg:group-hover:flex">
+                {chat.runningSessionIds.includes(s.id) && (
+                  <button
+                    onClick={() => void chat.stopSession(s.id).catch((error) => useChat.setState({ error: error instanceof Error ? error.message : String(error) }))}
+                    title="先停止运行，再删除会话"
+                    className="rounded p-1 text-faint hover:text-accent cursor-pointer"
+                  >
+                    <Square size={11} />
+                  </button>
+                )}
                 <button
                   onClick={() => startRename(s)}
                   title="重命名"
@@ -328,8 +383,9 @@ export function ChatPage(): React.ReactElement {
                 </button>
                 <button
                   onClick={() => void chat.removeSession(s.id)}
-                  title="删除会话"
-                  className="rounded p-1 text-faint hover:text-danger cursor-pointer"
+                  title={chat.runningSessionIds.includes(s.id) ? '请先停止运行，再删除会话' : '删除会话'}
+                  disabled={chat.runningSessionIds.includes(s.id)}
+                  className="rounded p-1 text-faint hover:text-danger cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Trash2 size={11} />
                 </button>
@@ -343,7 +399,7 @@ export function ChatPage(): React.ReactElement {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 消息列表 */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-app/70 px-3 py-4 sm:px-6 sm:py-6">
-          {chat.messages.length === 0 && !chat.streaming && (
+          {chat.messages.length === 0 && !activeStreaming && (
             <div className="mx-auto max-w-xl">
               <EmptyState
                 icon={<Bot size={36} />}
@@ -366,8 +422,10 @@ export function ChatPage(): React.ReactElement {
 
           <div className={cn('mx-auto w-full max-w-6xl', densityClasses.list)}>
             <OrchestrationResults runs={chat.orchestrationRuns ?? []} />
+            {activeStreaming && <SkillActivity events={chat.liveSkillEvents} />}
+            {activeStreaming && <RuleActivity events={chat.liveRuleEvents} />}
             {chat.messages.map((m) => (
-              <MessageItem key={m.id} msg={m} density={density} />
+              <MessageItem key={m.id} msg={m} density={density} alternativesEnabled={settings?.agentGeneration.proseAlternativesEnabled === true} onChooseAlternative={(content) => input.setText(`请采用以下正文方案继续处理：\n\n${content}`)} />
             ))}
 
             {chat.liveTimeline.map((item) => item.kind === 'text'
@@ -384,7 +442,7 @@ export function ChatPage(): React.ReactElement {
               : item.kind === 'stage' ? (
                   <div key={item.id} className="chat-text-meta flex min-w-0 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-muted">
                     <span className={cn('h-2 w-2 shrink-0 rounded-full', item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'completed' ? 'bg-ok' : 'bg-danger')} />
-                    <span className="min-w-0 flex-1 truncate">阶段：{item.stageId}</span>
+                    <span className="min-w-0 flex-1 truncate">{isOrdinaryChapterAgentStage(item.stageId) ? '智能体' : '阶段'}：{agentStageLabel(item.stageId)}</span>
                     <span className="chat-text-micro ml-auto shrink-0 whitespace-nowrap text-faint">{item.status === 'running' ? '进行中' : item.status === 'completed' ? '已完成' : '失败'}</span>
                   </div>
                 ) : (
@@ -397,8 +455,8 @@ export function ChatPage(): React.ReactElement {
                   />
                 ))}
 
-            {chat.streaming && shouldShowThinking(chat.liveTimeline) && (
-              <ThinkingRow label={`${defaultModel?.model ?? '模型'} 正在思考`} />
+            {activeStreaming && shouldShowThinking(chat.liveTimeline) && (
+              <ThinkingRow label={agentThinkingLabel(activeLiveStage, defaultModel?.model ?? '模型')} />
             )}
 
             {chat.error && <div className="chat-text-meta rounded-lg bg-danger-soft px-4 py-2.5 text-danger">{chat.error}</div>}
@@ -406,7 +464,7 @@ export function ChatPage(): React.ReactElement {
         </div>
 
         {/* 输入区 */}
-        <div className="shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] backdrop-blur-xl sm:p-4">
+        <div className="chat-composer shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 backdrop-blur-xl sm:p-4">
           <div className="relative mx-auto w-full max-w-6xl">
             {chat.attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1.5">
@@ -485,6 +543,8 @@ export function ChatPage(): React.ReactElement {
                     }
                   }}
                   onReference={() => { setAttachOpen(false); setReferenceOpen(true) }}
+                  onCompressContext={() => chat.compressContext().catch((error) => { useChat.setState({ error: error instanceof Error ? error.message : String(error) }) })}
+                  compressing={chat.contextCompressing || chat.streaming}
                 />
                 <select
                   value={chat.approvalPolicy}
@@ -498,6 +558,7 @@ export function ChatPage(): React.ReactElement {
                   <option value="delete-confirm">自动审批（删除确认）</option>
                   <option value="auto">自动执行</option>
                 </select>
+                <WebSearchModeMenu mode={webSearchMode} onChange={setWebSearchMode} disabled={chat.streaming} />
                 </div>
                 <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
                 {providerOptions.length > 0 && (
@@ -547,19 +608,27 @@ export function ChatPage(): React.ReactElement {
                 <AttachPicker open={referenceOpen} onOpenChange={setReferenceOpen} />
                 <ContextUsageMeter
                   ringOnly
-                  usedTokens={contextUsage.usedTokens}
-                  contextTokens={contextUsage.contextTokens}
+                usedTokens={contextUsage.usedTokens}
+                contextTokens={contextUsage.inputBudgetTokens}
+                contextWindowTokens={contextUsage.contextTokens}
                   compressing={chat.contextCompressing}
                   compressedMessages={chat.contextCompression?.summarizedMessages}
                 />
-                {chat.streaming ? (
+                {activeStreaming ? (
                   <Button variant="outline" size="sm" onClick={() => void chat.abort()} title="中止生成">
                     <Square size={13} /> 停止
                   </Button>
                 ) : (
-                  <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length}>
-                    <Send size={13} /> 发送
-                  </Button>
+                  <>
+                    {backgroundStreaming && (
+                      <Button variant="outline" size="sm" onClick={() => void chat.openSession(chat.runningSessionId!)} title="返回正在运行的会话">
+                        返回运行会话
+                      </Button>
+                    )}
+                    <Button variant="primary" size="sm" onClick={() => void send()} disabled={modeSwitching || (!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length)}>
+                      <Send size={13} /> 发送
+                    </Button>
+                  </>
                 )}
                 </div>
               </div>
@@ -599,7 +668,7 @@ function Avatar({ icon, accent }: { icon: React.ReactElement; accent?: boolean }
   )
 }
 
-function MessageItemInner({ msg, density }: { msg: ChatMessage; density: ChatDensity }): React.ReactElement {
+function MessageItemInner({ msg, density, alternativesEnabled, onChooseAlternative }: { msg: ChatMessage; density: ChatDensity; alternativesEnabled?: boolean; onChooseAlternative?: (content: string) => void }): React.ReactElement {
   const cls = chatDensityClasses(density)
   if (msg.role === 'user') {
     return (
@@ -626,10 +695,13 @@ function MessageItemInner({ msg, density }: { msg: ChatMessage; density: ChatDen
     <div className="flex gap-3">
       <Avatar icon={<Bot size={15} />} accent />
       <div className="min-w-0 flex-1">
+        {msg.agentIdentity && <div className="mb-1 text-[10px] font-medium text-accent">{msg.agentIdentity.label} · {msg.agentIdentity.model}</div>}
         <div className={cn('chat-text-body rounded-xl border border-line bg-panel', cls.assistantBubble, msg.isError && 'border-danger/40')}>
           {msg.text && <Markdown text={msg.text} />}
           {msg.files && <MessageFiles files={msg.files} />}
         </div>
+        <RunActivityDetails activity={msg.runActivity} />
+        {alternativesEnabled && msg.text && <AlternativePicker text={msg.text} onChoose={onChooseAlternative} />}
       </div>
     </div>
   )
@@ -645,6 +717,24 @@ function MessageFiles({ files, compact = false }: { files: MessageFile[]; compac
 
 /** 历史消息在流式期间引用不变，memo 可避免每个 token 都重渲染并重新解析 Markdown。 */
 const MessageItem = memo(MessageItemInner)
+
+function AlternativePicker({ text, onChoose }: { text: string; onChoose?: (content: string) => void }): React.ReactElement | null {
+  const alternatives = parseProseAlternatives(text)
+  if (alternatives.length < 2) return null
+  return (
+    <div className="mt-2 rounded-lg border border-accent/30 bg-accent-soft/40 p-2">
+      <div className="mb-1.5 text-[11px] font-medium text-accent">正文候选方案</div>
+      <div className="flex flex-wrap gap-1.5">
+        {alternatives.map((item) => (
+          <Button key={item.id} size="sm" variant="outline" onClick={() => onChoose?.(item.content)} title={`将${item.title}回填到输入框`}>
+            {item.title}
+          </Button>
+        ))}
+      </div>
+      <div className="mt-1.5 text-[11px] text-muted">选择后会回填到输入框，确认内容后再发送或写入章节。</div>
+    </div>
+  )
+}
 
 /** @引用选择器：从当前工作区实体中挑选并附加到消息 */
 function AttachPicker({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }): React.ReactElement {

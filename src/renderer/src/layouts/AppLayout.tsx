@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Download, FileText, FolderSync, Home, ListTree, Network, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints } from 'lucide-react'
+import { BarChart3, BookOpen, Brain, Download, FileText, FolderSync, Home, Lightbulb, ListChecks, ListTree, Menu, Network, Package, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Sparkles, StickyNote, Upload, Users, Waypoints, UserRound, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { BrandMark } from '../components/icons/BrandMark'
@@ -14,6 +14,7 @@ import { ChatSidebar } from '../components/chat/ChatSidebar'
 import { useUi } from '../stores/uiStore'
 import { WorkspaceViewport } from '../components/layout/WorkspaceViewport'
 import { sidebarLabelClass, sidebarWidthClass } from '../lib/sidebarPresentation'
+import { shouldShowGlobalModelSelector } from '../lib/layoutPresentation'
 
 const NAV_ITEMS = [
   { to: '/characters', icon: Users, label: '人物', load: () => import('../pages/characters/CharactersPage') },
@@ -23,7 +24,10 @@ const NAV_ITEMS = [
   { to: '/chapters', icon: BookOpen, label: '章节', load: () => import('../pages/chapters/ChaptersPage') },
   { to: '/settings-docs', icon: FileText, label: '设定', load: () => import('../pages/settingsDocs/SettingsDocsPage') },
   { to: '/notes', icon: StickyNote, label: '便签', load: () => import('../pages/notes/NotesPage') },
-  { to: '/usage', icon: BarChart3, label: '用量', load: () => import('../pages/usage/UsagePage') },
+  { to: '/usage', icon: BarChart3, label: '统计', load: () => import('../pages/usage/UsagePage') },
+  { to: '/goals', icon: ListChecks, label: '目标', load: () => import('../pages/goals/GoalsPage') },
+  { to: '/creative', icon: Package, label: '创作资源', load: () => import('../pages/creative/CreativePage') },
+  { to: '/inspiration', icon: Lightbulb, label: '灵感台', load: () => import('../pages/inspiration/InspirationPage') },
   { to: '/chat', icon: Sparkles, label: '智能体', load: () => import('../pages/chat/ChatPage') }
 ]
 
@@ -32,6 +36,8 @@ const prefetch = (load: () => Promise<unknown>): void => {
   void load().catch(() => {})
 }
 const loadSettingsPage = (): Promise<unknown> => import('../pages/settings/SettingsPage')
+const loadUserPage = (): Promise<unknown> => import('../pages/user/UserPage')
+const loadMemoryPage = (): Promise<unknown> => import('../pages/memory/MemoryPage')
 const getSidebarStorage = (): Storage | null => {
   if (typeof window === 'undefined') return null
 
@@ -49,10 +55,15 @@ const TITLE_MAP: Record<string, string> = {
   events: '事件脉络',
   chapters: '章节正文',
   chat: '智能体工作台',
+  creative: '创作资源',
+  inspiration: '灵感台',
   settings: '设置'
   , 'settings-docs': '设定资料'
   , notes: '便签'
-  , usage: '模型用量'
+  , usage: '统计'
+  , goals: '目标中心'
+  , user: '用户'
+  , memory: '记忆'
 }
 
 export function AppLayout(): React.ReactElement {
@@ -70,6 +81,7 @@ export function AppLayout(): React.ReactElement {
   const [importBusy, setImportBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
   const [sidebarExpanded, setSidebarExpanded] = useState(() => readSidebarExpanded(getSidebarStorage(), true))
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const chatPanelOpen = useUi((s) => s.chatPanelOpen)
   const toggleChatPanel = useUi((s) => s.toggleChatPanel)
   const closeChatPanel = useUi((s) => s.closeChatPanel)
@@ -83,6 +95,8 @@ export function AppLayout(): React.ReactElement {
   useEffect(() => {
     if (seg === 'chat') closeChatPanel()
   }, [seg, closeChatPanel])
+
+  useEffect(() => setMobileNavOpen(false), [location.pathname])
 
   const downloadArchive = async (): Promise<void> => {
     setTransferBusy(true); setTransferError(null)
@@ -129,10 +143,31 @@ export function AppLayout(): React.ReactElement {
   return (
     <WorkspaceViewport>
     <div className="flex h-full min-h-0 flex-row bg-app" data-app-shell>
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-[70] lg:hidden">
+          <button type="button" className="absolute inset-0 bg-[#071024]/55" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />
+          <nav className="mobile-nav-drawer absolute inset-y-0 left-0 flex w-[min(82vw,20rem)] flex-col overflow-y-auto bg-[#101936] px-4 py-4 text-white shadow-2xl" aria-label="工作区导航">
+            <div className="mb-4 flex items-center justify-between text-base font-semibold">
+              <span>织章 · StoryFabric</span>
+              <button type="button" className="rounded-lg p-2 text-white/70" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)}><X size={18} /></button>
+            </div>
+            {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+              <NavLink key={to} to={to} onClick={() => setMobileNavOpen(false)} className={({ isActive }) => cn('flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm', isActive ? 'bg-[#d85d49] text-white' : 'text-white/70 hover:bg-white/10')}>
+                <Icon size={18} />{label}
+              </NavLink>
+            ))}
+            <div className="mt-auto border-t border-white/10 pt-2">
+              <NavLink to="/settings" onClick={() => setMobileNavOpen(false)} className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm text-white/70"><SettingsIcon size={18} />设置</NavLink>
+              <NavLink to="/user" onClick={() => setMobileNavOpen(false)} className={({ isActive }) => cn('flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm', isActive ? 'bg-[#d85d49] text-white' : 'text-white/70')}><UserRound size={18} />用户</NavLink>
+              <NavLink to="/memory" onClick={() => setMobileNavOpen(false)} className={({ isActive }) => cn('flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm', isActive ? 'bg-[#d85d49] text-white' : 'text-white/70')}><Brain size={18} />记忆</NavLink>
+            </div>
+          </nav>
+        </div>
+      )}
       <aside
         data-sidebar-preference-key={SIDEBAR_EXPANDED_KEY}
         className={cn(
-          'app-sidebar-scroll order-none flex h-full shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none',
+          'app-sidebar-scroll order-none hidden h-full shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none lg:flex',
           sidebarWidthClass(sidebarExpanded)
         )}
       >
@@ -198,6 +233,40 @@ export function AppLayout(): React.ReactElement {
           <SettingsIcon size={18} />
               <span className={sidebarLabelClass(sidebarExpanded)}>设置</span>
         </NavLink>
+        <NavLink
+          to="/user"
+          title="用户"
+          onMouseEnter={() => prefetch(loadUserPage)}
+          onFocus={() => prefetch(loadUserPage)}
+          onTouchStart={() => prefetch(loadUserPage)}
+          className={({ isActive }) =>
+            cn(
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
+              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
+              isActive ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/[0.08] hover:text-white'
+            )
+          }
+        >
+          <UserRound size={18} />
+          <span className={sidebarLabelClass(sidebarExpanded)}>用户</span>
+        </NavLink>
+        <NavLink
+          to="/memory"
+          title="记忆"
+          onMouseEnter={() => prefetch(loadMemoryPage)}
+          onFocus={() => prefetch(loadMemoryPage)}
+          onTouchStart={() => prefetch(loadMemoryPage)}
+          className={({ isActive }) =>
+            cn(
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
+              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
+              isActive ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/[0.08] hover:text-white'
+            )
+          }
+        >
+          <Brain size={18} />
+          <span className={sidebarLabelClass(sidebarExpanded)}>记忆</span>
+        </NavLink>
         <button
           type="button"
           title={sidebarExpanded ? '收起导航' : '展开导航'}
@@ -215,7 +284,8 @@ export function AppLayout(): React.ReactElement {
 
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel/[0.92] px-3 py-2 backdrop-blur-xl sm:h-14 sm:flex-nowrap sm:px-5 sm:py-0">
+          <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel/[0.92] px-3 py-2 backdrop-blur-xl sm:min-h-14 sm:flex-wrap sm:px-5 sm:py-2">
+            <button type="button" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-panel text-muted lg:hidden" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={18} /></button>
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
@@ -234,12 +304,12 @@ export function AppLayout(): React.ReactElement {
               </div>
             </div>
             <div className="flex-1" />
-            {modelOptions.length > 0 && (
+            {shouldShowGlobalModelSelector(seg) && modelOptions.length > 0 && (
               <select
                 value={modelValue}
                 onChange={(e) => void changeModel(e.target.value)}
                 title="默认对话模型"
-                className="hidden h-8 max-w-52 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent cursor-pointer md:block"
+                className="hidden min-w-0 max-w-52 rounded-lg border border-line bg-panel px-2 text-xs text-muted outline-none focus:border-accent cursor-pointer md:block"
               >
                 {!modelValue && <option value="">选择模型…</option>}
                 {modelOptions.map((p) => (
@@ -296,8 +366,8 @@ export function AppLayout(): React.ReactElement {
             )}
           </header>
           {transferError && <div className="border-b border-danger/30 bg-danger-soft px-4 py-1 text-xs text-danger">{transferError}</div>}
-          <main className="min-h-0 flex-1 overflow-hidden bg-app">
-            <div className="h-full overflow-hidden bg-panel/[0.72]">
+          <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-app lg:overflow-hidden">
+            <div className="h-full min-w-0 bg-panel/[0.72] lg:overflow-hidden">
               <Outlet />
             </div>
           </main>

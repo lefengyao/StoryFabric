@@ -1,6 +1,7 @@
 /** 主进程 IPC 装配：把服务注册到 ipcMain */
 import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron'
 import { promises as fs } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
 import {
   deleteChapter,
   deleteCharacter,
@@ -24,18 +25,16 @@ import {
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
 import type { UsageService } from '../core/usage/usageService'
-import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, listWorkspaces as listLocalWorkspaces, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
+import { listWritingDays } from '../core/usage/writingStats'
+import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, listWorkspaces as listLocalWorkspaces, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, renameWorkspace, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
-import type { DeployService } from './services/deployService'
 import type {
-  DeployConnectionInput,
-  DeployProgress,
-  DeployTargetInput,
   PublicAppSettings,
   RunAgentRequest
 } from '../shared/types'
 import type { FetchModelsInput, SettingsPatch, StoryFabricApi, WorkspaceImportTarget } from '../shared/api'
 import { fetchProviderModels } from '../core/llm'
+import { electronFetch } from './networkFetch'
 import { decryptApiKey } from './services/settingsService'
 import type { PlatformCapabilities } from '../shared/platformCapabilities'
 import { SessionStore } from './services/sessionStore'
@@ -49,13 +48,19 @@ import { serializeWorkspace } from './services/workspaceRuntime'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
 import type { RunReplay } from '../shared/runEvents'
 import { creativePreferencesFromOrchestrationDefaults } from '../shared/creative'
+import { SourceCatalog, MAX_INSPIRATION_SOURCE_BYTES } from '../core/inspiration/sourceCatalog'
+import { MAX_INSPIRATION_TOTAL_BYTES } from '../core/inspiration/sourceCatalog'
+import { supportsTextExtraction } from '../core/inspiration/textExtractors'
+import { normalizeProjectDocPath, validateProjectDocContent } from '../core/workspace/projectDocs'
+import { saveInspirationArtifact } from '../core/inspiration/inspirationService'
+import { MemoryStore } from '../core/memory/memoryStore'
+import type { MemoryScope, MemoryUpdate } from '../shared/memory'
 
 export interface AppContext {
   win: () => BrowserWindow | null
   settings: SettingsService
   agent: AgentService
   usage: UsageService
-  deploy: DeployService
   runtimeEvents?: { replay: (workspaceId: string, runId: string, afterSeq?: number) => RunReplay }
 }
 
@@ -96,6 +101,53 @@ function finishRequest(requestId?: string): void {
   }
 }
 
+const MAX_EXTERNAL_IMPORT_FILES = 2_000
+
+interface ExternalImportFile { absolutePath: string; relativeName: string; size: number }
+
+function safeImportSegment(value: string): string {
+  const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').trim()
+  return cleaned || 'reference'
+}
+
+async function collectExternalImportFiles(inputPath: string): Promise<ExternalImportFile[]> {
+  const root = inputPath
+  const visitedDirectories = new Set<string>()
+  const visitedFiles = new Set<string>()
+  const files: ExternalImportFile[] = []
+
+  const visit = async (candidate: string, relativeName: string): Promise<void> => {
+    if (files.length >= MAX_EXTERNAL_IMPORT_FILES) throw new Error(`资料目录中的可读取文件不能超过 ${MAX_EXTERNAL_IMPORT_FILES} 个`)
+    let real: string
+    let followed: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      await fs.lstat(candidate)
+      real = await fs.realpath(candidate)
+      followed = await fs.stat(real)
+    } catch (error) {
+      if (candidate === root) throw new Error(`无法读取资料路径：${root}`)
+      return
+    }
+    if (followed.isDirectory()) {
+      if (visitedDirectories.has(real)) return
+      visitedDirectories.add(real)
+      const entries = await fs.readdir(real, { withFileTypes: true })
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        const childName = relativeName ? `${relativeName}/${safeImportSegment(entry.name)}` : safeImportSegment(entry.name)
+        await visit(join(real, entry.name), childName)
+      }
+      return
+    }
+    if (!followed.isFile() || visitedFiles.has(real) || (!supportsTextExtraction(candidate) && !supportsTextExtraction(real))) return
+    visitedFiles.add(real)
+    files.push({ absolutePath: real, relativeName: relativeName || safeImportSegment(basename(candidate)), size: followed.size })
+  }
+
+  const topName = safeImportSegment(basename(root))
+  await visit(root, topName)
+  return files
+}
+
 export function registerIpc(ctx: AppContext): void {
   /* ---------- 剪贴板 ---------- */
   ipcMain.handle(IPC.ClipboardReadText, async () => clipboard.readText())
@@ -132,6 +184,8 @@ export function registerIpc(ctx: AppContext): void {
     }
     return result
   })
+  ipcMain.handle(IPC.RenameWorkspace, async (_e, path: string, name: string) => renameWorkspace(path, name))
+  ipcMain.handle(IPC.ForgetRecentWorkspace, async (_e, path: string) => { await ctx.settings.forgetRecentWorkspace(path) })
 
   ipcMain.handle(IPC.GetDefaultDir, async () => app.getPath('documents'))
 
@@ -255,7 +309,23 @@ export function registerIpc(ctx: AppContext): void {
 
   /* ---------- 设置与供应商 ---------- */
   ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.load()))
+  const memoryStore = (): MemoryStore => new MemoryStore(new NodeFileStore(app.getPath('userData')), new NodeFileStore(requireRoot()))
+  ipcMain.handle(IPC.GetMemory, async (_e, scope: MemoryScope) => memoryStore().read(scope))
+  ipcMain.handle(IPC.UpdateMemory, async (_e, scope: MemoryScope, patch: MemoryUpdate) => memoryStore().update(scope, patch))
   ipcMain.handle(IPC.GetUsageRecords, async () => ctx.usage.list())
+  ipcMain.handle(IPC.GetUsageBuckets, async () => ctx.usage.listBuckets())
+  ipcMain.handle(IPC.GetWritingDays, async () => {
+    const settings = await ctx.settings.load()
+    const buckets = await ctx.usage.listBuckets()
+    const paths = [...new Set([currentRoot, ...settings.recentWorkspaces, ...buckets.map((item) => item.workspaceId)].filter((path): path is string => typeof path === 'string' && isAbsolute(path)))]
+    const rows = await Promise.all(paths.map(async (path) => {
+      try {
+        if (!(await validateWorkspace(path)).ok) return []
+        return (await listWritingDays(new NodeFileStore(path))).map((day) => ({ ...day, workspaceId: path }))
+      } catch { return [] } // A removed or inaccessible recent workspace must not hide statistics for other projects.
+    }))
+    return rows.flat()
+  })
 
   ipcMain.handle(IPC.UpdateSettings, async (_e, patch: SettingsPatch): Promise<PublicAppSettings> =>
     ctx.settings.toPublic(await ctx.settings.update(patch))
@@ -266,19 +336,58 @@ export function registerIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.FetchModels, async (_e, input: FetchModelsInput): Promise<string[]> => {
     const provider = await ctx.settings.providerInput(input)
-    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
+    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey, { fetcher: electronFetch })
   })
-  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: true }))
+  ipcMain.handle(IPC.GetCapabilities, async (): Promise<PlatformCapabilities> => ({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false }))
   ipcMain.handle(IPC.ListCreativePackages, async () => ctx.agent.listCreativePackages())
   ipcMain.handle(IPC.InstallCreativePackage, async (_e, input) => ctx.agent.installCreativePackage(undefined, input))
   ipcMain.handle(IPC.SetCreativePackageEnabled, async (_e, id: string, version: string, enabled: boolean) => ctx.agent.setCreativePackageEnabled(undefined, id, version, enabled))
   ipcMain.handle(IPC.ListCreativeRules, async () => ctx.agent.listCreativeRules(requireRoot()))
   ipcMain.handle(IPC.SaveCreativeRules, async (_e, layers) => ctx.agent.saveCreativeRules(requireRoot(), layers))
+  ipcMain.handle(IPC.ListInspirationSources, async () => new SourceCatalog(new NodeFileStore(requireRoot())).list())
+  ipcMain.handle(IPC.ImportInspirationSource, async (_e, input) => { const root = requireRoot(); return serializeWorkspace(root, () => new SourceCatalog(new NodeFileStore(root)).importBytes(input)) })
+  ipcMain.handle(IPC.ImportInspirationPath, async (_e, rawPath: string) => {
+    const root = requireRoot()
+    const path = typeof rawPath === 'string' ? rawPath.trim() : ''
+    if (!path) throw new Error('请输入资料文件地址')
+    const files = await collectExternalImportFiles(path)
+    if (!files.length) throw new Error('未找到可读取的资料；支持常见文本、DOCX 和 PDF 文件')
+    const oversized = files.find((file) => file.size > MAX_INSPIRATION_SOURCE_BYTES)
+    if (oversized) throw new Error(`单份灵感资料不能超过 100 MiB：${oversized.relativeName}`)
+    const total = files.reduce((sum, file) => sum + file.size, 0)
+    if (total > MAX_INSPIRATION_TOTAL_BYTES) throw new Error('本次导入资料总量不能超过 100 MiB')
+    return serializeWorkspace(root, async () => {
+      const catalog = new SourceCatalog(new NodeFileStore(root))
+      const existing = (await catalog.list()).reduce((sum, source) => sum + source.size, 0)
+      if (existing + total > MAX_INSPIRATION_TOTAL_BYTES) throw new Error('灵感资料总量不能超过 100 MiB')
+      const imported = []
+      for (const file of files) {
+        const bytes = new Uint8Array(await fs.readFile(file.absolutePath))
+        imported.push(await catalog.importBytes({ name: file.relativeName, bytes }))
+      }
+      return imported.length === 1 ? imported[0] : imported
+    })
+  })
+  ipcMain.handle(IPC.RemoveInspirationSource, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => new SourceCatalog(new NodeFileStore(root)).removeImported(id)) })
+  ipcMain.handle(IPC.ExtractInspirationSource, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => new SourceCatalog(new NodeFileStore(root)).extract(id)) })
+  ipcMain.handle(IPC.ReadInspirationSource, async (_e, id: string, maxChars?: number) => new SourceCatalog(new NodeFileStore(requireRoot())).readExtracted(id, maxChars))
+  ipcMain.handle(IPC.ReadInspirationDoc, async (_e, name: string) => {
+    const path = normalizeProjectDocPath(name)
+    return new NodeFileStore(requireRoot()).readText(`docs/${path}`)
+  })
+  ipcMain.handle(IPC.SaveInspirationDoc, async (_e, name: string, content: string) => {
+    const root = requireRoot()
+    const path = normalizeProjectDocPath(name)
+    validateProjectDocContent(content)
+    return serializeWorkspace(root, async () => { await new NodeFileStore(root).writeText(`docs/${path}`, content); return undefined })
+  })
+  ipcMain.handle(IPC.SaveInspirationArtifact, async (_e, input) => { const root = requireRoot(); return serializeWorkspace(root, () => saveInspirationArtifact(new NodeFileStore(root), input)) })
 
   /* ---------- 智能体 ---------- */
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
-  ipcMain.handle(IPC.AgentConfirm, async (_e, changeId: string, approved: boolean) => ctx.agent.confirmChange(changeId, approved))
-  ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abort(sessionId))
+  ipcMain.handle(IPC.CompressSessionContext, async (_e, sessionId: string, providerId: string, model: string) => ctx.agent.compressSessionContext(requireRoot(), sessionId, providerId, model))
+  ipcMain.handle(IPC.AgentConfirm, async (_e, sessionId: string, changeId: string, approved: boolean) => ctx.agent.confirmChangeForWorkspace(requireRoot(), changeId, approved, sessionId))
+  ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abortForWorkspace(requireRoot(), sessionId))
   ipcMain.handle(IPC.AgentAnswerQuestion, async (_e, answer: import('../shared/agentQuestions').AgentQuestionAnswer) => ctx.agent.answerQuestion(requireRoot(), answer))
   ipcMain.handle(IPC.AgentResolveSkillCandidate, async (_e, candidateId: string, action: import('../shared/agentQuestions').SkillCandidateAction) => ctx.agent.resolveSkillCandidate(requireRoot(), candidateId, action))
   ipcMain.handle(IPC.RecoverRunEvents, async (_e, runId: string, afterSeq?: number) => {
@@ -312,7 +421,10 @@ export function registerIpc(ctx: AppContext): void {
     return { id: session.id, title: session.title, updatedAt: session.updatedAt, messageCount: session.messages.filter((m) => m.role === 'user' || m.role === 'assistant').length, archived: false }
   })
   ipcMain.handle(IPC.LoadSession, async (_e, id: string) => sessionStore().load(id))
-  ipcMain.handle(IPC.DeleteSession, async (_e, id: string) => sessionStore().delete(id))
+  ipcMain.handle(IPC.DeleteSession, async (_e, id: string) => {
+    if (ctx.agent.isRunning(requireRoot(), id)) throw new Error('会话正在运行，请先停止运行后再删除')
+    return sessionStore().delete(id)
+  })
   ipcMain.handle(IPC.UpdateSession, async (_e, id: string, patch: Parameters<StoryFabricApi['updateSession']>[1]) => {
     const okFlag = await sessionStore().updateMeta(id, patch)
     if (!okFlag) throw new Error('会话不存在')
@@ -320,18 +432,4 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.UpdateSessionModelPreference, async (_e, id: string, value: import('../shared/types').SessionModelPreference) => {
     if (!(await sessionStore().updateModelPreference(id, value))) throw new Error('会话不存在')
   })
-
-  /* ---------- 远程部署（仅桌面端） ---------- */
-  const deploySink = (): ((progress: DeployProgress) => void) => {
-    return (progress) => ctx.win()?.webContents.send(IPC.DeployEvent, progress)
-  }
-  ipcMain.handle(IPC.DeployTestConnection, async (_e, input: DeployConnectionInput) => ctx.deploy.testConnection(input))
-  ipcMain.handle(IPC.DeployInstall, async (_e, input: DeployTargetInput) => ctx.deploy.install(input, deploySink()))
-  ipcMain.handle(IPC.DeployUpdate, async (_e, targetId: string) => ctx.deploy.update(targetId, deploySink()))
-  ipcMain.handle(IPC.DeployCancel, async () => ctx.deploy.cancel())
-  ipcMain.handle(IPC.DeployLogs, async (_e, targetId: string) => ctx.deploy.logs(targetId))
-  ipcMain.handle(IPC.DeployUninstall, async (_e, targetId: string) => ctx.deploy.uninstall(targetId))
-  ipcMain.handle(IPC.DeployListTargets, async () => ctx.deploy.listTargets())
-  ipcMain.handle(IPC.DeploySaveTarget, async (_e, input: DeployTargetInput) => ctx.deploy.saveTarget(input))
-  ipcMain.handle(IPC.DeployDeleteTarget, async (_e, id: string) => ctx.deploy.deleteTarget(id))
 }

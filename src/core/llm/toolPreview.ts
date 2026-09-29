@@ -3,6 +3,11 @@ export interface ToolBodyPreviewOptions {
   contentPath: string[]
 }
 
+const PREVIEW_SCAN_INTERVAL = 1024
+const SMALL_BUFFER_SCAN_LIMIT = 4096
+const MAX_PARTIAL_SCAN_BYTES = 65536
+const MAX_PREVIEW_CHARS = 12000
+
 interface StringResult {
   value: string
   end: number
@@ -128,31 +133,44 @@ export class ToolBodyPreview {
   private readonly decoder = new TextDecoder()
   private preview = ''
   private complete = false
+  private lastScanLength = 0
 
   constructor(private readonly options: ToolBodyPreviewOptions) {
     if (!options.toolName.trim()) throw new Error('toolName 不能为空')
     if (!options.contentPath.length || options.contentPath.some((part) => !part.trim())) throw new Error('contentPath 必须是非空路径')
   }
 
-  push(chunk: string | Uint8Array): string {
+  push(chunk: string | Uint8Array): string | null {
     this.buffer += typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true })
+    const previousPreview = this.preview
+    const shouldScan = !this.complete && this.preview.length < MAX_PREVIEW_CHARS && (
+      this.buffer.length <= SMALL_BUFFER_SCAN_LIMIT ||
+      this.buffer.length - this.lastScanLength >= PREVIEW_SCAN_INTERVAL
+    ) && (this.preview.length > 0 || this.buffer.length <= MAX_PARTIAL_SCAN_BYTES)
+    if (!shouldScan) return this.preview ? null : ''
+    this.lastScanLength = this.buffer.length
     const found = findStringAtPath(this.buffer, this.options.contentPath)
-    if (found) this.preview = found.value
-    try {
-      const parsed = JSON.parse(this.buffer) as unknown
-      this.complete = found?.complete === true && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-    } catch {
-      this.complete = false
+    if (found) this.preview = found.value.slice(0, MAX_PREVIEW_CHARS)
+    this.complete = false
+    if (found?.complete) {
+      try {
+        const parsed = JSON.parse(this.buffer) as unknown
+        this.complete = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      } catch {
+        this.complete = false
+      }
     }
-    return this.preview
+    if (this.preview !== previousPreview) return this.preview
+    return this.preview ? null : ''
   }
 
   isComplete(): boolean { return this.complete }
 
-  replace(value: string): string {
+  replace(value: string): string | null {
     this.buffer = ''
     this.preview = ''
     this.complete = false
+    this.lastScanLength = 0
     return this.push(value)
   }
 

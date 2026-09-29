@@ -60,3 +60,41 @@ it('pauses the whole orchestration with an explicit budget state instead of mark
   expect(result.stages.find((stage) => stage.stageId === 'setting')).toMatchObject({ status: 'paused_budget' })
   expect(result.stages.find((stage) => stage.stageId === 'write')).toMatchObject({ status: 'paused_budget' })
 })
+
+it('resumes from a persisted checkpoint without rerunning completed stages', async () => {
+  const firstCalls: string[] = []
+  const firstScheduler = new OrchestrationScheduler({
+    call: async ({ stageId }) => {
+      firstCalls.push(stageId)
+      if (stageId === 'setting') throw new ModelCallBudgetError('tokens')
+      return { text: `${stageId} result` }
+    }
+  })
+  const paused = await firstScheduler.run({ runId: 'run-checkpoint-1', workspaceId: 'w', sourceRevision: 1, goal: '继续写作', originalText: '' })
+
+  const resumedCalls: string[] = []
+  const resumedScheduler = new OrchestrationScheduler({
+    call: async ({ stageId }) => {
+      resumedCalls.push(stageId)
+      return { text: `${stageId} resumed` }
+    }
+  })
+  const resumed = await resumedScheduler.run({
+    runId: 'run-checkpoint-2',
+    workspaceId: 'w',
+    sourceRevision: 1,
+    goal: '继续写作',
+    originalText: '',
+    checkpoint: {
+      stages: paused.stages,
+      artifacts: paused.artifacts,
+      overlay: paused.overlay.toJSON(),
+      businessText: paused.businessText
+    }
+  })
+
+  expect(firstCalls).toEqual(['plan', 'setting'])
+  expect(resumedCalls).toEqual(['setting', 'prompt', 'anti-ai', 'write', 'polish', 'review'])
+  expect(resumed.stages.find((stage) => stage.stageId === 'plan')).toMatchObject({ status: 'completed' })
+  expect(resumed.status).toBe('completed')
+})

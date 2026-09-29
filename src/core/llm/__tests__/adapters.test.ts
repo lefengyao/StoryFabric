@@ -406,6 +406,25 @@ describe('GeminiAdapter', () => {
     expect(body.systemInstruction?.parts[0].text).toBe('sys提示')
   })
 
+  it('捕获 Gemini functionCall 的 thoughtSignature（兼容 camelCase 与 snake_case）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        sseResponse([
+          'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"first","args":{"n":1}},"thoughtSignature":"sig-camel"},{"functionCall":{"name":"second","args":{"n":2}},"thought_signature":"sig-snake"}]}}]}\n\n'
+        ])
+      )
+    )
+
+    const adapter = new GeminiAdapter('https://generativelanguage.googleapis.com')
+    const result = await adapter.stream('gemini-2.5-pro', { system: '', messages: [], tools: [], signal: undefined }, 'k', noopHandlers)
+
+    expect(result.toolCalls).toEqual([
+      { id: 'call_0', name: 'first', argsJson: '{"n":1}', thoughtSignature: 'sig-camel' },
+      { id: 'call_1', name: 'second', argsJson: '{"n":2}', thoughtSignature: 'sig-snake' }
+    ])
+  })
+
   it('解析 usageMetadata', async () => {
     vi.stubGlobal(
       'fetch',
@@ -499,5 +518,26 @@ describe('GeminiAdapter', () => {
       { id: 'c', role: 'tool', toolCallId: 't1', toolName: 'f1', text: '{"ok":true}' }
     ])
     expect(out[1].parts[0].functionResponse).toEqual({ name: 'f1', response: { result: { ok: true } } })
+  })
+
+  it('在 functionCall Part 同级回放每个 thoughtSignature，并兼容旧的无签名调用', () => {
+    const out = toGeminiContents([
+      {
+        id: 'a',
+        role: 'assistant',
+        toolCalls: [
+          { id: 't1', name: 'f1', argsJson: '{"q":1}', thoughtSignature: 'sig-1' },
+          { id: 't2', name: 'f2', argsJson: '{"q":2}', thoughtSignature: 'sig-2' },
+          { id: 't3', name: 'f3', argsJson: '{"q":3}' }
+        ]
+      }
+    ])
+
+    expect(out).toHaveLength(1)
+    expect(out[0].parts).toEqual([
+      { functionCall: { name: 'f1', args: { q: 1 } }, thoughtSignature: 'sig-1' },
+      { functionCall: { name: 'f2', args: { q: 2 } }, thoughtSignature: 'sig-2' },
+      { functionCall: { name: 'f3', args: { q: 3 } } }
+    ])
   })
 })

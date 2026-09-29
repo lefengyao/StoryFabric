@@ -100,6 +100,8 @@ export class RevalidatedFileStore implements FileStore {
   async writeBytes(path: string, bytes: Uint8Array): Promise<void> { return (await this.loadStore()).writeBytes(path, bytes) }
   async move(from: string, to: string): Promise<void> { return (await this.loadStore()).move(from, to) }
   async remove(path: string): Promise<void> { return (await this.loadStore()).remove(path) }
+  async removeFile(path: string): Promise<void> { return (await this.loadStore()).removeFile(path) }
+  async fileSize(path: string): Promise<number | null> { return (await this.loadStore()).fileSize(path) }
   async modifiedAt(path: string): Promise<number | null> { return (await this.loadStore()).modifiedAt(path) }
   async listFiles(dir: string, extension?: string): Promise<string[]> { return (await this.loadStore()).listFiles(dir, extension) }
   async listDirs(dir: string): Promise<string[]> { return (await this.loadStore()).listDirs(dir) }
@@ -302,6 +304,29 @@ export class WorkspaceRegistry {
     await this.ensureReady()
     const record = this.getRecord(id)
     return loadSummary(new NodeFileStore(this.rootOf(record), this.managedRootBoundary), record.name, id)
+  }
+
+  async rename(id: string, name: string): Promise<WorkspaceListItem> {
+    await this.ensureReady()
+    return this.mutate(async () => {
+      const record = this.getRecord(id)
+      const store = new NodeFileStore(this.rootOf(record), this.managedRootBoundary)
+      const previousName = (await loadWorkspaceListItem(store, record.name, id)).name
+      await setWorkspaceName(store, name)
+      const oldRecordName = record.name
+      const oldUpdatedAt = record.updatedAt
+      record.name = name.trim()
+      record.updatedAt = Date.now()
+      try {
+        await this.saveRecords()
+      } catch (error) {
+        record.name = oldRecordName
+        record.updatedAt = oldUpdatedAt
+        await setWorkspaceName(store, previousName).catch(() => undefined)
+        throw error
+      }
+      return loadWorkspaceListItem(store, record.name, id)
+    })
   }
 
   async create(name: string): Promise<WorkspaceSummary> {

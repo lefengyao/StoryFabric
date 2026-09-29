@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceListItem } from '../../../../../shared/types'
 import { RecentWorkspaceList, triggerRecentWorkspaceOpen, triggerRecentWorkspaceRetry } from '../RecentWorkspaceList'
-import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, SERVER_DEPLOYMENT_ENABLED, shouldAutoLoadRecentWorkspaces, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker, shouldResetRecentWorkspaces } from '../WelcomePage'
+import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, shouldAutoLoadRecentWorkspaces, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker, shouldResetRecentWorkspaces } from '../WelcomePage'
 
 const item = (index: number, overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem => ({
   name: `工作区 ${index}`,
@@ -22,6 +22,8 @@ const renderList = (props: Partial<React.ComponentProps<typeof RecentWorkspaceLi
       error={null}
       openingPath={null}
       onOpen={vi.fn()}
+      onRename={vi.fn()}
+      onForget={vi.fn()}
       onRetry={vi.fn()}
       {...props}
     />
@@ -31,10 +33,6 @@ const renderedButtons = (markup: string): string[] =>
   Array.from(markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g), (match) => match[0])
 
 describe('RecentWorkspaceList', () => {
-  it('keeps unverified server deployment hidden in the stable desktop UI', () => {
-    expect(SERVER_DEPLOYMENT_ENABLED).toBe(false)
-  })
-
   it('does not log in for each service-key keystroke, but loads immediately after connecting', async () => {
     const loginRemote = vi.fn()
     let submitted = false
@@ -53,6 +51,13 @@ describe('RecentWorkspaceList', () => {
     const markup = renderList({ items: [] })
 
     expect(markup).toContain('还没有最近工作区')
+  })
+
+  it('offers rename and safe removal next to each recent project', () => {
+    const markup = renderList()
+    expect(markup).toContain('重命名项目')
+    expect(markup).toContain('从最近列表移除')
+    expect(markup).toContain('不会删除项目文件')
   })
 
   it('shows loading state while recent workspaces are loading', () => {
@@ -147,7 +152,7 @@ describe('RecentWorkspaceList', () => {
 
   it('disables every row while one workspace is opening, but only shows loading on that row', () => {
     const markup = renderList({ items: [item(1), item(2)], openingPath: '/workspace/1' })
-    const buttons = renderedButtons(markup)
+    const buttons = renderedButtons(markup).filter((button) => button.includes('>打开</span>'))
 
     expect(buttons).toHaveLength(2)
     expect(buttons[0]).toContain('disabled=""')
@@ -156,12 +161,12 @@ describe('RecentWorkspaceList', () => {
     expect(buttons[1]).not.toContain('animate-spin')
   })
 
-  it('uses one button per recent row without nested button controls', () => {
+  it('keeps open, rename, and remove as sibling buttons without nested controls', () => {
     const markup = renderList({ items: [item(1), item(2)] })
 
     expect(markup).not.toContain('role="button"')
-    expect(markup).not.toMatch(/<button[^>]*>[\s\S]*<div[ >]/)
-    expect(renderedButtons(markup)).toHaveLength(2)
+    expect(markup).not.toMatch(/<button[^>]*>(?:(?!<\/button>)[\s\S])*<button/)
+    expect(renderedButtons(markup)).toHaveLength(6)
   })
 
   it('accepts only the current modal request configuration and generation', () => {

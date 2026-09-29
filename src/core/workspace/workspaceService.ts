@@ -1,5 +1,6 @@
 import type { FileStore } from '../storage/fileStore'
 import type { ChapterBox, ChapterDoc, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
+import { resolveChapterPlacement } from '../../shared/chapterPlacement'
 import { getChapterBody, listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter } from './entityStore'
 import { CURRENT_WORKSPACE_VERSION, migrateWorkspace } from './migration'
 import { cleanupWorkspace } from './housekeeping'
@@ -64,15 +65,19 @@ export async function loadWorkspaceListItem(store: FileStore, fallbackName: stri
 }
 
 export async function setWorkspaceName(store: FileStore, name: string): Promise<void> {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('项目名称不能为空')
   const raw = await store.readText('storyfabric.json')
   if (!raw) throw new Error('工作区元数据缺失')
+  let metadata: Record<string, unknown>
   try {
-    const metadata = JSON.parse(raw) as Record<string, unknown>
-    metadata.name = name
-    await store.writeText('storyfabric.json', JSON.stringify(metadata, null, 2))
+    metadata = JSON.parse(raw) as Record<string, unknown>
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('invalid')
   } catch {
     throw new Error('工作区元数据无效')
   }
+  metadata.name = trimmed
+  await store.writeText('storyfabric.json', JSON.stringify(metadata, null, 2))
 }
 
 export async function listVolumes(store: FileStore): Promise<VolumeMeta[]> {
@@ -116,10 +121,10 @@ export async function moveChapter(store: FileStore, id: string, target: { box: E
     const volume = (await listVolumes(store)).find((item) => item.id === volumeId)
     if (!volume) throw new Error(`未找到目标卷：${volumeId}`)
     const content = await getChapterBody(store, id)
-    await saveChapter(store, { ...meta, box: 'main', volumeId, volume: volume.title, content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
+    await saveChapter(store, { ...meta, ...resolveChapterPlacement(meta, { box: 'main' }), volumeId, volume: volume.title, content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
   } else {
     const content = await getChapterBody(store, id)
-    await saveChapter(store, { ...meta, box: 'draft', content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
+    await saveChapter(store, { ...meta, ...resolveChapterPlacement(meta, { box: 'draft' }), content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
   }
 }
 

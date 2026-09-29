@@ -25,6 +25,8 @@ describe('agent chapter placement validation', () => {
 
   it('accepts a draft chapter without a volume', () => {
     expect(() => validateAgentChapterWrite({ title: '第二章', box: 'draft', status: 'draft' })).not.toThrow()
+    expect(() => validateAgentChapterWrite({ title: '第二章', box: 'main', status: 'draft', volumeId: 'vol_default' })).toThrow('状态与箱位不一致')
+    expect(() => validateAgentChapterWrite({ title: '第二章', box: 'main', status: 'body', volumeId: 'vol_default' })).not.toThrow()
   })
 
   it('requires a volume when writing to the main-text box', () => {
@@ -43,9 +45,10 @@ describe('agent outline placement validation', () => {
     expect(() => validateAgentOutlineWrite({ title: '第二章章纲' })).toThrow('kind')
   })
 
-  it('requires chapterId for a chapter outline', () => {
-    expect(() => validateAgentOutlineWrite({ title: '第二章章纲', kind: 'chapter' })).toThrow('chapterId')
+  it('allows a chapter outline without a chapter and permits linking later', () => {
+    expect(() => validateAgentOutlineWrite({ title: '第二章章纲', kind: 'chapter' })).not.toThrow()
     expect(() => validateAgentOutlineWrite({ title: '第二章章纲', kind: 'chapter', chapterId: 'cha_2' })).not.toThrow()
+    expect(() => validateAgentOutlineWrite({ title: '第二章章纲', kind: 'chapter', chapterId: '' })).not.toThrow()
   })
 
   it('does not allow a chapter id on a total outline', () => {

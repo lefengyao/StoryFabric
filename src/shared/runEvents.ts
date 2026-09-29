@@ -7,6 +7,9 @@ export interface RunReplay {
   snapshot?: unknown
 }
 
+const DEFAULT_MAX_RUN_EVENT_BYTES = 512 * 1024
+const DEFAULT_MAX_RUN_EVENTS = 2000
+
 export class RunEventBuffer {
   private readonly events: RunEventEnvelope[] = []
   private bytes = 0
@@ -18,13 +21,21 @@ export class RunEventBuffer {
     if (this.events.length && event.seq <= this.events[this.events.length - 1].seq) throw new Error('运行事件 seq 必须递增')
     this.events.push(structuredClone(event))
     this.bytes += new TextEncoder().encode(JSON.stringify(event)).byteLength
-    while (this.events.length > (this.limits.maxEvents ?? 2000) || this.bytes > (this.limits.maxBytes ?? 2 * 1024 * 1024)) {
+    while (this.events.length > (this.limits.maxEvents ?? DEFAULT_MAX_RUN_EVENTS) || this.bytes > (this.limits.maxBytes ?? DEFAULT_MAX_RUN_EVENT_BYTES)) {
       const removed = this.events.shift()
       if (removed) this.bytes -= new TextEncoder().encode(JSON.stringify(removed)).byteLength
     }
   }
 
-  setSnapshot(snapshot: unknown): void { this.snapshot = structuredClone(snapshot) }
+  setSnapshot(snapshot: unknown): void {
+    try {
+      const clone = structuredClone(snapshot)
+      const bytes = new TextEncoder().encode(JSON.stringify(clone)).byteLength
+      this.snapshot = bytes <= (this.limits.maxBytes ?? DEFAULT_MAX_RUN_EVENT_BYTES) ? clone : undefined
+    } catch {
+      this.snapshot = undefined
+    }
+  }
   listAfter(afterSeq: number): RunEventEnvelope[] { return this.events.filter((event) => event.seq > afterSeq).map((event) => structuredClone(event)) }
 
   replay(afterSeq: number): RunReplay {

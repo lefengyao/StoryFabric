@@ -1,15 +1,23 @@
 /** Google Gemini 原生协议适配器 */
 import type { ChatMessage } from '../../shared/types'
-import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
+import { httpError, isUnsupportedTemperatureError, normalizeBaseUrl, parseJsonResponse, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
 import { toGeminiMessageParts } from '../attachments/messageContent'
+import { assertSafeNetworkUrl } from '../net/safeUrl'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 interface GeminiPart {
   text?: string
-  functionCall?: { name: string; args?: Record<string, unknown> }
+  thoughtSignature?: string
+  thought_signature?: string
+  functionCall?: {
+    name: string
+    args?: Record<string, unknown>
+    thoughtSignature?: string
+    thought_signature?: string
+  }
   functionResponse?: { name: string; response: Record<string, unknown> }
 }
 
@@ -29,7 +37,9 @@ export function toGeminiContents(messages: ChatMessage[]): { role: 'user' | 'mod
         } catch {
           args = {}
         }
-        parts.push({ functionCall: { name: tc.name, args } })
+        const functionCallPart: GeminiPart = { functionCall: { name: tc.name, args } }
+        if (tc.thoughtSignature) functionCallPart.thoughtSignature = tc.thoughtSignature
+        parts.push(functionCallPart)
       }
       if (parts.length) out.push({ role: 'model', parts })
     } else if (m.role === 'tool') {
@@ -48,16 +58,21 @@ export function toGeminiContents(messages: ChatMessage[]): { role: 'user' | 'mod
   return out
 }
 
+function nativeGeminiBase(baseUrl: string): string {
+  const base = normalizeBaseUrl(baseUrl)
+  const withoutCompatibilityPath = base.replace(/\/v1beta\/openai$/, '')
+  return withoutCompatibilityPath.endsWith('/v1beta') ? withoutCompatibilityPath : `${withoutCompatibilityPath}/v1beta`
+}
+
 export class GeminiAdapter implements LlmAdapter {
-  constructor(private baseUrl: string) {}
+  constructor(private baseUrl: string, private allowPrivateUrls = true, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis), private readonly fallbackFetcher?: typeof fetch) {}
 
   private apiBase(): string {
-    const base = normalizeBaseUrl(this.baseUrl)
-    return base.endsWith('/v1beta') ? base : `${base}/v1beta`
+    return nativeGeminiBase(this.baseUrl)
   }
 
   async stream(model: string, req: StreamRequest, apiKey: string, handlers: StreamHandlers): Promise<StreamResult> {
-    const url = `${this.apiBase()}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
+    const url = await assertSafeNetworkUrl(`${this.apiBase()}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { allowPrivate: this.allowPrivateUrls })
     const body: any = {
       contents: toGeminiContents(req.messages)
     }
@@ -78,12 +93,26 @@ export class GeminiAdapter implements LlmAdapter {
       ]
     }
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(body),
-      signal: req.signal
-    })
+    const send = (includeTemperature: boolean): Promise<Response> => {
+      const requestBody = includeTemperature ? body : { ...body }
+      if (!includeTemperature && typeof requestBody.generationConfig === 'object' && requestBody.generationConfig !== null && !Array.isArray(requestBody.generationConfig)) {
+        requestBody.generationConfig = { ...requestBody.generationConfig }
+        delete requestBody.generationConfig.temperature
+      }
+      const init: RequestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        redirect: 'error',
+        body: JSON.stringify(requestBody),
+        signal: req.signal
+      }
+      return this.fetcher(url, init).catch((error: unknown) => {
+        if (!this.fallbackFetcher || !(error instanceof TypeError) || req.signal?.aborted) throw error
+        return this.fallbackFetcher(url, init)
+      })
+    }
+    let res = await send(req.params?.temperature !== undefined)
+    if (!res.ok && await isUnsupportedTemperatureError(res, req.params?.temperature)) res = await send(false)
     if (!res.ok) throw await httpError(res)
 
     let text = ''
@@ -125,10 +154,20 @@ export class GeminiAdapter implements LlmAdapter {
           handlers.onToolCallStart?.(id, part.functionCall.name, index)
           const argsJson = JSON.stringify(part.functionCall.args ?? {})
           handlers.onToolCallComplete?.(id, part.functionCall.name, argsJson, index)
+          const thoughtSignature = typeof part.thoughtSignature === 'string'
+            ? part.thoughtSignature
+            : typeof part.thought_signature === 'string'
+              ? part.thought_signature
+              : typeof part.functionCall.thoughtSignature === 'string'
+                ? part.functionCall.thoughtSignature
+                : typeof part.functionCall.thought_signature === 'string'
+                  ? part.functionCall.thought_signature
+                  : undefined
           toolCalls.push({
             id,
             name: part.functionCall.name,
-            argsJson
+            argsJson,
+            ...(thoughtSignature ? { thoughtSignature } : {})
           })
         }
       }
@@ -139,11 +178,11 @@ export class GeminiAdapter implements LlmAdapter {
   }
 }
 
-export async function fetchGeminiModels(baseUrl: string, apiKey: string): Promise<string[]> {
-  const url = `${normalizeBaseUrl(baseUrl).replace(/\/v1beta$/, '')}/v1beta/models?pageSize=200`
-  const res = await fetch(url, { headers: { 'x-goog-api-key': apiKey } })
+export async function fetchGeminiModels(baseUrl: string, apiKey: string, options: { allowPrivateUrls?: boolean; fetcher?: typeof fetch } = {}): Promise<string[]> {
+  const url = await assertSafeNetworkUrl(`${nativeGeminiBase(baseUrl)}/models?pageSize=200`, { allowPrivate: options.allowPrivateUrls ?? true })
+  const res = await (options.fetcher ?? globalThis.fetch.bind(globalThis))(url, { headers: { 'x-goog-api-key': apiKey }, redirect: 'error' })
   if (!res.ok) throw await httpError(res)
-  const json = (await res.json()) as { models?: { name?: string; supportedGenerationMethods?: string[] }[] }
+  const json = await parseJsonResponse<{ models?: { name?: string; supportedGenerationMethods?: string[] }[] }>(res)
   return (json.models ?? [])
     .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent'))
     .map((m) => (m.name ?? '').replace(/^models\//, ''))

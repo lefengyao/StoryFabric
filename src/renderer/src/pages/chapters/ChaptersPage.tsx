@@ -1,18 +1,23 @@
-import { ArchiveRestore, BookOpen, Check, Copy, FolderPlus, Plus, Save, Sparkles, Trash2, Undo2 } from 'lucide-react'
+import { ArchiveRestore, BookOpen, Check, Copy, Download, FileImage, FolderPlus, Menu, Plus, Redo2, Save, Search, Sparkles, TextSelect, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
+import { MarkdownEditor, type MarkdownEditorHandle } from '../../components/editor/MarkdownEditor'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { createAutosave } from '../../lib/autosave'
 import { copyPlainText } from '../../lib/clipboard'
 import { canSwitchDocument } from '../../lib/documentSwitch'
+import { chapterTextAgentEnabled, chapterTextAgentPurpose, chapterTextAgentTask, type ChapterTextAgent } from '../../lib/chapterTextAgent'
+import { creativePreferencesForMode } from '../../lib/creativePreferences'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { chapterReadingStorageKey, readChapterReadingState, resolveChapterTarget, writeChapterReadingState, type ChapterReadingState } from '../../lib/chapterReadingState'
+import { imageFileStem, renderChapterImages, shareChapterImages } from '../../lib/chapterLongImage'
 import type { UiWorkspaceIdentity } from '../../lib/workspaceUiScope'
 import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
+import { boxForChapterStatus } from '../../../../shared/chapterPlacement'
 import { useChat } from '../../stores/chatStore'
+import { chatDraftScope, chatDraftStore } from '../../stores/chatDraftStore'
 import { useSettings } from '../../stores/settingsStore'
 import { useUi } from '../../stores/uiStore'
 import { useWorkspace } from '../../stores/workspaceStore'
@@ -20,7 +25,21 @@ import { useWorkspace } from '../../stores/workspaceStore'
 const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
   draft: 'default',
   revised: 'accent',
+  body: 'accent',
   final: 'ok'
+}
+
+export function ChapterTrashRow({ item, onRestore, onPurge }: { item: TrashEntry; onRestore: (id: string) => void; onPurge: (item: TrashEntry) => void }): React.ReactElement {
+  return (
+    <div className="flex items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-elevated">
+      <Trash2 size={14} className="shrink-0 text-faint" />
+      <span className="min-w-0 flex-1 truncate text-sm">{item.title}</span>
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <Button size="sm" variant="ghost" onClick={() => onRestore(item.id)} title="恢复"><Undo2 size={13} /></Button>
+        <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => onPurge(item)} title="永久删除"><Trash2 size={13} /></Button>
+      </div>
+    </div>
+  )
 }
 
 export function ChaptersPage(): React.ReactElement {
@@ -28,6 +47,7 @@ export function ChaptersPage(): React.ReactElement {
   const uiSource = useWorkspace((s) => s.uiSource)
   const refresh = useWorkspace((s) => s.refresh)
   const setAttachments = useChat((s) => s.setAttachments)
+  const setMessageFiles = useChat((s) => s.setMessageFiles)
   const openChatPanel = useUi((s) => s.openChatPanel)
 
   const [box, setBox] = useState<ChapterBox>('main')
@@ -38,10 +58,17 @@ export function ChaptersPage(): React.ReactElement {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [purgeTarget, setPurgeTarget] = useState<TrashEntry | null>(null)
+  const [trashActionError, setTrashActionError] = useState<string | null>(null)
   const [reloadHint, setReloadHint] = useState(false)
   const [confirmOverwrite, setConfirmOverwrite] = useState(false)
   const [copiedChapterId, setCopiedChapterId] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [sharingImage, setSharingImage] = useState(false)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null)
   /** 打开（或最近一次同步）时的磁盘内容，用于检测智能体等外部修改 */
   const baseRef = useRef<string>('')
   const openRequestRef = useRef(0)
@@ -53,6 +80,7 @@ export function ChaptersPage(): React.ReactElement {
   const lastApplied = useChat((s) => s.lastAppliedChange)
 
   const selected = chapters.find((c) => c.id === selectedId) ?? null
+  const selectedWordCount = selected && draft?.id === selected.id ? countWords(String(draft.content ?? '')) : selected?.wordCount ?? 0
   const volumes = summary?.volumes ?? []
   const workspaceIdentity = useMemo<UiWorkspaceIdentity | null>(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : null, [summary?.path, uiSource])
   const workspaceKey = workspaceIdentity ?? ''
@@ -65,6 +93,17 @@ export function ChaptersPage(): React.ReactElement {
   usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`, Boolean(draft && editorReady))
 
   useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointer = (event: PointerEvent): void => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false) }
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('pointerdown', onPointer); document.removeEventListener('keydown', onKey) }
+  }, [menuOpen])
+
+  useEffect(() => setMenuOpen(false), [draft?.id, box])
 
   const persistReading = (patch: Partial<ChapterReadingState>): void => {
     if (!workspaceIdentity) return
@@ -190,7 +229,7 @@ export function ChaptersPage(): React.ReactElement {
       volumeId: volumes[0]?.id ?? 'vol_default',
       box,
       order: (chapters.length ? Math.max(...chapters.map((c) => c.order)) : 0) + 1,
-      status: 'draft',
+      status: box === 'draft' ? 'draft' : 'body',
       content: ''
     })
     const fresh = await useWorkspace.getState().refresh().then(() => useWorkspace.getState().summary)
@@ -208,9 +247,14 @@ export function ChaptersPage(): React.ReactElement {
     if (!draft) return
     setSaving(true)
     try {
-      await api.saveChapter(draft)
+      const saved = await api.saveChapter(draft)
       baseRef.current = draft.content ?? ''
       await refresh()
+      const savedBox = saved.box === 'draft' ? 'draft' : 'main'
+      setBox(savedBox)
+      setSelectedId(saved.id)
+      setDraft({ ...draft, ...saved, content: draft.content ?? '' })
+      persistReading({ activeBox: savedBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [savedBox]: saved.id } })
       setDirty(false)
       setReloadHint(false)
     } finally {
@@ -233,6 +277,7 @@ export function ChaptersPage(): React.ReactElement {
 
   /** 空闲自动保存：只在有未保存改动时计时，到点仍走 save()（外部修改照旧弹确认） */
   const autosaveSeconds = useSettings((s) => s.settings?.autosaveSeconds ?? 0)
+  const generationPreferences = useSettings((s) => s.settings?.agentGeneration)
   const autosave = useMemo(() => createAutosave(autosaveSeconds * 1000), [autosaveSeconds])
   const saveRef = useRef(save)
   useEffect(() => {
@@ -271,7 +316,39 @@ export function ChaptersPage(): React.ReactElement {
     await refresh()
   }
 
+  const moveOpenChapter = async (): Promise<void> => {
+    if (!draft?.id) return
+    if (dirty) { setActionMessage('请先保存当前章节，再移动箱位'); return }
+    const targetBox = draft.box === 'draft' ? 'main' : 'draft'
+    try {
+      await api.moveChapter(draft.id, { box: targetBox, volumeId: draft.volumeId })
+      await refresh()
+      const updated = useWorkspace.getState().summary?.chapters.find((chapter) => chapter.id === draft.id)
+      setBox(targetBox)
+      setSelectedId(draft.id)
+      setDraft({ ...draft, ...updated, content: draft.content ?? '' })
+      persistReading({ activeBox: targetBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [targetBox]: draft.id } })
+      setDirty(false)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   const restore = async (id: string): Promise<void> => { await api.restoreTrash(id); await refresh(); setTrashItems(await api.listTrash()) }
+
+  const purge = async (): Promise<void> => {
+    if (!purgeTarget) return
+    try {
+      setTrashActionError(null)
+      await api.purgeTrash(purgeTarget.id)
+      const items = await api.listTrash()
+      setTrashItems(items)
+      setPurgeTarget(null)
+      await refresh()
+    } catch (error) {
+      setTrashActionError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const copyChapter = async (id: string, content?: string): Promise<void> => {
     setCopyError(null)
@@ -285,15 +362,62 @@ export function ChaptersPage(): React.ReactElement {
     }
   }
 
+  const downloadChapterMarkdown = (): void => {
+    if (!draft) return
+    const blob = new Blob([draft.content ?? ''], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${imageFileStem(draft.title ?? '章节')}.md`
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  }
+
+  const shareChapter = async (): Promise<void> => {
+    if (!draft || sharingImage) return
+    setSharingImage(true)
+    setActionMessage(null)
+    try {
+      const images = await renderChapterImages(draft.title ?? '章节', draft.content ?? '')
+      const result = await shareChapterImages(images)
+      setActionMessage(result === 'downloaded' ? `已下载 ${images.length} 张长图` : '已打开分享窗口')
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return
+      setActionMessage(error instanceof Error ? error.message : String(error))
+    } finally { setSharingImage(false) }
+  }
+
   /** 把当前章节挂到智能体上下文，跳转工作台 */
-  const askAi = (): void => {
-    if (!selected) return
-    setAttachments([{ kind: 'chapter', id: selected.id, label: selected.title }])
+  const askAi = async (task?: string, agent?: ChapterTextAgent): Promise<void> => {
+    const target = draft?.id ? { id: draft.id, title: draft.title ?? selected?.title ?? '当前章节' } : selected
+    if (!target || (agent && !chapterTextAgentEnabled(agent, generationPreferences))) return
+    if (agent && dirty) {
+      useChat.setState({ error: '请先保存当前章节，再启动润色候选，避免智能体读取旧版本。' })
+      openChatPanel()
+      return
+    }
+    setAttachments([{ kind: 'chapter', id: target.id, label: target.title, ...(agent ? { purpose: chapterTextAgentPurpose(agent) } : {}) }])
+    setMessageFiles([])
+    // 由聊天侧栏统一负责模型、模式和发送事务；快捷动作只填入草稿，避免绕过默认模型。
+    const chat = useChat.getState()
+    const settings = useSettings.getState().settings
+    if (agent && chat.creativePreferences?.orchestrationEnabled) {
+      try {
+        await chat.updateCreativePreferences(creativePreferencesForMode(chat.creativePreferences, settings ?? undefined, false))
+      } catch (error) {
+        useChat.setState({ error: error instanceof Error ? error.message : String(error) })
+        openChatPanel()
+        return
+      }
+    }
+    chatDraftStore.setText(chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId), task ?? '请基于当前章节和项目资料提出续写建议；先读取相关设定，未经确认不要写回。')
     openChatPanel()
   }
 
   return (
-    <div className="flex h-full flex-col sm:flex-row">
+    <div className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 章节列表 */}
       <div className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="shrink-0 border-b border-line px-3 py-3">
@@ -320,7 +444,7 @@ export function ChaptersPage(): React.ReactElement {
           )}
         </div>
         <div ref={chapterListRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-          {box === 'trash' ? trashItems.filter((item) => item.kind === 'chapter').map((item) => <div key={item.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-elevated"><Trash2 size={14} className="text-faint" /><span className="truncate text-sm">{item.title}</span><Button size="sm" variant="ghost" className="ml-auto" onClick={() => void restore(item.id)} title="恢复"><Undo2 size={13} /></Button></div>) : <>
+          {box === 'trash' ? <>{trashActionError && <div className="mb-2 rounded-lg border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs text-danger">{trashActionError}</div>}{trashItems.filter((item) => item.kind === 'chapter').map((item) => <ChapterTrashRow key={item.id} item={item} onRestore={(id) => void restore(id)} onPurge={(target) => { setTrashActionError(null); setPurgeTarget(target) }} />)}</> : <>
           {chapters.length === 0 && <EmptyState icon={<BookOpen size={26} />} title="还没有章节" hint="新建第一章开始写作" />}
           {(box === 'draft' ? [{ id: 'draft', title: '草稿箱', order: 0 }] : volumes).map((vol) => (
             <div key={vol.id} className="mb-3">
@@ -346,7 +470,7 @@ export function ChaptersPage(): React.ReactElement {
                           {CHAPTER_STATUS_LABEL[c.status]}
                         </Badge>
                       </div>
-                      <div className="mt-1 text-[11px] text-faint">{c.wordCount} 字</div>
+                      <div className="mt-1 text-[11px] text-faint">{draft?.id === c.id ? countWords(String(draft.content ?? '')) : c.wordCount} 字</div>
                     </button>
                   ))}
               </div>
@@ -383,7 +507,7 @@ export function ChaptersPage(): React.ReactElement {
                   <button type="button" className="cursor-pointer font-medium" onClick={() => setCopyError(null)}>关闭</button>
                 </div>
               )}
-              <EmptyState icon={<BookOpen size={28} />} title={`${selected.wordCount} 字`} hint="点击「打开编辑」继续写作" />
+              <EmptyState icon={<BookOpen size={28} />} title={`${selectedWordCount} 字`} hint="点击「打开编辑」继续写作" />
             </div>
           ) : (
             <EmptyState icon={<BookOpen size={32} />} title="选择左侧章节" hint="或新建一章开始写作" />
@@ -406,14 +530,11 @@ export function ChaptersPage(): React.ReactElement {
             </select>
             <select
               value={draft.status ?? 'draft'}
-              onChange={(e) => { setDraft({ ...draft, status: e.target.value as ChapterStatus }); setDirty(true) }}
+              onChange={(e) => { const status = e.target.value as ChapterStatus; setDraft({ ...draft, status, box: boxForChapterStatus(status) }); setDirty(true) }}
               className="h-9 rounded-lg border border-line bg-panel px-2.5 text-sm outline-none focus:border-accent cursor-pointer"
             >
-              {(Object.keys(CHAPTER_STATUS_LABEL) as ChapterStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {CHAPTER_STATUS_LABEL[s]}
-                </option>
-              ))}
+              <optgroup label="草稿箱">{(['draft', 'revised'] as const).map((s) => <option key={s} value={s}>{CHAPTER_STATUS_LABEL[s]}</option>)}</optgroup>
+              <optgroup label="正文箱">{(['body', 'final'] as const).map((s) => <option key={s} value={s}>{CHAPTER_STATUS_LABEL[s]}</option>)}</optgroup>
             </select>
             <label className="flex items-center gap-1.5 text-xs text-muted">
               序号
@@ -425,17 +546,27 @@ export function ChaptersPage(): React.ReactElement {
             <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>
               完成
             </Button>
-            {draft.id && <Button variant="ghost" size="sm" onClick={() => void api.moveChapter(draft.id!, { box: draft.box === 'draft' ? 'main' : 'draft', volumeId: draft.volumeId }) .then(() => refresh())} title={draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}>{draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}</Button>}
-            <Button variant="ghost" size="sm" onClick={askAi} title="让智能体基于本章设定续写">
+            <Button variant="ghost" size="sm" onClick={() => void askAi()} title="让智能体基于本章设定续写">
               <Sparkles size={13} /> AI 续写
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void copyChapter(draft.id ?? 'draft', draft.content ?? '')} title="复制当前章节的完整正文">
-              {copiedChapterId === (draft.id ?? 'draft') ? <Check size={13} /> : <Copy size={13} />}
-              {copiedChapterId === (draft.id ?? 'draft') ? '已复制' : '复制全章'}
-            </Button>
-            <Button variant="ghost" size="sm" className="text-danger hover:text-danger" onClick={() => setConfirmDelete(true)}>
-              <Trash2 size={13} />
-            </Button>
+            <Button variant="ghost" size="sm" disabled={!draft.id || !chapterTextAgentEnabled('polish', generationPreferences)} onClick={() => void askAi(chapterTextAgentTask('polish', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'polish')} title="普通模式 AI 润色">AI 润色</Button>
+            <Button variant="ghost" size="sm" disabled={!draft.id || !chapterTextAgentEnabled('de-ai', generationPreferences)} onClick={() => void askAi(chapterTextAgentTask('de-ai', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'de-ai')} title="普通模式去 AI 风格">去 AI 风格</Button>
+            <div ref={menuRef} className="relative">
+              <Button variant="outline" size="sm" aria-label="章节更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><Menu size={16} /></Button>
+              {menuOpen && <div role="menu" aria-label="章节操作" className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border border-line bg-panel p-1 shadow-lg">
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.openSearch() }}><Search size={14} /> 查找与替换</button>
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.undo() }}><Undo2 size={14} /> 撤销</button>
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.redo() }}><Redo2 size={14} /> 重做</button>
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.selectAll() }}><TextSelect size={14} /> 全选正文</button>
+                <div className="my-1 border-t border-line" />
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); void copyChapter(draft.id ?? 'draft', draft.content ?? '') }}><Copy size={14} /> {copiedChapterId === (draft.id ?? 'draft') ? '已复制' : '复制全章'}</button>
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); downloadChapterMarkdown() }}><Download size={14} /> 导出 Markdown</button>
+                <button role="menuitem" type="button" disabled={sharingImage} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated disabled:opacity-50" onClick={() => { setMenuOpen(false); void shareChapter() }}><FileImage size={14} /> {sharingImage ? '生成中…' : '生成长图分享'}</button>
+                {draft.id && <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); void moveOpenChapter() }}><ArchiveRestore size={14} /> {draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}</button>}
+                <div className="my-1 border-t border-line" />
+                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-danger hover:bg-elevated" onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}><Trash2 size={14} /> 删除章节</button>
+              </div>}
+            </div>
             <Button variant="primary" size="sm" onClick={() => void save()} loading={saving}>
               <Save size={13} /> 保存
             </Button>
@@ -460,9 +591,13 @@ export function ChaptersPage(): React.ReactElement {
             </div>
           )}
 
+          {actionMessage && <div role="status" className="flex items-center justify-between border-b border-line px-5 py-2 text-xs text-muted"><span>{actionMessage}</span><button type="button" onClick={() => setActionMessage(null)}>关闭</button></div>}
+
           <div className="min-h-0 flex-1 p-4">
             <MarkdownEditor
+              ref={markdownEditorRef}
               value={draft.content ?? ''}
+              chapterFormatting
               documentId={draft.id}
               onLayoutReady={(documentId) => { if (documentId === draft.id) setEditorReady(true) }}
               onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }}
@@ -510,6 +645,19 @@ export function ChaptersPage(): React.ReactElement {
           </Button>
           <Button variant="danger" onClick={() => void remove()}>
             确认删除
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={Boolean(purgeTarget)} onOpenChange={(open) => { if (!open) { setPurgeTarget(null); setTrashActionError(null) } }} title={`永久删除「${purgeTarget?.title ?? ''}」？`}>
+        <p className="text-sm text-muted">此操作不可恢复。</p>
+        {trashActionError && <p className="mt-3 text-xs text-danger">{trashActionError}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => { setPurgeTarget(null); setTrashActionError(null) }}>
+            取消
+          </Button>
+          <Button variant="danger" onClick={() => void purge()}>
+            永久删除
           </Button>
         </div>
       </Modal>

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SettingsService } from '../settingsService'
 
 async function withService(run: (service: SettingsService, file: string) => Promise<void>): Promise<void> {
@@ -264,6 +264,48 @@ describe('SettingsService 每模型参数', () => {
     await withService(async (service, file) => {
       await writeFile(file, JSON.stringify({ chatFontSize: value }), 'utf-8')
       expect((await service.load()).chatFontSize).toBe(expected)
+    })
+  })
+
+  it('adds generation preferences to legacy settings', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], customPrompt: 'legacy' }), 'utf-8')
+
+      expect((await service.load()).agentGeneration).toEqual({ agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 })
+    })
+  })
+
+  it('consumes the legacy global prompt once after migrating it to a project', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], customPrompt: 'legacy project voice' }), 'utf-8')
+      const migrate = vi.fn(async () => undefined)
+
+      await expect(service.consumeLegacyCustomPrompt(migrate)).resolves.toBe('legacy project voice')
+      await expect(service.consumeLegacyCustomPrompt(migrate)).resolves.toBeUndefined()
+      expect(migrate).toHaveBeenCalledOnce()
+      expect((await service.load()).customPrompt).toBe('')
+    })
+  })
+
+  it('persists normalized generation preferences', async () => {
+    await withService(async (service) => {
+      await service.update({ agentGeneration: { agentTemperature: -1, proseAlternativesEnabled: true, maxToolRounds: 250 } })
+
+      expect((await service.load()).agentGeneration).toEqual({ agentTemperature: 0, proseAlternativesEnabled: true, maxToolRounds: 250 })
+    })
+  })
+
+  it('returns isolated generation defaults after a malformed settings fallback', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, '{', 'utf-8')
+      const first = service.toPublic(await service.load())
+      try {
+        first.agentGeneration.agentTemperature = 0
+
+        expect(service.toPublic(await service.load()).agentGeneration).toEqual({ agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 })
+      } finally {
+        first.agentGeneration.agentTemperature = 70
+      }
     })
   })
 })

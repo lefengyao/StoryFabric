@@ -27,14 +27,18 @@ import type {
   GoalRun
 } from './types'
 import type { WorkspaceArchive } from '../core/workspace/archive'
+import type { UsageBucket } from '../core/usage/usageArchive'
+import type { WritingDay } from '../core/usage/writingStats'
 import type { SessionArchive } from '../core/workspace/sessionArchive'
 import type { RunEventEnvelope } from './agentRuntime'
 import type { RunReplay } from './runEvents'
 import type { PlatformCapabilities } from './platformCapabilities'
 import type { CreativePackageSummary, CreativePreferences } from './creative'
+import type { InspirationArtifactInput, InspirationImport, InspirationSource } from './inspiration'
 import type { AgentQuestionAnswer, SkillCandidateAction } from './agentQuestions'
 import type { RuleLayer } from '../core/rules/types'
 import type { ContentPackage } from './skillPackage'
+import type { MemoryScope, MemorySnapshot, MemoryUpdate } from './memory'
 
 export interface AgentEventEnvelope {
   sessionId: string
@@ -50,8 +54,8 @@ export type SettingsPatch = Partial<
     PublicAppSettings,
     | 'theme'
     | 'defaultChatModel'
-    | 'quickActionModel'
     | 'orchestrationDefaults'
+    | 'agentGeneration'
     | 'customPrompt'
     | 'showSessionLength'
     | 'completionSound'
@@ -76,7 +80,7 @@ export interface FetchModelsInput {
 }
 
 export interface WorkspaceImportTarget {
-  /** Windows 本地导入的目标父目录；远程/Android 不使用。 */
+  /** 本地导入的目标父目录；Android 可以是系统授权的外部目录。 */
   parentDir?: string
   /** 用户确认的新工作区名称；缺省时由归档文件名推导。 */
   name?: string
@@ -96,6 +100,8 @@ export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
 }
 
 export interface StoryFabricApi {
+  getMemory(scope: MemoryScope): Promise<MemorySnapshot>
+  updateMemory(scope: MemoryScope, patch: MemoryUpdate): Promise<MemorySnapshot>
   getCapabilities?(): Promise<PlatformCapabilities>
   /** Renderer-only, non-sensitive source identity used for UI state partitioning. */
   getUiSource?(): string
@@ -107,6 +113,9 @@ export interface StoryFabricApi {
   pickFolder(): Promise<string | null>
   listWorkspaces(): Promise<WorkspaceListItem[]>
   listRecentWorkspaces(): Promise<WorkspaceListItem[]>
+  renameWorkspace(path: string, name: string): Promise<WorkspaceListItem>
+  /** Removes only the recent-list entry; workspace files remain intact. */
+  forgetRecentWorkspace(path: string): Promise<void>
   /** 默认新建位置：系统文档目录 */
   getDefaultWorkspaceDir(): Promise<string>
   createWorkspace(parentDir: string, name: string): Promise<string>
@@ -160,17 +169,31 @@ export interface StoryFabricApi {
   updateSettings(patch: SettingsPatch): Promise<PublicAppSettings>
   /** 模型用量记录（最近若干次调用，按时间升序） */
   getUsageRecords(): Promise<UsageRecord[]>
+  getUsageBuckets(): Promise<UsageBucket[]>
+  getWritingDays(): Promise<Array<WritingDay & { workspaceId: string }>>
   listCreativePackages(): Promise<CreativePackageSummary[]>
   installCreativePackage(input: ContentPackage): Promise<CreativePackageSummary>
   setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary>
   listCreativeRules(): Promise<RuleLayer[]>
   saveCreativeRules(layers: RuleLayer[]): Promise<void>
+  /** 灵感台资料与长期文档能力；平台尚未支持时由 UI 显式提示。 */
+  listInspirationSources?(): Promise<InspirationSource[]>
+  importInspirationSource?(input: InspirationImport): Promise<InspirationSource>
+  importInspirationPath?(path: string): Promise<InspirationSource | InspirationSource[]>
+  removeInspirationSource?(id: string): Promise<void>
+  extractInspirationSource?(id: string): Promise<InspirationSource>
+  readInspirationSource?(id: string, maxChars?: number): Promise<string>
+  readInspirationDoc?(name: string): Promise<string | null>
+  saveInspirationDoc?(name: string, content: string): Promise<void>
+  saveInspirationArtifact?(input: InspirationArtifactInput): Promise<void>
   saveProvider(input: import('./types').ProviderInput): Promise<PublicAppSettings>
   deleteProvider(id: string): Promise<PublicAppSettings>
   fetchModels(input: FetchModelsInput): Promise<string[]>
 
   /* 智能体 */
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }>
+  /** 手动压缩指定会话的较早上下文；不启动普通智能体回合。 */
+  compressSessionContext(sessionId: string, providerId: string, model: string): Promise<ChatSession>
   listGoals(): Promise<GoalRun[]>
   getGoal(id: string): Promise<GoalRun | null>
   continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: GoalRun['status'] }>
@@ -193,16 +216,4 @@ export interface StoryFabricApi {
   /** 新运行协议：用于断线重连时按 runId/seq 恢复事件。 */
   onRuntimeAgentEvent?: (cb: (envelope: RuntimeAgentEventEnvelope) => void) => () => void
   recoverRunEvents?: (runId: string, afterSeq?: number) => Promise<RunReplay>
-
-  /* 远程部署（仅桌面端；其它平台实现为抛出「仅支持桌面端」） */
-  deployTestConnection(input: import('./types').DeployConnectionInput): Promise<import('./types').DeployTestResult>
-  deployInstall(input: import('./types').DeployTargetInput): Promise<import('./types').DeployRunResult>
-  deployUpdate(targetId: string): Promise<import('./types').DeployRunResult>
-  deployCancel(): Promise<void>
-  deployLogs(targetId: string): Promise<string>
-  deployUninstall(targetId: string): Promise<void>
-  deployListTargets(): Promise<import('./types').DeployTargetPublic[]>
-  deploySaveTarget(input: import('./types').DeployTargetInput): Promise<import('./types').DeployTargetPublic>
-  deployDeleteTarget(id: string): Promise<void>
-  onDeployEvent(cb: (progress: import('./types').DeployProgress) => void): () => void
 }

@@ -18,6 +18,7 @@ export interface SearchPageHit {
   title: string
   sourcePath: string
   sourceRevision: string
+  writeRevision: string
   field: string
   offset: number
   length: number
@@ -140,6 +141,7 @@ function collectHits(corpus: ProjectCorpus, query: string, caseSensitive: boolea
           title: entry.title,
           sourcePath: entry.sourcePath,
           sourceRevision: entry.sourceRevision,
+          writeRevision: entry.writeRevision,
           field: field.name,
           offset: match.offset,
           length: match.length,

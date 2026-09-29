@@ -8,6 +8,7 @@ export interface StageCall { stageId: StageDefinition['stageId']; prompt: string
 export interface StageRunnerOptions {
   call(input: StageCall): Promise<{ text?: string; payload?: unknown; hasToolReceipt?: boolean }>
   onStageComplete?: (stageId: StageDefinition['stageId'], artifactId: string) => void
+  onCheckpoint?: (checkpoint: { stages: import('./types').StageState[]; artifacts: Artifact[]; overlay: Record<string, unknown>; businessText: string; currentStage?: StageId }) => Promise<void> | void
 }
 
 export async function runStage(options: StageRunnerOptions, input: { runId: string; sourceRevision: SourceRevision; goal: string; originalText: string; history?: string; stage: StageDefinition; artifacts: Artifact[]; overlay: DraftOverlay }): Promise<Artifact> {

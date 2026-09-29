@@ -53,4 +53,18 @@ describe('session archive', () => {
     expect(decoded.planningGate).toEqual({ status: 'pending' })
     expect(decoded.orchestrationRuns?.[0]?.status).toBe('paused_budget')
   })
+
+  it('rejects archives with unbounded message collections or message text', () => {
+    const tooManyMessages: ChatSession = {
+      id: 'sess_1', title: '过大', createdAt: 1, updatedAt: 2, archived: false,
+      messages: Array.from({ length: 10_001 }, (_, index) => ({ id: `m_${index}`, role: 'user' as const, text: 'x' }))
+    }
+    expect(() => decodeSessionArchive(exportSessionArchive(tooManyMessages).base64)).toThrow(/消息数量|上限|过大/)
+
+    const oversizedMessage: ChatSession = {
+      id: 'sess_2', title: '过大正文', createdAt: 1, updatedAt: 2, archived: false,
+      messages: [{ id: 'm', role: 'user', text: 'x'.repeat(1_000_001) }]
+    }
+    expect(() => decodeSessionArchive(exportSessionArchive(oversizedMessage).base64)).toThrow(/消息|过大|上限/)
+  })
 })

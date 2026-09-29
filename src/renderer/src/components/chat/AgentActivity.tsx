@@ -2,6 +2,8 @@ import { Check, CircleAlert, Clock3, Loader2, Sparkles, Wrench } from 'lucide-re
 import { cn } from '../../lib/utils'
 import { toolArgsPreview, type LiveToolRun } from '../../stores/chatStore'
 import type { LiveTurnItem } from '../../stores/chatStore'
+import { resolveContextUsagePresentation } from '../../lib/contextUsagePresentation'
+import { contextRingClass } from '../../lib/layoutPresentation'
 
 export function shouldShowThinking(items: LiveTurnItem[]): boolean {
   const last = items.at(-1)
@@ -11,36 +13,63 @@ export function shouldShowThinking(items: LiveTurnItem[]): boolean {
 export function ContextUsageMeter({
   usedTokens,
   contextTokens,
+  contextWindowTokens,
   compressing = false,
   compressedMessages,
-  compact = false
+  compact = false,
+  ringOnly = false
 }: {
   usedTokens: number
+  /** 可用于输入的预算（模型总窗口已扣除输出预留）。 */
   contextTokens: number
+  contextWindowTokens?: number
   compressing?: boolean
   compressedMessages?: number
   compact?: boolean
+  ringOnly?: boolean
 }): React.ReactElement {
-  const ratio = Math.min(1, usedTokens / Math.max(1, contextTokens))
-  const tone = ratio >= 0.9 ? 'bg-danger' : ratio >= 0.72 ? 'bg-gold' : 'bg-accent'
+  const presentation = resolveContextUsagePresentation(usedTokens, contextTokens)
+  const tone = presentation.tone === 'danger' ? 'var(--danger)' : presentation.tone === 'gold' ? 'var(--gold)' : 'var(--accent)'
+  const circumference = 2 * Math.PI * 16
   const title = [
-    `上下文约 ${formatTokens(usedTokens)} / ${formatTokens(contextTokens)}`,
-    `剩余约 ${formatTokens(Math.max(0, contextTokens - usedTokens))}`,
+    `输入上下文约 ${formatTokens(usedTokens)} / ${formatTokens(contextTokens)}（${presentation.percent}%）`,
+    contextWindowTokens && contextWindowTokens !== contextTokens ? `模型窗口 ${formatTokens(contextWindowTokens)}` : '',
+    `剩余约 ${formatTokens(presentation.remainingTokens)}`,
     compressedMessages ? `已自动压缩较早的 ${compressedMessages} 条消息` : ''
   ].filter(Boolean).join('；')
 
+  const ring = (
+      <button
+        type="button"
+        className={cn(contextRingClass(), 'outline-none focus-visible:ring-2 focus-visible:ring-accent')}
+        title={title}
+        aria-label={title}
+        onClick={(event) => {
+          const target = event.currentTarget
+          target.dataset.contextOpen = target.dataset.contextOpen === 'true' ? 'false' : 'true'
+        }}
+      >
+        <svg viewBox="0 0 40 40" className="h-10 w-10 -rotate-90" aria-hidden="true">
+          <circle cx="20" cy="20" r="16" fill="none" stroke="var(--elevated)" strokeWidth="4" />
+          <circle cx="20" cy="20" r="16" fill="none" stroke={tone} strokeWidth="4" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - presentation.ratio)} className="transition-[stroke-dashoffset] duration-300" />
+        </svg>
+        <strong className="absolute font-mono text-[9px] text-fg">{presentation.percent}%</strong>
+        <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-max max-w-64 -translate-x-1/2 rounded-md border border-line bg-panel px-2 py-1 text-left text-[10px] leading-4 text-muted shadow-lg group-hover:block group-focus:block group-data-[context-open=true]:block">
+          {title}
+        </span>
+      </button>
+  )
+
+  if (ringOnly) return ring
+
   return (
-    <div className={cn('context-meter', compact ? 'min-w-28' : 'min-w-44')} title={title}>
-      <div className="flex items-center justify-between gap-2 text-[10px]">
-        <span className="text-muted">{compressing ? '正在压缩上下文' : '上下文'}</span>
-        <strong className="font-mono text-[10px] font-medium text-fg">
-          {formatTokens(usedTokens)} / {formatTokens(contextTokens)}
-        </strong>
+    <div className={cn('context-meter relative flex items-center gap-2', compact ? 'min-w-16' : 'min-w-28')} title={title}>
+      {ring}
+      <div className="min-w-0">
+        <span className="block text-[10px] text-muted">{compressing ? '正在压缩上下文' : '上下文'}</span>
+        <strong className="block truncate font-mono text-[10px] font-medium text-fg">{formatTokens(usedTokens)} / {formatTokens(contextTokens)}</strong>
       </div>
-      <div className="mt-1 h-1 overflow-hidden rounded-full bg-elevated">
-        <i className={cn('block h-full rounded-full transition-[width] duration-300', tone)} style={{ width: `${Math.max(2, ratio * 100)}%` }} />
-      </div>
-      {compressedMessages ? <small className="mt-1 block text-[9px] text-faint">已自动压缩 {compressedMessages} 条较早消息</small> : null}
+      {compressedMessages ? <small className="sr-only">已自动压缩 {compressedMessages} 条较早消息</small> : null}
     </div>
   )
 }

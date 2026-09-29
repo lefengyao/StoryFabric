@@ -14,7 +14,7 @@ export const WORKSPACE_ARCHIVE_MAX_ENTRY_BYTES = 10 * 1024 * 1024
 export const WORKSPACE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 
 const ROOT_FILES = new Set(['storyfabric.json', 'relationships.json'])
-const ROOT_DIRS = new Set(['characters', 'outline', 'settings', 'events', 'chapters', 'notes', 'docs', '.storyfabric'])
+const ROOT_DIRS = new Set(['characters', 'outline', 'settings', 'events', 'chapters', 'notes', 'docs', 'inspiration', '.storyfabric'])
 const DERIVED_PATHS = new Set(['.storyfabric/index.json'])
 
 interface ArchiveFile {
@@ -22,29 +22,63 @@ interface ArchiveFile {
   bytes: Uint8Array
 }
 
+const WINDOWS_RESERVED_SEGMENT = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+
+function isSafeSegment(segment: string): boolean {
+  return Boolean(segment)
+    && segment !== '.'
+    && segment !== '..'
+    && !/[<>:"|?*\u0000-\u001f]/.test(segment)
+    && !/[. ]$/.test(segment)
+    && !WINDOWS_RESERVED_SEGMENT.test(segment)
+}
+
 function safeEntry(path: string): string | null {
   if (!path || path.includes('\0')) return null
   const normalized = path.replace(/\\/g, '/')
   if (normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) return null
   const parts = normalized.split('/')
-  if (parts.some((part) => !part || part === '.' || part === '..')) return null
+  if (parts.some((part) => !isSafeSegment(part))) return null
   return normalized
 }
 
 function isPortablePath(path: string): boolean {
+  if (safeEntry(path) !== path) return false
   if (ROOT_FILES.has(path)) return true
   if (path.startsWith('.storyfabric/')) {
     if (path === '.storyfabric/layout.json') return true
-    if (!path.startsWith('.storyfabric/creative/')) return false
-    const relative = path.slice('.storyfabric/creative/'.length)
-    if (!relative || relative.startsWith('runs/') || relative.startsWith('usage') || relative.startsWith('secrets/')) return false
-    return !relative.toLowerCase().endsWith('.tmp') && !relative.toLowerCase().endsWith('.bak')
+    if (path === '.storyfabric/memory.md') return true
+    if (path.startsWith('.storyfabric/creative/')) {
+      const relative = path.slice('.storyfabric/creative/'.length)
+      if (!relative || relative.startsWith('runs/') || relative.startsWith('usage') || relative.startsWith('secrets/')) return false
+      return !relative.toLowerCase().endsWith('.tmp') && !relative.toLowerCase().endsWith('.bak')
+    }
+    if (path === '.storyfabric/inspiration/catalog.json') return true
+    for (const root of ['.storyfabric/inspiration/cache/', '.storyfabric/inspiration/extracted/']) {
+      if (path.startsWith(root)) return Boolean(path.slice(root.length))
+    }
+    return false
   }
   const [root] = path.split('/', 1)
   if (!root || !ROOT_DIRS.has(root)) return false
   if (DERIVED_PATHS.has(path) || path.startsWith('.storyfabric/tmp/')) return false
   if (path.startsWith('docs/')) return true
+  if (path.startsWith('inspiration/')) return true
+  if (!path.startsWith(`${root}/`)) return false
   return !path.toLowerCase().endsWith('.tmp') && !path.toLowerCase().endsWith('.bak')
+}
+
+function canContainPortableFiles(dir: string): boolean {
+  if (dir === '.storyfabric/inspiration'
+    || dir === '.storyfabric/inspiration/cache'
+    || dir.startsWith('.storyfabric/inspiration/cache/')
+    || dir === '.storyfabric/inspiration/extracted'
+    || dir.startsWith('.storyfabric/inspiration/extracted/')) return true
+  return isPortablePath(`${dir}/placeholder`)
+}
+
+function acceptsBinaryBytes(path: string): boolean {
+  return path.startsWith('docs/') || path.startsWith('inspiration/') || path.startsWith('.storyfabric/inspiration/')
 }
 
 async function addTree(zip: JSZip, store: FileStore, dir: string): Promise<void> {
@@ -56,7 +90,7 @@ async function addTree(zip: JSZip, store: FileStore, dir: string): Promise<void>
   }
   for (const child of await store.listDirs(dir)) {
     const path = dir ? `${dir}/${child}` : child
-    if (isPortablePath(`${path}/placeholder`)) await addTree(zip, store, path)
+    if (canContainPortableFiles(path)) await addTree(zip, store, path)
   }
 }
 
@@ -113,7 +147,7 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
     uncompressedBytes += content.byteLength
     if (uncompressedBytes > WORKSPACE_ARCHIVE_MAX_UNCOMPRESSED_BYTES) throw new Error('工作区压缩包解压后超过限制')
 
-    if (path !== 'storyfabric.json' && path !== 'relationships.json' && !path.startsWith('docs/')) {
+    if (path !== 'storyfabric.json' && path !== 'relationships.json' && !acceptsBinaryBytes(path)) {
       try { new TextDecoder('utf-8', { fatal: true }).decode(content) } catch { throw new Error(`工作区压缩包包含非文本文件：${path}`) }
     }
     paths.add(path)
@@ -152,6 +186,8 @@ export async function importWorkspaceArchive(store: FileStore, bytes: Uint8Array
       } catch {
         await store.writeBytes(file.path, file.bytes)
       }
+    } else if (file.path.startsWith('inspiration/') || file.path.startsWith('.storyfabric/inspiration/')) {
+      await store.writeBytes(file.path, file.bytes)
     } else {
       await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
     }

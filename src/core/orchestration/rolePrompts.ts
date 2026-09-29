@@ -1,6 +1,7 @@
 import { TOOL_DEFS } from '../tools/registry'
 import { readOnlyToolDefs } from './toolPolicy'
 import { SKILL_TOOL_DEFS } from '../skills/skillTools'
+import type { ToolDefJson } from '../../shared/types'
 import type { StageId } from './types'
 
 export type OrchestrationRole = StageId | 'continuity' | 'style'
@@ -57,7 +58,21 @@ export function toolsForRole(role: OrchestrationRole) {
   const workspaceTools = role === 'write'
     ? TOOL_DEFS
     : readOnlyToolDefs()
-  return [...workspaceTools, ...SKILL_TOOL_DEFS]
+  return uniqueToolDefs([...workspaceTools, ...SKILL_TOOL_DEFS])
+}
+
+/**
+ * Providers reject a request when two tool definitions share a name. Keep the
+ * first definition so role-specific permissions remain deterministic while
+ * composition can safely add optional tool groups.
+ */
+export function uniqueToolDefs(tools: ToolDefJson[]): ToolDefJson[] {
+  const seen = new Set<string>()
+  return tools.filter((tool) => {
+    if (seen.has(tool.name)) return false
+    seen.add(tool.name)
+    return true
+  })
 }
 
 export function buildRoleSystemPrompt(input: {

@@ -159,7 +159,10 @@ export function validateCreativePreferences(value: unknown): CreativePreferences
 }
 
 export function normalizeAgentMode(value: unknown): AgentMode {
-  return value === 'goal' ? 'goal' : 'normal'
+  if (value === 'goal') return 'goal'
+  if (value === 'orchestration') return 'orchestration'
+  if (value === 'inspiration') return 'inspiration'
+  return 'normal'
 }
 
 export function normalizeApprovalPolicy(value: unknown): ApprovalPolicy {

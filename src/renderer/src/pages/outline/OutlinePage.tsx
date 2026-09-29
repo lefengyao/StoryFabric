@@ -10,6 +10,8 @@ import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import type { OutlineDoc, OutlineKind } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 
+const UNASSIGNED_FILTER = '__unassigned__'
+
 export function OutlinePage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
   const uiSource = useWorkspace((s) => s.uiSource)
@@ -31,10 +33,12 @@ export function OutlinePage(): React.ReactElement {
   const filteredDocs = useMemo(() => docs.filter((doc) => {
     if ((doc.kind ?? 'total') !== kind) return false
     if (kind === 'total') return true
+    if (chapterId === UNASSIGNED_FILTER) return !doc.chapterId
+    if (chapterId && doc.chapterId !== chapterId) return false
     const chapter = doc.chapterId ? chapterById.get(doc.chapterId) : undefined
-    if (!chapter) return false
+    if (!chapter) return !volumeId
     if (volumeId && (chapter.volumeId ?? 'vol_default') !== volumeId) return false
-    return !chapterId || doc.chapterId === chapterId
+    return true
   }), [chapterById, chapterId, docs, kind, volumeId])
   const selected = filteredDocs.find((d) => d.id === selectedId) ?? filteredDocs[0] ?? null
   const workspaceKey = useMemo(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : '', [summary?.path, uiSource])
@@ -54,8 +58,9 @@ export function OutlinePage(): React.ReactElement {
   }
 
   const create = async (): Promise<void> => {
-    const defaultChapterId = chapterId || visibleChapters[0]?.id || chapters[0]?.id
-    const saved = await api.saveOutlineDoc({ title: kind === 'total' ? '新总纲篇章' : '新章纲', kind, chapterId: kind === 'chapter' ? defaultChapterId : undefined, order: (filteredDocs.length ? Math.max(...filteredDocs.map((x) => x.order)) : 0) + 1 })
+    const targetChapterId = chapterId === UNASSIGNED_FILTER ? undefined : chapterId || (volumeId ? visibleChapters[0]?.id : undefined)
+    const saved = await api.saveOutlineDoc({ title: kind === 'total' ? '新总纲篇章' : '新章纲', kind, chapterId: kind === 'chapter' ? targetChapterId : undefined, order: (filteredDocs.length ? Math.max(...filteredDocs.map((x) => x.order)) : 0) + 1 })
+    if (kind === 'chapter' && !targetChapterId) { setVolumeId(''); setChapterId(UNASSIGNED_FILTER) }
     await refresh()
     openDoc(saved)
   }
@@ -64,7 +69,10 @@ export function OutlinePage(): React.ReactElement {
     if (!draft) return
     setSaving(true)
     try {
-      await api.saveOutlineDoc(draft)
+      const previousChapterId = docs.find((doc) => doc.id === draft.id)?.chapterId
+      const saved = await api.saveOutlineDoc(draft)
+      setDraft(saved)
+      if (kind === 'chapter' && previousChapterId !== saved.chapterId) { setVolumeId(''); setChapterId(saved.chapterId ?? UNASSIGNED_FILTER) }
       await refresh()
       setDirty(false)
     } finally {
@@ -82,11 +90,11 @@ export function OutlinePage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full flex-col sm:flex-row">
+    <div className="flex h-full min-h-0 flex-col sm:flex-row">
       <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
         <div className="flex items-center justify-between p-3 pb-2">
           <div className="flex items-center gap-1"><Button size="sm" variant={kind === 'total' ? 'soft' : 'ghost'} onClick={() => { setKind('total'); setSelectedId(null); setDraft(null) }}>总纲</Button><Button size="sm" variant={kind === 'chapter' ? 'soft' : 'ghost'} onClick={() => { setKind('chapter'); setSelectedId(null); setDraft(null) }}>章纲</Button></div>
-          <Button size="sm" variant="primary" onClick={() => void create()} disabled={kind === 'chapter' && visibleChapters.length === 0}>
+          <Button size="sm" variant="primary" onClick={() => void create()}>
             <Plus size={13} /> 新建
           </Button>
         </div>
@@ -98,6 +106,7 @@ export function OutlinePage(): React.ReactElement {
             </select>
             <select value={chapterId} onChange={(e) => { setChapterId(e.target.value); setSelectedId(null); setDraft(null) }} className="h-8 min-w-0 rounded-md border border-line bg-panel px-2 text-xs">
               <option value="">全部章节</option>
+              <option value={UNASSIGNED_FILTER}>未关联章纲</option>
               {visibleChapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
             </select>
           </div>
@@ -116,7 +125,7 @@ export function OutlinePage(): React.ReactElement {
                 <span className="block truncate text-sm">{d.title}</span>
                 {kind === 'chapter' && (
                   <span className="mt-0.5 block truncate text-[10px] text-faint">
-                    {volumes.find((volume) => volume.id === (chapterById.get(d.chapterId ?? '')?.volumeId ?? 'vol_default'))?.title ?? '未分卷'}
+                    {d.chapterId ? volumes.find((volume) => volume.id === (chapterById.get(d.chapterId ?? '')?.volumeId ?? 'vol_default'))?.title ?? '未分卷' : '未关联章节'}
                   </span>
                 )}
               </span>
@@ -150,6 +159,17 @@ export function OutlinePage(): React.ReactElement {
                 className="w-20"
               />
             </label>
+            {kind === 'chapter' && <label className="flex items-center gap-1.5 text-xs text-muted">
+              关联章节
+              <select
+                value={draft.chapterId ?? ''}
+                onChange={(event) => { setDraft({ ...draft, chapterId: event.target.value }); setDirty(true) }}
+                className="h-8 max-w-44 rounded-md border border-line bg-panel px-2 text-xs text-fg"
+              >
+                <option value="">未关联</option>
+                {chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
+              </select>
+            </label>}
             {dirty && <span className="text-xs text-accent">未保存</span>}
             <div className="hidden flex-1 sm:block" />
             <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>

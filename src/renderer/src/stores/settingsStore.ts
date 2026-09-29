@@ -14,6 +14,14 @@ interface SettingsState {
   previewAccent: (base: string) => void
 }
 
+type SettingsUpdatedListener = (settings: PublicAppSettings, patch: SettingsPatch) => void | Promise<void>
+const settingsUpdatedListeners = new Set<SettingsUpdatedListener>()
+
+export function onSettingsUpdated(listener: SettingsUpdatedListener): () => void {
+  settingsUpdatedListeners.add(listener)
+  return () => settingsUpdatedListeners.delete(listener)
+}
+
 const ACCENT_VARS = ['--accent', '--accent-strong', '--accent-soft', '--accent-fg']
 
 function applyTheme(theme: 'light' | 'dark' | 'system' | undefined): void {
@@ -68,6 +76,7 @@ export const useSettings = create<SettingsState>((set) => ({
     const s = await getPlatformApi().updateSettings(patch)
     applyAppearance(s)
     set({ settings: s })
+    await Promise.all([...settingsUpdatedListeners].map((listener) => Promise.resolve(listener(s, patch)).catch(() => undefined)))
   },
 
   previewAccent: (base) => {

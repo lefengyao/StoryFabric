@@ -1,4 +1,13 @@
-import type { ChatSession, ReasoningPreference, SessionModelPreference } from '../../shared/types'
+import { normalizeApprovalPolicy } from '../../shared/creative'
+import type { ApprovalPolicy, ChatSession, ReasoningPreference, SessionModelPreference } from '../../shared/types'
+
+export function getSessionApprovalPolicy(session: ChatSession): ApprovalPolicy {
+  return normalizeApprovalPolicy(session.approvalPolicy)
+}
+
+export function setSessionApprovalPolicy(session: ChatSession, approvalPolicy: ApprovalPolicy): ChatSession {
+  return { ...session, approvalPolicy, updatedAt: Date.now() }
+}
 
 export function getSessionModelPreference(session: ChatSession, providerId: string, model: string): ReasoningPreference {
   return session.modelPreferences?.find((item) => item.providerId === providerId && item.model === model)?.reasoning ?? 'inherit'

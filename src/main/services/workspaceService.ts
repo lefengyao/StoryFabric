@@ -123,6 +123,13 @@ export function loadWorkspaceListItem(root: string): Promise<WorkspaceListItem> 
   return coreLoadWorkspaceListItem(storeOf(root), basename(root), root)
 }
 
+export async function renameWorkspace(root: string, name: string): Promise<WorkspaceListItem> {
+  const valid = await validateWorkspace(root)
+  if (!valid.ok) throw new Error(valid.reason)
+  await coreSetWorkspaceName(storeOf(root), name)
+  return loadWorkspaceListItem(root)
+}
+
 /** Enumerate valid local workspaces below the user's documents root. */
 export async function listWorkspaces(parentDir: string): Promise<WorkspaceListItem[]> {
   const result: WorkspaceListItem[] = []

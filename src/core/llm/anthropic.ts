@@ -1,9 +1,10 @@
 /** Anthropic Messages 原生协议适配器 */
 import type { ChatMessage, ToolDefJson } from '../../shared/types'
-import { httpError, normalizeBaseUrl, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
+import { httpError, isUnsupportedTemperatureError, normalizeBaseUrl, parseJsonResponse, type LlmAdapter, type StreamHandlers, type StreamRequest, type StreamResult, type TokenUsage } from './types'
 import { buildModelParams } from './modelParams'
 import { sseData, sseLines } from './sse'
 import { toAnthropicMessageContent } from '../attachments/messageContent'
+import { assertSafeNetworkUrl } from '../net/safeUrl'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -59,7 +60,7 @@ export function toAnthropicMessages(
 }
 
 export class AnthropicAdapter implements LlmAdapter {
-  constructor(private baseUrl: string) {}
+  constructor(private baseUrl: string, private allowPrivateUrls = true, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {}
 
   private endpoint(): string {
     const base = normalizeBaseUrl(this.baseUrl)
@@ -67,7 +68,11 @@ export class AnthropicAdapter implements LlmAdapter {
   }
 
   async stream(model: string, req: StreamRequest, apiKey: string, handlers: StreamHandlers): Promise<StreamResult> {
+    const endpoint = await assertSafeNetworkUrl(this.endpoint(), { allowPrivate: this.allowPrivateUrls })
     const modelParams = req.params ? buildModelParams('anthropic', model, req.params) : {}
+    const temperature = typeof modelParams.temperature === 'number'
+      ? Math.max(0, Math.min(1, modelParams.temperature))
+      : undefined
     const body: any = {
       model,
       max_tokens: (modelParams.max_tokens as number | undefined) ?? DEFAULT_MAX_TOKENS,
@@ -76,7 +81,8 @@ export class AnthropicAdapter implements LlmAdapter {
         // 映射把 thinking 关掉（type: disabled）时不能回放思考块，Anthropic 会拒绝
         replayThinking: Boolean(modelParams.thinking) && (modelParams.thinking as { type?: string }).type !== 'disabled'
       }),
-      ...(modelParams.thinking ? { thinking: modelParams.thinking } : {})
+      ...(modelParams.thinking ? { thinking: modelParams.thinking } : {}),
+      ...(temperature === undefined ? {} : { temperature })
     }
     if (req.system) body.system = req.system
     if (req.tools.length) {
@@ -87,16 +93,23 @@ export class AnthropicAdapter implements LlmAdapter {
       }))
     }
 
-    const res = await fetch(this.endpoint(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION
-      },
-      body: JSON.stringify(body),
-      signal: req.signal
-    })
+    const send = (includeTemperature: boolean): Promise<Response> => {
+      const requestBody = includeTemperature ? body : { ...body }
+      if (!includeTemperature) delete requestBody.temperature
+      return this.fetcher(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION
+        },
+        redirect: 'error',
+        body: JSON.stringify(requestBody),
+        signal: req.signal
+      })
+    }
+    let res = await send(req.params?.temperature !== undefined)
+    if (!res.ok && await isUnsupportedTemperatureError(res, req.params?.temperature)) res = await send(false)
     if (!res.ok) throw await httpError(res)
 
     let text = ''
@@ -196,13 +209,14 @@ export class AnthropicAdapter implements LlmAdapter {
   }
 }
 
-export async function fetchAnthropicModels(baseUrl: string, apiKey: string): Promise<string[]> {
-  const url = `${normalizeBaseUrl(baseUrl)}/v1/models?limit=100`
-  const res = await fetch(url, {
-    headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION }
+export async function fetchAnthropicModels(baseUrl: string, apiKey: string, options: { allowPrivateUrls?: boolean; fetcher?: typeof fetch } = {}): Promise<string[]> {
+  const url = await assertSafeNetworkUrl(`${normalizeBaseUrl(baseUrl)}/v1/models?limit=100`, { allowPrivate: options.allowPrivateUrls ?? true })
+  const res = await (options.fetcher ?? globalThis.fetch.bind(globalThis))(url, {
+    headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
+    redirect: 'error'
   })
   if (!res.ok) throw await httpError(res)
-  const json = (await res.json()) as { data?: { id?: string }[] }
+  const json = await parseJsonResponse<{ data?: { id?: string }[] }>(res)
   return (json.data ?? [])
     .map((m) => m.id)
     .filter((id): id is string => Boolean(id))

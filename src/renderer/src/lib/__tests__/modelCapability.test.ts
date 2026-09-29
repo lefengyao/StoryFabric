@@ -8,6 +8,7 @@ import {
   pendingModels,
   removeModel,
   resolveCapability,
+  resolveContextWindow,
   setMappingPath,
   setMappingValue
 } from '../modelCapability'
@@ -17,6 +18,15 @@ describe('resolveCapability', () => {
     expect(resolveCapability('gpt-4o')).toEqual({ reasoning: false, vision: true })
     expect(resolveCapability('gpt-4o', { reasoningSupport: true, vision: false })).toEqual({ reasoning: true, vision: false })
     expect(resolveCapability('some-internal', { vision: true })).toEqual({ reasoning: false, vision: true })
+  })
+})
+
+describe('resolveContextWindow', () => {
+  it('ignores invalid persisted limits and falls back to the model profile', () => {
+    expect(resolveContextWindow('gpt-5', { contextTokens: 0, maxOutputTokens: Number.NaN })).toEqual({
+      contextTokens: 400000,
+      maxOutputTokens: 128000
+    })
   })
 })
 

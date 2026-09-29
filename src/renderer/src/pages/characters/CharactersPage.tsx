@@ -137,7 +137,7 @@ export function CharactersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full flex-col sm:flex-row">
+    <div className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 左列：搜索 + 卡片列表 */}
       <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="flex items-center gap-2 p-3 pb-2">
@@ -172,7 +172,7 @@ export function CharactersPage(): React.ReactElement {
                   <ChevronRight size={13} className={`shrink-0 text-faint transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
                   <Users size={12} className="shrink-0" style={{ color: faction ? factionColor(faction) : undefined }} />
                   <span className="truncate text-xs font-semibold text-muted">{faction || '未分组'}</span>
-                  <span className="ml-auto text-[10px] text-faint">{chars.length}</span>
+                  <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] text-faint">{chars.length}</span>
                 </button>
                 {!isCollapsed && (
                   <div className="mt-1 space-y-1.5">
@@ -387,7 +387,7 @@ function CharacterForm({
         <div className="flex min-h-0 flex-col p-4">
           <div className="mb-1.5 text-xs font-medium text-muted">详细设定（Markdown：外貌 / 性格 / 背景 / 成长弧光……）</div>
           <div className="min-h-0 flex-1">
-            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} scrollRef={scrollRef} />
+            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} scrollRef={scrollRef} documentId={draft.id || '__new_character__'} />
           </div>
         </div>
       </div>

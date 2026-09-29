@@ -20,5 +20,5 @@
     }
   },
   "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/core/**/*"],
-  "exclude": ["src/core/storage/nodeFileStore.ts", "src/core/**/__tests__/**/*"]
+  "exclude": ["src/core/storage/nodeFileStore.ts", "src/core/usage/usageService.ts", "src/core/**/__tests__/**/*"]
 }

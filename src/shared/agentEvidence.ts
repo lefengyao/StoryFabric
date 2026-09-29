@@ -53,3 +53,23 @@ export interface SkillApplicationEvent {
   skills: AppliedSkillRef[]
   requestId?: string
 }
+
+export interface AppliedRuleRef {
+  id: string
+  source: string
+  target: string
+  key: string
+  severity: 'must' | 'prefer'
+  reason: string
+}
+
+/** Evidence that the run inspected and applied the project's rule layers. */
+export interface RuleApplicationEvent {
+  runId: string
+  stageId?: string
+  agentId: string
+  status: 'checked' | 'matched' | 'applied' | 'none' | 'failed'
+  rules: AppliedRuleRef[]
+  conflicts: number
+  overridden: number
+}

@@ -1,4 +1,6 @@
 import { Preferences } from '@capacitor/preferences'
+import { Clipboard } from '@capacitor/clipboard'
+import { createCapacitorWebFetch } from './capacitorWebFetch'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { Share } from '@capacitor/share'
 import { Directory, Filesystem } from '@capacitor/filesystem'
@@ -9,6 +11,8 @@ import type { AgentQuestionAnswer, SkillCandidateAction } from '../../../shared/
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
 import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, GoalRun, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
+import { SafFileStore, documentTree, makeSafPath, parseSafPath } from './safFileStore'
+import type { FileStore } from '../../../core/storage/fileStore'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
 import { deleteVolume, initializeWorkspace, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, readGraphLayout, saveVolume, setWorkspaceName, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
@@ -19,16 +23,20 @@ import { listTrash, purgeTrashEntry, restoreFromTrash } from '../../../core/work
 import { CoreSessionStore } from '../../../core/workspace/sessionStore'
 import { CoreAgentService } from '../../../core/agent/agentLoop'
 import { PortableUsageStore } from '../../../core/usage/portableUsageStore'
+import { listWritingDays } from '../../../core/usage/writingStats'
 import { fetchProviderModels, getAdapter } from '../../../core/llm'
 import { pruneModelSettings } from '../../../core/llm/modelCatalog'
 import { keyPreview } from '../../../shared/keyPreview'
-import { markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
+import { forgetRecentWorkspace, markRecentWorkspace, orderRecentWorkspacePaths } from '../../../shared/recentWorkspaces'
 import type { PlatformCapabilities } from '../../../shared/platformCapabilities'
-import { adaptLegacyAgentEvent } from '../../../shared/agentRuntime'
+import { adaptLegacyAgentEvent, legacyEventIdentity } from '../../../shared/agentRuntime'
 import { RunEventBuffer, type RunReplay } from '../../../shared/runEvents'
 import { creativePreferencesFromOrchestrationDefaults, DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences, type CreativePackageSummary } from '../../../shared/creative'
+import { DEFAULT_AGENT_GENERATION_PREFERENCES, normalizeAgentGenerationPreferences } from '../../../shared/agentGeneration'
 import { summarizeContentPackage } from '../../../core/skills/packageStore'
 import { GlobalSkillLibrary } from '../../../core/skills/globalSkillLibrary'
+import { MemoryStore } from '../../../core/memory/memoryStore'
+import type { MemoryScope, MemoryUpdate } from '../../../shared/memory'
 import { builtinPackages } from '../../../core/skills/builtin'
 import type { ContentPackage } from '../../../shared/skillPackage'
 import type { RuleLayer } from '../../../core/rules/types'
@@ -36,6 +44,7 @@ import { GoalStore } from '../../../core/goal/goalStore'
 import { RuleStore } from '../../../core/rules/ruleStore'
 
 const SETTINGS_KEY = 'storyfabric.settings'
+const EXTERNAL_WORKSPACES_KEY = 'storyfabric.external-workspaces'
 const WORKSPACE_PREFIX = 'workspaces'
 const ANDROID_WORKSPACE_PATH_ERROR = 'Android 工作区路径必须位于应用内部 workspaces 目录下'
 
@@ -77,6 +86,19 @@ export function normalizeAndroidWorkspacePath(input: string): string {
   return value
 }
 
+function normalizeAnyWorkspacePath(input: string): string {
+  const external = parseSafPath(input)
+  return external ? makeSafPath(external.treeUri, external.root) : normalizeAndroidWorkspacePath(input)
+}
+
+function workspaceStoreForPath(path: string): FileStore {
+  return parseSafPath(path) ? new SafFileStore(path) : new CapacitorFileStore(path)
+}
+
+function workspaceFallbackName(path: string): string {
+  return parseSafPath(path)?.root || path.split('/').pop() || 'StoryFabric'
+}
+
 let androidImportQueue: Promise<void> = Promise.resolve()
 
 function withAndroidImportLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -96,6 +118,7 @@ function withAndroidSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
 const DEFAULT_PUBLIC: PublicAppSettings = {
   providers: [],
   orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
+  agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -109,20 +132,33 @@ const DEFAULT_PUBLIC: PublicAppSettings = {
   editorFontFamily: 'sans',
   autosaveSeconds: 0,
   sendShortcut: 'enter',
-  chatDensity: 'comfortable'
+  chatDensity: 'comfortable',
+  chatFontSize: 14
+}
+
+function defaultPublicSettings(): PublicAppSettings {
+  return { ...DEFAULT_PUBLIC, agentGeneration: normalizeAgentGenerationPreferences({}) }
 }
 
 /** Android 平台 API：应用私有目录工作区，密钥使用 Android Keystore-backed secure storage。 */
 export class AndroidPlatformApi implements StoryFabricApi {
   private currentPath: string | null = null
-  private currentStore: CapacitorFileStore | null = null
-  private settings: PublicAppSettings = { ...DEFAULT_PUBLIC }
+  private currentStore: FileStore | null = null
+  private settings: PublicAppSettings = defaultPublicSettings()
   private agent: CoreAgentService | null = null
   private usage: PortableUsageStore | null = null
 
   getUiSource(): string { return 'android-local' }
+  async clipboardReadText(): Promise<string> {
+    const result = await Clipboard.read()
+    return result.value
+  }
+  async clipboardWriteText(text: string): Promise<void> {
+    await Clipboard.write({ string: text })
+  }
+
   getCapabilities(): Promise<PlatformCapabilities> {
-    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'sensor-landscape', fileImportExport: true, remoteDeployment: false })
+    return Promise.resolve({ protocolVersion: 1, skills: true, rules: true, orchestration: true, subagents: true, goalMode: true, eventRecovery: true, budgets: true, orientation: 'best-effort', fileImportExport: true, remoteDeployment: false })
   }
 
   async listCreativePackages(): Promise<CreativePackageSummary[]> {
@@ -147,6 +183,15 @@ export class AndroidPlatformApi implements StoryFabricApi {
 
   listCreativeRules(): Promise<RuleLayer[]> { return new RuleStore(this.requireStore()).load() }
   saveCreativeRules(layers: RuleLayer[]): Promise<void> { return new RuleStore(this.requireStore()).save(layers) }
+  async listInspirationSources(): Promise<import('../../../shared/inspiration').InspirationSource[]> { return new (await import('../../../core/inspiration/sourceCatalog')).SourceCatalog(this.requireStore()).list() }
+  async importInspirationSource(input: import('../../../shared/inspiration').InspirationImport): Promise<import('../../../shared/inspiration').InspirationSource> { return new (await import('../../../core/inspiration/sourceCatalog')).SourceCatalog(this.requireStore()).importBytes(input) }
+  importInspirationPath(): Promise<never> { return Promise.reject(new Error('Android 请先将资料导入应用后再使用灵感台')) }
+  async removeInspirationSource(id: string): Promise<void> { return new (await import('../../../core/inspiration/sourceCatalog')).SourceCatalog(this.requireStore()).removeImported(id) }
+  async extractInspirationSource(id: string): Promise<import('../../../shared/inspiration').InspirationSource> { return new (await import('../../../core/inspiration/sourceCatalog')).SourceCatalog(this.requireStore()).extract(id) }
+  async readInspirationSource(id: string, maxChars?: number): Promise<string> { return new (await import('../../../core/inspiration/sourceCatalog')).SourceCatalog(this.requireStore()).readExtracted(id, maxChars) }
+  async readInspirationDoc(name: string): Promise<string | null> { const { normalizeProjectDocPath } = await import('../../../core/workspace/projectDocs'); return this.requireStore().readText(`docs/${normalizeProjectDocPath(name)}`) }
+  async saveInspirationDoc(name: string, content: string): Promise<void> { const { normalizeProjectDocPath, validateProjectDocContent } = await import('../../../core/workspace/projectDocs'); const path = normalizeProjectDocPath(name); validateProjectDocContent(content); await this.requireStore().writeText(`docs/${path}`, content) }
+  async saveInspirationArtifact(input: import('../../../shared/inspiration').InspirationArtifactInput): Promise<void> { const { saveInspirationArtifact } = await import('../../../core/inspiration/inspirationService'); await saveInspirationArtifact(this.requireStore(), input) }
 
   private keyName(providerId: string): string { return `provider-api-key:${providerId}` }
 
@@ -157,13 +202,13 @@ export class AndroidPlatformApi implements StoryFabricApi {
   private async loadSettingsFromPreferences(): Promise<PublicAppSettings> {
     const raw = await Preferences.get({ key: SETTINGS_KEY })
     if (!raw.value) {
-      this.settings = this.normalizeSettings(this.settings)
+      this.settings = defaultPublicSettings()
       return this.settings
     }
     try {
       this.settings = this.normalizeSettings(JSON.parse(raw.value))
     } catch {
-      this.settings = { ...DEFAULT_PUBLIC }
+      this.settings = defaultPublicSettings()
     }
     return this.settings
   }
@@ -194,7 +239,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
       recentWorkspaces,
       recentWorkspaceOpenedAt,
       lastWorkspacePath,
-      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
+      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
+      agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration)
     }
   }
 
@@ -202,47 +248,84 @@ export class AndroidPlatformApi implements StoryFabricApi {
     await Preferences.set({ key: SETTINGS_KEY, value: JSON.stringify(this.settings) })
   }
 
-  private requireStore(): CapacitorFileStore {
+  private requireStore(): FileStore {
     if (!this.currentStore) throw new Error('尚未打开工作区')
     return this.currentStore
   }
 
-  private async installWorkspace(path: string, store: CapacitorFileStore): Promise<void> {
+  private async installWorkspace(path: string, store: FileStore): Promise<void> {
+    if (this.currentPath && this.currentPath !== path) {
+      this.runtimeBuffers.clear()
+      this.runtimeSequences.clear()
+      this.runtimeTouched.clear()
+    }
     this.currentPath = path
     this.currentStore = store
-    this.usage = new PortableUsageStore(store)
+    const workspaceUsage = new PortableUsageStore(store)
+    this.usage = workspaceUsage
     this.agent = new CoreAgentService({
       store,
+      webFetch: createCapacitorWebFetch(),
       workspaceId: path,
       sessions: new CoreSessionStore(store),
-      getAdapter,
+      getAdapter: (protocol, baseUrl, options) => getAdapter(protocol, baseUrl, {
+        ...options,
+        ...(protocol === 'gemini' ? { fallbackFetcher: createCapacitorWebFetch(undefined, 180000) } : {})
+      }),
       settings: async () => {
         const s = await this.loadSettings()
-        return { customPrompt: s.customPrompt, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
+        return { customPrompt: s.customPrompt, agentGeneration: s.agentGeneration, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
       },
+      consumeLegacyCustomPrompt: (migrate) => withAndroidSettingsLock(async () => {
+        await this.loadSettingsFromPreferences()
+        const prompt = this.settings.customPrompt.trim()
+        if (!prompt) return undefined
+        await migrate(prompt)
+        this.settings = { ...this.settings, customPrompt: '' }
+        await this.saveSettings()
+        return prompt
+      }),
       emit: (sessionId, event, runId) => this.emitAgentEvent(sessionId, event, runId),
-      onUsage: (record) => { void this.usage?.append(record).catch(() => undefined) },
+      onUsage: (record) => { void workspaceUsage.append(record).catch(() => undefined) },
       globalSkillLibrary: new GlobalSkillLibrary(new CapacitorFileStore())
+      ,memoryStore: new MemoryStore(new CapacitorFileStore(), store)
     })
   }
 
-  pickFolder(): Promise<string | null> {
-    // Android 首版不伪装系统目录选择器；通过应用内创建工作区进入。
-    return Promise.resolve(null)
+  async pickFolder(): Promise<string | null> {
+    const selected = await documentTree.pickDirectory()
+    return selected.uri ? makeSafPath(selected.uri) : null
+  }
+
+  private async externalWorkspacePaths(): Promise<string[]> {
+    const raw = await Preferences.get({ key: EXTERNAL_WORKSPACES_KEY })
+    if (!raw.value) return []
+    try {
+      const paths: unknown = JSON.parse(raw.value)
+      return Array.isArray(paths) ? paths.filter((path): path is string => typeof path === 'string' && Boolean(parseSafPath(path))) : []
+    } catch { return [] }
+  }
+
+  private async registerExternalWorkspace(path: string): Promise<void> {
+    if (!parseSafPath(path)) return
+    const paths = await this.externalWorkspacePaths()
+    if (!paths.includes(path)) await Preferences.set({ key: EXTERNAL_WORKSPACES_KEY, value: JSON.stringify([...paths, path]) })
+  }
+
+  private async allWorkspacePaths(): Promise<string[]> {
+    const dirs = await new CapacitorFileStore(WORKSPACE_PREFIX).listDirs('')
+    return [...dirs.map((dir) => normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${dir}`)), ...await this.externalWorkspacePaths()]
   }
 
   async listWorkspaces(): Promise<WorkspaceListItem[]> {
-    const root = new CapacitorFileStore(WORKSPACE_PREFIX)
-    const dirs = await root.listDirs('')
     const result: WorkspaceListItem[] = []
-    for (const dir of dirs) {
-      const path = normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${dir}`)
-      const store = new CapacitorFileStore(path)
-      if (!(await validateWorkspace(store)).ok) continue
+    for (const path of await this.allWorkspacePaths()) {
       try {
-        result.push(await loadWorkspaceListItem(store, dir, path))
+        const store = workspaceStoreForPath(path)
+        if (!(await validateWorkspace(store)).ok) continue
+        result.push(await loadWorkspaceListItem(store, workspaceFallbackName(path), path))
       } catch {
-        /* 跳过损坏或正在写入中的工作区 */
+        /* Skip inaccessible, revoked or damaged workspaces; users can reselect an external folder. */
       }
     }
     return result.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
@@ -254,10 +337,10 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const result: WorkspaceListItem[] = []
     for (const path of paths) {
       try {
-        const normalizedPath = normalizeAndroidWorkspacePath(path)
-        const store = new CapacitorFileStore(normalizedPath)
+        const normalizedPath = normalizeAnyWorkspacePath(path)
+        const store = workspaceStoreForPath(normalizedPath)
         if (!(await validateWorkspace(store)).ok) continue
-        const item = await loadWorkspaceListItem(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
+        const item = await loadWorkspaceListItem(store, workspaceFallbackName(normalizedPath), normalizedPath)
         const lastOpenedAt = settings.recentWorkspaceOpenedAt[normalizedPath]
         result.push(lastOpenedAt ? { ...item, lastOpenedAt } : item)
         if (result.length >= 5) break
@@ -268,21 +351,48 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return result
   }
 
+  async renameWorkspace(path: string, name: string): Promise<WorkspaceListItem> {
+    const normalizedPath = normalizeAnyWorkspacePath(path)
+    const store = workspaceStoreForPath(normalizedPath)
+    const valid = await validateWorkspace(store)
+    if (!valid.ok) throw new Error(valid.reason)
+    await setWorkspaceName(store, name)
+    return loadWorkspaceListItem(store, workspaceFallbackName(normalizedPath), normalizedPath)
+  }
+
+  async forgetRecentWorkspace(path: string): Promise<void> {
+    const normalizedPath = normalizeAnyWorkspacePath(path)
+    await withAndroidSettingsLock(async () => {
+      await this.loadSettingsFromPreferences()
+      const recent = forgetRecentWorkspace(this.settings, normalizedPath)
+      this.settings = { ...this.settings, ...recent, lastWorkspacePath: this.settings.lastWorkspacePath === normalizedPath ? undefined : this.settings.lastWorkspacePath }
+      await this.saveSettings()
+    })
+  }
+
   getDefaultWorkspaceDir(): Promise<string> { return Promise.resolve(WORKSPACE_PREFIX) }
 
-  async createWorkspace(_parentDir: string, name: string): Promise<string> {
+  async createWorkspace(parentDir: string, name: string): Promise<string> {
     const safe = name.replace(/[\\/:*?"<>|]/g, '').trim()
     if (!safe) throw new Error('工作区名称不能为空')
-    const path = `${WORKSPACE_PREFIX}/${safe}_${Date.now().toString(36)}`
-    const store = new CapacitorFileStore(path)
+    const external = parseSafPath(parentDir)
+    if (external?.root) throw new Error('请选择外部父文件夹')
+    const folder = `${safe}_${Date.now().toString(36)}`
+    const path = external ? makeSafPath(external.treeUri, folder) : `${WORKSPACE_PREFIX}/${folder}`
+    const store = workspaceStoreForPath(path)
     if (await store.exists('storyfabric.json')) throw new Error('工作区已存在')
-    await initializeWorkspace(store, safe)
+    if (external) await documentTree.mkdir({ treeUri: external.treeUri, root: '', path: folder, exclusive: true })
+    try { await initializeWorkspace(store, safe) }
+    catch (error) {
+      if (external) await new SafFileStore(makeSafPath(external.treeUri)).remove(folder).catch(() => undefined)
+      throw error
+    }
     return path
   }
 
   async openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
-    const normalizedPath = normalizeAndroidWorkspacePath(path)
-    const store = new CapacitorFileStore(normalizedPath)
+    const normalizedPath = normalizeAnyWorkspacePath(path)
+    const store = workspaceStoreForPath(normalizedPath)
     const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent, usage: this.usage }
     throwIfWorkspaceRequestAborted(options?.signal)
     const valid = await validateWorkspace(store)
@@ -293,7 +403,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       throwIfWorkspaceRequestAborted(options?.signal)
       await this.recordRecentWorkspace(normalizedPath, options?.signal)
       throwIfWorkspaceRequestAborted(options?.signal)
-      return loadSummary(store, normalizedPath.split('/').pop() ?? 'StoryFabric', normalizedPath)
+      return loadSummary(store, workspaceFallbackName(normalizedPath), normalizedPath)
     } catch (error) {
       this.currentPath = previous.path
       this.currentStore = previous.store
@@ -316,6 +426,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       this.settings = { ...this.settings, ...recent, lastWorkspacePath: path }
       try {
         await this.saveSettings()
+        await this.registerExternalWorkspace(path).catch(() => undefined)
         throwIfWorkspaceRequestAborted(signal)
       } catch (error) {
         if (signal?.aborted) {
@@ -328,40 +439,63 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   async openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
-    return this.openWorkspace(normalizeAndroidWorkspacePath(path), options)
+    return this.openWorkspace(normalizeAnyWorkspacePath(path), options)
   }
 
-  async closeWorkspace(): Promise<void> { this.currentPath = null; this.currentStore = null; this.agent = null; this.usage = null }
+  async closeWorkspace(): Promise<void> {
+    this.currentPath = null
+    this.currentStore = null
+    this.agent = null
+    this.usage = null
+    this.runtimeBuffers.clear()
+    this.runtimeSequences.clear()
+    this.runtimeTouched.clear()
+  }
 
   async getCurrentWorkspace(): Promise<WorkspaceSummary | null> {
     if (!this.currentStore || !this.currentPath) {
       await this.loadSettings()
       const path = this.settings.lastWorkspacePath
       if (path) {
-        const normalizedPath = normalizeAndroidWorkspacePath(path)
-        const store = new CapacitorFileStore(normalizedPath)
-        const valid = await validateWorkspace(store)
-        if (valid.ok) {
-          await this.installWorkspace(normalizedPath, store)
-        }
+        const normalizedPath = normalizeAnyWorkspacePath(path)
+        try {
+          const store = workspaceStoreForPath(normalizedPath)
+          if ((await validateWorkspace(store)).ok) await this.installWorkspace(normalizedPath, store)
+        } catch { /* An external directory can be removed or lose its grant. */ }
       }
     }
     if (!this.currentStore || !this.currentPath) return null
-    return loadSummary(this.currentStore, this.currentPath.split('/').pop() ?? 'StoryFabric', this.currentPath)
+    return loadSummary(this.currentStore, workspaceFallbackName(this.currentPath), this.currentPath)
   }
 
   private eventListeners = new Set<(envelope: AgentEventEnvelope) => void>()
   private runtimeEventListeners = new Set<(envelope: RuntimeAgentEventEnvelope) => void>()
   private runtimeBuffers = new Map<string, RunEventBuffer>()
   private runtimeSequences = new Map<string, number>()
+  private runtimeTouched = new Map<string, number>()
+  private readonly maxRuntimeRuns = 32
+
+  private ensureRuntimeCapacity(key: string): void {
+    if (this.runtimeBuffers.has(key)) return
+    while (this.runtimeBuffers.size >= this.maxRuntimeRuns) {
+      const oldest = [...this.runtimeTouched.entries()].sort((a, b) => a[1] - b[1])[0]?.[0]
+      if (!oldest) break
+      this.runtimeBuffers.delete(oldest)
+      this.runtimeSequences.delete(oldest)
+      this.runtimeTouched.delete(oldest)
+    }
+  }
+
   private emitAgentEvent(sessionId: string, event: AgentEventEnvelope['event'], runId?: string): void {
     for (const listener of this.eventListeners) listener({ sessionId, ...(runId ? { runId } : {}), event })
     if (!runId) return
     const workspaceId = this.currentPath ?? 'android'
     const key = `${workspaceId}\u0000${runId}`
+    this.ensureRuntimeCapacity(key)
     const seq = (this.runtimeSequences.get(key) ?? 0) + 1
     this.runtimeSequences.set(key, seq)
-    const envelope = adaptLegacyAgentEvent({ workspaceId, sessionId, runId, agentId: 'orchestration', seq, event })
+    this.runtimeTouched.set(key, Date.now())
+    const envelope = adaptLegacyAgentEvent({ workspaceId, sessionId, runId, ...legacyEventIdentity(event), seq, event })
     const buffer = this.runtimeBuffers.get(key) ?? new RunEventBuffer()
     buffer.append(envelope)
     buffer.setSnapshot({ workspaceId, sessionId, runId, lastSeq: seq, event: envelope.event })
@@ -406,11 +540,12 @@ export class AndroidPlatformApi implements StoryFabricApi {
     await Share.share({ title: archive.fileName, text: 'StoryFabric 会话', files: [uri.uri], dialogTitle: '导出会话' })
   }
   async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
-    const root = new CapacitorFileStore(WORKSPACE_PREFIX)
+    const external = target?.parentDir ? parseSafPath(target.parentDir) : null
+    if (external?.root) throw new Error('请选择外部父文件夹')
+    const root: FileStore = external ? new SafFileStore(makeSafPath(external.treeUri)) : new CapacitorFileStore(WORKSPACE_PREFIX)
     const baseName = (target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')).replace(/[\\/:*?"<>|]/g, '').trim() || '导入工作区'
-    normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${baseName}`)
     throwIfWorkspaceRequestAborted(options?.signal)
-    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent }
+    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent, usage: this.usage }
     let path: string | null = null
     try {
       path = await withAndroidImportLock(async () => {
@@ -419,14 +554,16 @@ export class AndroidPlatformApi implements StoryFabricApi {
       let suffix = 2
       while (await root.exists(finalId)) finalId = `${baseName}_${suffix++}`
       await root.ensureDir('')
-      const targetPath = normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${finalId}`)
+      const targetPath = external ? makeSafPath(external.treeUri, finalId) : normalizeAndroidWorkspacePath(`${WORKSPACE_PREFIX}/${finalId}`)
       let targetReserved = false
       try {
-        // recursive:false is Capacitor's exclusive directory reservation; the process lock
-        // covers suffix allocation in this process, while cross-process races depend on the OS/plugin.
-        await Filesystem.mkdir({ path: targetPath, directory: Directory.Data, recursive: false })
+        if (external) await documentTree.mkdir({ treeUri: external.treeUri, root: '', path: finalId, exclusive: true })
+        else {
+          // The process lock covers suffix allocation here; Filesystem.mkdir reserves the local folder.
+          await Filesystem.mkdir({ path: targetPath, directory: Directory.Data, recursive: false })
+        }
         targetReserved = true
-        const targetStore = new CapacitorFileStore(targetPath)
+        const targetStore = workspaceStoreForPath(targetPath)
         await importWorkspaceArchive(targetStore, bytes)
         throwIfWorkspaceRequestAborted(options?.signal)
         await setWorkspaceName(targetStore, baseName)
@@ -438,17 +575,18 @@ export class AndroidPlatformApi implements StoryFabricApi {
       }
       })
       throwIfWorkspaceRequestAborted(options?.signal)
-      const store = new CapacitorFileStore(path)
+      const store = workspaceStoreForPath(path)
       await this.installWorkspace(path, store)
       throwIfWorkspaceRequestAborted(options?.signal)
       await this.recordRecentWorkspace(path, options?.signal)
       throwIfWorkspaceRequestAborted(options?.signal)
-      return loadSummary(store, path.split('/').pop() ?? 'StoryFabric', path)
+      return loadSummary(store, workspaceFallbackName(path), path)
     } catch (error) {
       this.currentPath = previous.path
       this.currentStore = previous.store
       this.agent = previous.agent
-      if (path && path !== previous.path) await root.remove(path.slice(`${WORKSPACE_PREFIX}/`.length))
+      this.usage = previous.usage
+      if (path && path !== previous.path) await root.remove(external ? parseSafPath(path)!.root : path.slice(`${WORKSPACE_PREFIX}/`.length))
       throw error
     }
   }
@@ -485,7 +623,37 @@ export class AndroidPlatformApi implements StoryFabricApi {
 
   async getSettings(): Promise<PublicAppSettings> { return this.loadSettings() }
 
-  async getUsageRecords(): Promise<UsageRecord[]> { return this.usage?.list() ?? [] }
+  getMemory(scope: MemoryScope): ReturnType<StoryFabricApi['getMemory']> {
+    return new MemoryStore(new CapacitorFileStore(), this.requireStore()).read(scope)
+  }
+
+  updateMemory(scope: MemoryScope, patch: MemoryUpdate): ReturnType<StoryFabricApi['updateMemory']> {
+    return new MemoryStore(new CapacitorFileStore(), this.requireStore()).update(scope, patch)
+  }
+
+  async getUsageRecords(): Promise<UsageRecord[]> {
+    const records = await Promise.all((await this.allWorkspacePaths()).map(async (path) => {
+      try {
+        const usage = await new PortableUsageStore(workspaceStoreForPath(path)).list()
+        return usage.map((record) => ({ ...record, workspaceId: path }))
+      } catch { return [] }
+    }))
+    return records.flat().sort((a, b) => a.at - b.at)
+  }
+  async getUsageBuckets(): Promise<import('../../../core/usage/usageArchive').UsageBucket[]> {
+    const rows = await Promise.all((await this.allWorkspacePaths()).map(async (path) => {
+      try { return (await new PortableUsageStore(workspaceStoreForPath(path)).listBuckets()).map((item) => ({ ...item, workspaceId: path })) }
+      catch { return [] }
+    }))
+    return rows.flat().sort((a, b) => a.hourStart - b.hourStart)
+  }
+  async getWritingDays(): Promise<Array<import('../../../core/usage/writingStats').WritingDay & { workspaceId: string }>> {
+    const rows = await Promise.all((await this.allWorkspacePaths()).map(async (path) => {
+      try { return (await listWritingDays(workspaceStoreForPath(path))).map((day) => ({ ...day, workspaceId: path })) }
+      catch { return [] }
+    }))
+    return rows.flat()
+  }
 
   async updateSettings(patch: SettingsPatch): Promise<PublicAppSettings> {
     return withAndroidSettingsLock(async () => {
@@ -517,8 +685,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       this.settings = {
         ...this.settings,
         providers: this.settings.providers.filter((p) => p.id !== id),
-        defaultChatModel: this.settings.defaultChatModel?.providerId === id ? undefined : this.settings.defaultChatModel,
-        quickActionModel: this.settings.quickActionModel?.providerId === id ? undefined : this.settings.quickActionModel
+        defaultChatModel: this.settings.defaultChatModel?.providerId === id ? undefined : this.settings.defaultChatModel
       }
       try { await SecureStorage.removeItem(this.keyName(id)) } catch { /* no-op */ }
       await this.saveSettings()
@@ -540,13 +707,17 @@ export class AndroidPlatformApi implements StoryFabricApi {
 
   async fetchModels(input: FetchModelsInput): Promise<string[]> {
     const provider = await this.providerInput(input)
-    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey)
+    return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey, { fetcher: createCapacitorWebFetch() })
   }
   async agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }> {
     if (!this.agent) throw new Error('尚未打开工作区')
     return this.agent.run(req)
   }
-  agentConfirm(changeId: string, approved: boolean): Promise<void> { this.agent?.confirmChange(changeId, approved); return Promise.resolve() }
+  async compressSessionContext(sessionId: string, providerId: string, model: string): Promise<ChatSession> {
+    if (!this.agent) throw new Error('尚未打开工作区')
+    return this.agent.compressSessionContext(sessionId, providerId, model)
+  }
+  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void> { this.agent?.confirmChange(changeId, approved, sessionId); return Promise.resolve() }
   agentAbort(sessionId: string): Promise<void> { this.agent?.abort(sessionId); return Promise.resolve() }
   async agentAnswerQuestion(answer: AgentQuestionAnswer): Promise<void> {
     if (!this.agent) throw new Error('尚未打开工作区')
@@ -601,7 +772,10 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return session
   }
   loadSession(id: string): Promise<ChatSession | null> { return this.sessions().load(id) }
-  deleteSession(id: string): Promise<void> { return this.sessions().delete(id) }
+  deleteSession(id: string): Promise<void> {
+    if (this.agent?.getActiveRunId(id)) return Promise.reject(new Error('会话正在运行，请先停止运行后再删除'))
+    return this.sessions().delete(id)
+  }
   async updateSession(id: string, patch: Parameters<StoryFabricApi['updateSession']>[1]): Promise<void> { if (!(await this.sessions().updateMeta(id, patch))) throw new Error('会话不存在') }
   async updateSessionModelPreference(id: string, value: import('../../../shared/types').SessionModelPreference): Promise<void> { if (!(await this.sessions().updateModelPreference(id, value))) throw new Error('会话不存在') }
   onAgentEvent(cb: (envelope: AgentEventEnvelope) => void): () => void { this.eventListeners.add(cb); return () => this.eventListeners.delete(cb) }
@@ -611,20 +785,6 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return Promise.resolve((this.runtimeBuffers.get(key) ?? new RunEventBuffer()).replay(afterSeq))
   }
 
-  /* 远程部署仅桌面端可用 */
-  private unsupported(): never {
-    throw new Error('远程部署仅支持桌面端')
-  }
-  deployTestConnection(): Promise<never> { return this.unsupported() }
-  deployInstall(): Promise<never> { return this.unsupported() }
-  deployUpdate(): Promise<never> { return this.unsupported() }
-  deployCancel(): Promise<never> { return this.unsupported() }
-  deployLogs(): Promise<never> { return this.unsupported() }
-  deployUninstall(): Promise<never> { return this.unsupported() }
-  deployListTargets(): Promise<never> { return this.unsupported() }
-  deploySaveTarget(): Promise<never> { return this.unsupported() }
-  deployDeleteTarget(): Promise<never> { return this.unsupported() }
-  onDeployEvent(): () => void { return () => undefined }
 }
 
 let instance: AndroidPlatformApi | null = null

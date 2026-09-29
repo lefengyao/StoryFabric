@@ -3,6 +3,7 @@ import type { GlobalSkillLibrary } from './globalSkillLibrary'
 import { validateContentPackage } from './packageValidator'
 import { SkillResolver, type SkillSnapshot } from './skillResolver'
 import type { ContentPackage } from './types'
+import type { AppliedSkillRef } from '../../shared/agentEvidence'
 
 export const SKILL_TOOL_DEFS: ToolDefJson[] = [
   { name: 'list_skills', description: '列出当前运行固定快照中的已启用全局 Skill。', parameters: { type: 'object', properties: {} } },
@@ -10,7 +11,7 @@ export const SKILL_TOOL_DEFS: ToolDefJson[] = [
   { name: 'propose_skill_package', description: '提出一个待确认的 Skill 包候选；只验证和返回候选，不会自动安装。', parameters: { type: 'object', additionalProperties: false, properties: { package: { type: 'object' }, reason: { type: 'string', minLength: 1 } }, required: ['package', 'reason'] } }
 ]
 
-export interface SkillToolResult { ok: boolean; text: string; preview: string; candidatePackage?: ContentPackage; candidateReason?: string }
+export interface SkillToolResult { ok: boolean; text: string; preview: string; candidatePackage?: ContentPackage; candidateReason?: string; readSkill?: AppliedSkillRef }
 
 function preview(text: string): string { return text.length > 160 ? `${text.slice(0, 160)}…` : text }
 
@@ -37,7 +38,14 @@ export async function executeSkillTool(library: GlobalSkillLibrary, name: string
       const entry = pkg.manifest.skills.find((item) => item.id === skillId)
       if (!entry) continue
       const file = pkg.files.find((item) => item.path === entry.path)
-      if (file) return { ok: true, text: file.content, preview: preview(file.content) }
+      if (file) return { ok: true, text: file.content, preview: preview(file.content), readSkill: {
+        libraryId: snapshot.libraryId,
+        packageId: pkg.manifest.id,
+        skillId,
+        version: pkg.manifest.version,
+        contentHash: pkg.contentHash,
+        reason: '智能体主动读取'
+      } }
     }
     const text = `未找到 Skill：${skillId}`
     return { ok: false, text, preview: text }

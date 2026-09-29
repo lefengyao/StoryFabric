@@ -5,9 +5,10 @@ import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 import type { AppSettings, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
 import { pruneModelSettings } from '../core/llm/modelCatalog'
 import { keyPreview } from '../shared/keyPreview'
-import { markRecentWorkspace } from '../shared/recentWorkspaces'
+import { forgetRecentWorkspace, markRecentWorkspace } from '../shared/recentWorkspaces'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
 import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../shared/creative'
+import { DEFAULT_AGENT_GENERATION_PREFERENCES, normalizeAgentGenerationPreferences, type AgentGenerationPreferences } from '../shared/agentGeneration'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
@@ -20,6 +21,7 @@ interface ServerSettings extends Omit<AppSettings, 'providers'> {
 const DEFAULT_SETTINGS: ServerSettings = {
   providers: [],
   orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
+  agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -33,7 +35,12 @@ const DEFAULT_SETTINGS: ServerSettings = {
   editorFontFamily: 'sans',
   autosaveSeconds: 0,
   sendShortcut: 'enter',
-  chatDensity: 'comfortable'
+  chatDensity: 'comfortable',
+  chatFontSize: 14
+}
+
+function defaultSettings(): ServerSettings {
+  return { ...DEFAULT_SETTINGS, providers: [], agentGeneration: normalizeAgentGenerationPreferences({}) }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -119,7 +126,8 @@ export class ServerSettingsStore {
       providers,
       recentWorkspaces,
       recentWorkspaceOpenedAt,
-      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults)
+      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
+      agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration)
     }
   }
 
@@ -127,7 +135,7 @@ export class ServerSettingsStore {
     try {
       return await this.loadRawStrict()
     } catch {
-      return { ...DEFAULT_SETTINGS, providers: [] }
+      return defaultSettings()
     }
   }
 
@@ -135,7 +143,7 @@ export class ServerSettingsStore {
     try {
       return await this.loadRawStrict()
     } catch (error) {
-      if (isFileNotFound(error)) return { ...DEFAULT_SETTINGS, providers: [] }
+      if (isFileNotFound(error)) return defaultSettings()
       throw error
     }
   }
@@ -164,11 +172,22 @@ export class ServerSettingsStore {
       keyPreview: keyPreview(provider.apiKey),
       modelSettings: provider.modelSettings ?? {}
     }))
-    return { ...settings, providers }
+    return { ...settings, agentGeneration: normalizeAgentGenerationPreferences(settings.agentGeneration), providers }
   }
 
   load(): Promise<PublicAppSettings> {
     return this.serialized(async () => this.toPublic(await this.loadRaw()))
+  }
+
+  consumeLegacyCustomPrompt(migrate: (prompt: string) => Promise<void>): Promise<string | undefined> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      const prompt = settings.customPrompt.trim()
+      if (!prompt) return undefined
+      await migrate(prompt)
+      await this.persist({ ...settings, customPrompt: '' })
+      return prompt
+    })
   }
 
   update(patch: SettingsPatch): Promise<PublicAppSettings> {
@@ -177,7 +196,8 @@ export class ServerSettingsStore {
       const next = {
         ...current,
         ...patch,
-        orchestrationDefaults: normalizeOrchestrationPreferences(patch.orchestrationDefaults ?? current.orchestrationDefaults)
+        orchestrationDefaults: normalizeOrchestrationPreferences(patch.orchestrationDefaults ?? current.orchestrationDefaults),
+        agentGeneration: normalizeAgentGenerationPreferences(patch.agentGeneration ?? current.agentGeneration)
       }
       return this.toPublic(await this.persist(next))
     })
@@ -195,6 +215,13 @@ export class ServerSettingsStore {
         if (signal?.aborted) await this.saveRaw(settings)
         throw error
       }
+    })
+  }
+
+  forgetRecentWorkspace(path: string): Promise<void> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      await this.persist({ ...settings, ...forgetRecentWorkspace(settings, path) })
     })
   }
 
@@ -235,17 +262,17 @@ export class ServerSettingsStore {
       const next = {
         ...settings,
         providers: settings.providers.filter((provider) => provider.id !== id),
-        defaultChatModel: settings.defaultChatModel?.providerId === id ? undefined : settings.defaultChatModel,
-        quickActionModel: settings.quickActionModel?.providerId === id ? undefined : settings.quickActionModel
+        defaultChatModel: settings.defaultChatModel?.providerId === id ? undefined : settings.defaultChatModel
       }
       return this.toPublic(await this.persist(next))
     })
   }
 
-  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string }> {
+  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string; agentGeneration: AgentGenerationPreferences }> {
     const settings = await this.loadRaw()
     return {
       customPrompt: settings.customPrompt,
+      agentGeneration: settings.agentGeneration,
       providers: settings.providers.map(({ id, protocol, baseUrl, apiKey, name, modelSettings }) => ({ id, protocol, baseUrl, apiKey, name, modelSettings }))
     }
   }

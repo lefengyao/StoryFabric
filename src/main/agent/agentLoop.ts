@@ -3,6 +3,7 @@ import type { AgentQuestionAnswer, SkillCandidateAction } from '../../shared/age
 import type { CreativePackageSummary } from '../../shared/creative'
 import { CoreAgentService, type AgentSettings } from '../../core/agent/agentLoop'
 import { getAdapter } from '../../core/llm'
+import { electronFetch } from '../networkFetch'
 import { CoreSessionStore } from '../../core/workspace/sessionStore'
 import { workspaceStore } from '../services/workspaceRuntime'
 import { decryptApiKey, type SettingsService } from '../services/settingsService'
@@ -15,6 +16,8 @@ import type { ContentPackage } from '../../core/skills/types'
 import { GoalStore } from '../../core/goal/goalStore'
 import type { FileStore } from '../../core/storage/fileStore'
 import { GlobalSkillLibrary } from '../../core/skills/globalSkillLibrary'
+import { ActiveRunTracker } from './activeRunTracker'
+import { MemoryStore } from '../../core/memory/memoryStore'
 
 /**
  * Electron 适配层：Agent 的状态机、工具循环和确认机制全部由 CoreAgentService 维护。
@@ -22,13 +25,26 @@ import { GlobalSkillLibrary } from '../../core/skills/globalSkillLibrary'
  */
 export class AgentService {
   private readonly services = new Map<string, CoreAgentService>()
+  private readonly activeRuns: ActiveRunTracker
 
   constructor(
     private readonly settings: SettingsService,
     private readonly emitEvent: (sessionId: string, event: AgentEvent, runId?: string, workspaceId?: string) => void,
     private readonly onUsage?: (record: UsageRecord) => void,
-    private readonly globalStore?: FileStore
-  ) {}
+    private readonly globalStore?: FileStore,
+    onBackgroundActivity?: (active: boolean) => void
+  ) {
+    this.activeRuns = new ActiveRunTracker(onBackgroundActivity ?? (() => undefined))
+  }
+
+  private async runWithActivity(workspaceRoot: string, req: RunAgentRequest): Promise<{ sessionId: string; runId: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }> {
+    const finish = this.activeRuns.begin()
+    try {
+      return await this.serviceFor(workspaceRoot).run(req)
+    } finally {
+      finish()
+    }
+  }
 
   private serviceFor(root: string): CoreAgentService {
     const existing = this.services.get(root)
@@ -38,7 +54,7 @@ export class AgentService {
     const service = new CoreAgentService({
       store,
       workspaceId: root,
-      sessions: new CoreSessionStore(store),
+      sessions: new CoreSessionStore(store, root),
       settings: async (): Promise<AgentSettings> => {
         const settings = await this.settings.load()
         return {
@@ -51,24 +67,41 @@ export class AgentService {
             modelSettings: provider.modelSettings
           })),
           customPrompt: settings.customPrompt,
+          agentGeneration: settings.agentGeneration,
         }
       },
-      getAdapter,
+      getAdapter: (protocol, baseUrl, options) => getAdapter(protocol, baseUrl, { ...options, fetcher: electronFetch }),
       emit: (sessionId, event, runId) => this.emitEvent(sessionId, event, runId, root),
       onUsage: (record) => this.onUsage?.(record),
       executeTool: (name, argsJson) => executeMainTool(root, name, argsJson),
-      globalSkillLibrary: this.globalStore ? new GlobalSkillLibrary(this.globalStore) : undefined
+      globalSkillLibrary: this.globalStore ? new GlobalSkillLibrary(this.globalStore) : undefined,
+      memoryStore: this.globalStore ? new MemoryStore(this.globalStore, store) : undefined,
+      consumeLegacyCustomPrompt: (migrate) => this.settings.consumeLegacyCustomPrompt(migrate)
     })
     this.services.set(root, service)
     return service
   }
 
-  confirmChange(changeId: string, approved: boolean): void {
-    for (const service of this.services.values()) service.confirmChange(changeId, approved)
+  confirmChange(changeId: string, approved: boolean, sessionId?: string): void {
+    for (const service of this.services.values()) service.confirmChange(changeId, approved, sessionId)
+  }
+
+  /** Scope approval to the workspace currently selected by the renderer. */
+  confirmChangeForWorkspace(workspaceRoot: string, changeId: string, approved: boolean, sessionId?: string): void {
+    this.serviceFor(workspaceRoot).confirmChange(changeId, approved, sessionId)
   }
 
   abort(sessionId: string): void {
     for (const service of this.services.values()) service.abort(sessionId)
+  }
+
+  /** Scope cancellation to the workspace currently selected by the renderer. */
+  abortForWorkspace(workspaceRoot: string, sessionId: string): void {
+    this.serviceFor(workspaceRoot).abort(sessionId)
+  }
+
+  isRunning(workspaceRoot: string, sessionId: string): boolean {
+    return this.serviceFor(workspaceRoot).getActiveRunId(sessionId) !== undefined
   }
 
   async answerQuestion(workspaceRoot: string, answer: AgentQuestionAnswer): Promise<void> {
@@ -112,7 +145,11 @@ export class AgentService {
   saveCreativeRules(workspaceRoot: string, layers: RuleLayer[]): Promise<void> { return new RuleStore(workspaceStore(workspaceRoot)).save(layers) }
 
   run(workspaceRoot: string, req: RunAgentRequest): Promise<{ sessionId: string; runId: string; goalId?: string; status?: GoalRun['status']; planVersion?: number }> {
-    return this.serviceFor(workspaceRoot).run(req)
+    return this.runWithActivity(workspaceRoot, req)
+  }
+
+  compressSessionContext(workspaceRoot: string, sessionId: string, providerId: string, model: string): Promise<import('../../shared/types').ChatSession> {
+    return this.serviceFor(workspaceRoot).compressSessionContext(sessionId, providerId, model)
   }
 
   async listGoals(workspaceRoot: string): Promise<GoalRun[]> { return new GoalStore(workspaceStore(workspaceRoot)).list(workspaceRoot) }
@@ -135,7 +172,7 @@ export class AgentService {
   async continueGoal(workspaceRoot: string, id: string): Promise<{ goalId: string; runId: string; status?: GoalRun['status'] }> {
     const goal = await new GoalStore(workspaceStore(workspaceRoot)).assertWorkspace(id, workspaceRoot)
     const model = await this.goalModel()
-    const result = await this.serviceFor(workspaceRoot).run({ mode: 'goal', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
+    const result = await this.runWithActivity(workspaceRoot, { mode: 'goal', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
     if (!result.goalId) throw new Error('目标运行未返回目标 ID')
     return { ...result, goalId: result.goalId }
   }
@@ -148,7 +185,7 @@ export class AgentService {
   async replanGoal(workspaceRoot: string, id: string): Promise<{ goalId: string; planVersion?: number; status?: GoalRun['status'] }> {
     const goal = await new GoalStore(workspaceStore(workspaceRoot)).assertWorkspace(id, workspaceRoot)
     const model = await this.goalModel()
-    const result = await this.serviceFor(workspaceRoot).run({ mode: 'goal', goalAction: 'replan', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
+    const result = await this.runWithActivity(workspaceRoot, { mode: 'goal', goalAction: 'replan', goalRunId: goal.id, message: goal.goal, sessionId: goal.sessionId, approvalPolicy: goal.approvalPolicy, ...model })
     if (!result.goalId) throw new Error('目标运行未返回目标 ID')
     return { ...result, goalId: result.goalId }
   }

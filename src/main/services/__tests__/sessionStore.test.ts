@@ -56,4 +56,13 @@ describe('SessionStore', () => {
     await store.updateMeta(s.id, { title: '   ' })
     expect((await store.load(s.id))?.title).toBe('原名')
   })
+
+  it('保存会话级审批策略', async () => {
+    const store = new SessionStore(root)
+    const s = await store.create()
+    await store.save(s)
+    expect(s.approvalPolicy).toBe('strict')
+    expect(await store.updateMeta(s.id, { approvalPolicy: 'auto' })).toBe(true)
+    expect((await store.load(s.id))?.approvalPolicy).toBe('auto')
+  })
 })

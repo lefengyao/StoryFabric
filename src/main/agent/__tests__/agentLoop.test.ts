@@ -3,6 +3,7 @@ import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+vi.mock('../../networkFetch', () => ({ electronFetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }))
 import type { AgentEvent, ChatSession } from '../../../shared/types'
 import type { AgentEventEnvelope } from '../../../shared/api'
 import { serializeNote } from '../../../core/workspace/entityStore'
@@ -71,6 +72,18 @@ async function loadPersisted(sessionId: string): Promise<ChatSession | null> {
 }
 
 describe('AgentService', () => {
+  it('passes normalized generation preferences through its CoreAgentService settings callback', async () => {
+    await settings.update({ agentGeneration: { agentTemperature: 100.4, proseAlternativesEnabled: true, maxToolRounds: 250 } })
+    const agent = makeAgent()
+    const coreAgent = (agent as unknown as {
+      serviceFor(workspaceRoot: string): { options: { settings: () => Promise<{ agentGeneration?: unknown }> } }
+    }).serviceFor(root)
+
+    await expect(coreAgent.options.settings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 100, proseAlternativesEnabled: true, maxToolRounds: 250 }
+    })
+  })
+
   it('读工具自动执行并回注，最终生成回答', async () => {
     await saveCharacter(root, { name: '林晚', role: '主角' })
 

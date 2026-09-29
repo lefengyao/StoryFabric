@@ -1,0 +1,59 @@
+<h2>下一版聊天界面布局</h2>
+<p class="subtitle">请选择更符合你预期的标题层级；两种方案都包含独立的会话字号偏好。</p>
+
+<div class="section">
+  <div class="label">标题去重方案</div>
+  <div class="cards">
+    <div class="card" data-choice="a" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="mockup" style="margin:0">
+          <div class="mockup-header">方案 A · 保留顶层工作台标题</div>
+          <div style="background:#f6f3eb;color:#18213d;padding:12px 14px;border-bottom:1px solid #d9d4c7;font-size:13px;display:flex;gap:20px;align-items:center">
+            <span style="font-weight:700">智能体工作台</span><span style="color:#7c8498">项目：开局被抢课逼疯</span>
+          </div>
+          <div style="background:#fffdf8;color:#18213d;padding:14px;display:flex;gap:12px;align-items:center">
+            <span style="font-size:22px">✦</span><span style="font-weight:700">普通模式</span><span style="margin-left:auto;color:#7c8498">模型 · 思考等级</span>
+          </div>
+          <div style="background:#fffdf8;padding:12px 14px;color:#59627a;font-size:13px">聊天内容区域更宽；内层不再重复显示“智能体工作台”。</div>
+        </div>
+      </div>
+      <div class="card-body"><h3>A：顶层保留</h3><p>应用导航统一显示“智能体工作台”，会话内部只保留图标、模式与设置，层级最简洁。</p></div>
+    </div>
+
+    <div class="card" data-choice="b" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="mockup" style="margin:0">
+          <div class="mockup-header">方案 B · 保留会话页标题</div>
+          <div style="background:#f6f3eb;color:#18213d;padding:12px 14px;border-bottom:1px solid #d9d4c7;font-size:13px;display:flex;gap:20px;align-items:center">
+            <span style="font-weight:700">主界面</span><span style="color:#7c8498">项目：开局被抢课逼疯</span>
+          </div>
+          <div style="background:#fffdf8;color:#18213d;padding:14px;display:flex;gap:12px;align-items:center">
+            <span style="font-size:22px">✦</span><span style="font-weight:700">智能体工作台</span><span style="margin-left:auto;color:#7c8498">普通模式 · 模型 · 思考等级</span>
+          </div>
+          <div style="background:#fffdf8;padding:12px 14px;color:#59627a;font-size:13px">应用顶栏改为“主界面”，会话页继续承担工作台身份。</div>
+        </div>
+      </div>
+      <div class="card-body"><h3>B：会话页保留</h3><p>顶层显示“主界面”，当前会话区域保留“智能体工作台”，便于强调当前工作区。</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">字号偏好预览（两种方案均包含）</div>
+  <div class="mockup">
+    <div class="mockup-header">设置 → 外观 / 会话显示</div>
+    <div class="mockup-body" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+      <div>
+        <div style="font-size:13px;color:#7c8498;margin-bottom:6px">会话窗口字号</div>
+        <div class="mock-input">中等　　▾</div>
+        <div style="font-size:12px;color:#7c8498;margin-top:8px">只影响聊天消息、工具回执和输入框，不改变全局界面字号。</div>
+      </div>
+      <div style="border:1px solid #ddd8cc;border-radius:10px;padding:12px;background:#fffdf8;color:#18213d">
+        <div style="font-size:16px;margin-bottom:8px">智能体回复示例</div>
+        <div style="font-size:13px;color:#59627a;line-height:1.65">当前会话将使用独立字号，切换会话或重启应用后仍然保留。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">请点击 A 或 B 选择标题布局，然后在终端告诉我你的选择。</p>

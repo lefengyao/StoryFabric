@@ -1,7 +1,8 @@
 import type { FileStore } from '../storage/fileStore'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
+import { boxForChapterStatus, normalizeChapterStatus } from '../../shared/chapterPlacement'
 
-export const CURRENT_WORKSPACE_VERSION = 3
+export const CURRENT_WORKSPACE_VERSION = 4
 
 const V2_DIRS = [
   'characters/primary',
@@ -15,8 +16,10 @@ const V2_DIRS = [
   'events',
   'notes',
   'docs',
+  'inspiration',
   '.storyfabric/sessions',
-  '.storyfabric/trash'
+  '.storyfabric/trash',
+  '.storyfabric/inspiration'
 ]
 
 function safeName(name: string): string {
@@ -141,6 +144,59 @@ async function migrateEventMetadata(store: FileStore): Promise<void> {
   }
 }
 
+async function chapterFiles(store: FileStore, dir: string): Promise<string[]> {
+  const files = (await store.listFiles(dir, '.md')).map((name) => `${dir}/${name}`)
+  for (const child of await store.listDirs(dir)) files.push(...await chapterFiles(store, `${dir}/${child}`))
+  return files
+}
+
+/** v4 makes chapter status authoritative for its physical box. Write first, then remove the old file. */
+async function migrateChapterPlacement(store: FileStore): Promise<void> {
+  const paths = [...await chapterFiles(store, 'chapters/draft'), ...await chapterFiles(store, 'chapters/main')]
+  const volumesRaw = await store.readText('chapters/volumes.json')
+  let volumeIds = new Set(['vol_default'])
+  try {
+    const volumes = JSON.parse(volumesRaw ?? '[]') as Array<{ id?: unknown }>
+    if (Array.isArray(volumes)) volumeIds = new Set(volumes.filter((item) => typeof item?.id === 'string').map((item) => item.id as string))
+  } catch { /* Use the default volume for malformed metadata. */ }
+  if (!volumeIds.size) volumeIds.add('vol_default')
+  const fallbackVolumeId = volumeIds.has('vol_default') ? 'vol_default' : [...volumeIds][0]
+  for (const source of paths) {
+    const raw = await store.readText(source)
+    if (raw === null) continue
+    let parsed
+    try { parsed = parseFrontMatter(raw) } catch { continue }
+    if (typeof parsed.data.id !== 'string' || !parsed.data.id) continue
+    const currentBox = source.startsWith('chapters/draft/') ? 'draft' : 'main'
+    const status = normalizeChapterStatus(parsed.data.status, currentBox)
+    const targetBox = boxForChapterStatus(status)
+    const volumeId = typeof parsed.data.volumeId === 'string' && /^[\w-]+$/.test(parsed.data.volumeId) && volumeIds.has(parsed.data.volumeId) ? parsed.data.volumeId : fallbackVolumeId
+    const fileName = source.slice(source.lastIndexOf('/') + 1)
+    const targetDir = targetBox === 'draft' ? 'chapters/draft' : `chapters/main/${volumeId}`
+    let target = `${targetDir}/${fileName}`
+    const next = stringifyFrontMatter(parsed.content, { ...parsed.data, box: targetBox, status, volumeId })
+    if (target === source) {
+      if (next !== raw) await store.writeText(source, next)
+      continue
+    }
+    await store.ensureDir(targetDir)
+    if (await store.exists(target)) {
+      const existing = await store.readText(target)
+      if (existing === next) { await store.removeFile(source); continue }
+      if (existing && parseFrontMatter(existing).data.id === parsed.data.id) throw new Error(`章节迁移冲突：${source} 与 ${target} 具有相同 id 但内容不同，请保留文件并检查`)
+      const stem = fileName.replace(/\.md$/i, '')
+      const safeId = parsed.data.id.replace(/[^a-zA-Z0-9_-]/g, '_')
+      let index = 0
+      do {
+        target = `${targetDir}/${stem}_${safeId}${index ? `_${index}` : ''}.md`
+        index++
+      } while (await store.exists(target))
+    }
+    await store.writeText(target, next)
+    await store.removeFile(source)
+  }
+}
+
 /**
  * Idempotent v1 -> v2 workspace migration. The operation only touches known
  * StoryFabric paths and leaves user documents intact when run repeatedly.
@@ -159,6 +215,9 @@ export async function migrateWorkspace(store: FileStore): Promise<void> {
   }
   if (meta.version < 3) {
     await migrateEventMetadata(store)
+  }
+  if (meta.version < 4) {
+    await migrateChapterPlacement(store)
   }
 
   const next = {

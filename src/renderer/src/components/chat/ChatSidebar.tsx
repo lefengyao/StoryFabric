@@ -4,6 +4,9 @@ import { Link } from 'react-router-dom'
 import type { AgentMode, ApprovalPolicy, ChatMessage, MessageFile } from '../../../../shared/types'
 import { Markdown } from '../markdown/Markdown'
 import { ContextUsageMeter, shouldShowThinking, ThinkingRow, ToolRunRow } from './AgentActivity'
+import { SkillActivity } from './SkillActivity'
+import { RuleActivity } from './RuleActivity'
+import { RunActivityDetails } from './RunActivityDetails'
 import { Button, Input } from '../ui/primitives'
 import { shouldSendOnKey } from '../../lib/sendShortcut'
 import { prepareMessageFiles } from '../../lib/prepareMessageFiles'
@@ -19,6 +22,7 @@ import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
 import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
 import { creativePreferencesForSurface } from '../../lib/creativePreferences'
+import { agentStageLabel, agentThinkingLabel, isOrdinaryChapterAgentStage } from '../../lib/agentStagePresentation'
 import { approvalPolicyPickerDisabled } from '../../stores/chatScope'
 
 const QUICK_QUESTIONS = [
@@ -31,6 +35,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const chat = useChat()
   const settings = useSettings((s) => s.settings)
   const summary = useWorkspace((s) => s.summary)
+  const activeLiveStage = [...chat.liveTimeline].reverse().find((item): item is Extract<typeof item, { kind: 'stage' }> => item.kind === 'stage' && item.status === 'running')?.stageId
   const uiSource = useWorkspace((s) => s.uiSource)
   const close = useUi((s) => s.closeChatPanel)
   const [attachOpen, setAttachOpen] = useState(false)
@@ -50,6 +55,10 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const selectedModelSettings = defaultModel ? selectedProvider?.modelSettings?.[defaultModel.model] : undefined
   const contextWindow = resolveContextWindow(defaultModel?.model ?? '', selectedModelSettings)
   const activeSession = chat.sessions.find((session) => session.id === chat.activeId)
+  const activeStreaming = Boolean(chat.activeId && chat.runningSessionIds.includes(chat.activeId)) || (chat.streaming && (!chat.runningSessionId || chat.runningSessionId === chat.activeId))
+  const backgroundStreaming = chat.runningSessionIds.some((id) => id !== chat.activeId) || (chat.streaming && !!chat.runningSessionId && chat.runningSessionId !== chat.activeId)
+  const orchestrationEnabled = chat.creativePreferences?.orchestrationEnabled === true
+  useEffect(() => { setAgentMode(orchestrationEnabled ? 'orchestration' : 'normal') }, [orchestrationEnabled, chat.activeId])
   const references = useMemo(() => {
     const candidates = [
       ...(summary?.characters ?? []).map((item) => ({ kind: 'character' as const, id: item.id, label: item.name })),
@@ -72,7 +81,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   useEffect(() => {
     const element = scrollRef.current
     if (element) element.scrollTop = element.scrollHeight
-  }, [chat.messages.length, chat.liveTimeline.length])
+  }, [chat.messages.length, chat.liveTimeline.length, chat.liveSkillEvents.length, chat.liveRuleEvents.length])
 
   useEffect(() => {
     if (!open) setDetailsOpen(false)
@@ -106,12 +115,12 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
 
   const send = async (): Promise<void> => {
     const text = input.text
-    if ((!text && !chat.messageFiles.length && !chat.attachments.length) || chat.streaming) return
+    if ((!text && !chat.messageFiles.length && !chat.attachments.length) || (chat.activeId && chat.runningSessionIds.includes(chat.activeId))) return
     if (!defaultModel) {
       useChat.setState({ error: '请先配置默认对话模型' })
       return
     }
-    await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model, mode: agentMode, creative: creativePreferencesForSurface(settings ?? undefined, 'sidebar') })
+    await chat.send(text, { providerId: defaultModel.providerId, model: defaultModel.model, mode: orchestrationEnabled ? 'orchestration' : agentMode, creative: chat.creativePreferences ?? creativePreferencesForSurface(settings ?? undefined, 'sidebar') })
   }
 
   const createSession = async (): Promise<void> => {
@@ -146,7 +155,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           </div>
           <p className="chat-text-meta truncate text-muted">
-            {chat.streaming
+            {activeStreaming
               ? '正在处理工作区资料…'
               : `${activeSession?.title ?? '创建会话后开始提问'}${defaultModel ? ` · ${defaultModel.model}` : ''}`}
           </p>
@@ -155,7 +164,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
           <History size={16} />
           <ChevronDown size={11} className={cn('transition-transform duration-200', detailsOpen && 'rotate-180')} />
         </button>
-        <button type="button" onClick={() => void createSession()} disabled={chat.streaming} title="新建会话" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-40">
+        <button type="button" onClick={() => void createSession()} title="新建会话" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg">
           <MessageSquarePlus size={16} />
         </button>
         <button type="button" onClick={close} title="关闭侧栏" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg">
@@ -180,7 +189,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 <strong className="text-xs">创作会话</strong>
                 <p className="mt-0.5 text-[10px] text-faint">{chat.sessions.filter((session) => !session.archived).length} 个最近会话</p>
               </div>
-              <button type="button" onClick={() => void createSession()} disabled={chat.streaming} className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-coral px-2.5 text-[11px] font-medium text-white transition hover:bg-coral-strong disabled:opacity-40">
+              <button type="button" onClick={() => void createSession()} className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-coral px-2.5 text-[11px] font-medium text-white transition hover:bg-coral-strong">
                 <Plus size={12} /> 新建
               </button>
             </div>
@@ -193,9 +202,8 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                   key={session.id}
                   type="button"
                   onClick={() => void selectSession(session.id)}
-                  disabled={chat.streaming}
                   className={cn(
-                    'session-drawer-item flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-50',
+                    'session-drawer-item flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition',
                     session.id === chat.activeId
                       ? 'border-accent/30 bg-accent-soft text-accent'
                       : 'border-transparent hover:border-line hover:bg-elevated'
@@ -206,7 +214,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                   </span>
                   <span className="min-w-0 flex-1">
                     <strong className="block truncate text-xs">{session.title}</strong>
-                    <small className="mt-0.5 block truncate text-[10px] text-faint">{formatTime(session.updatedAt)} · {session.messageCount} 条消息</small>
+                    <small className="mt-0.5 block truncate text-[10px] text-faint">{formatTime(session.updatedAt)} · {session.messageCount} 条消息{chat.runningSessionIds.includes(session.id) ? ' · 运行中' : ''}{chat.backgroundAttentionSessionIds.includes(session.id) ? ' · 待处理' : ''}</small>
                   </span>
                   {session.id === chat.activeId && <Check size={13} />}
                 </button>
@@ -284,7 +292,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
 
       <div className="flex min-h-0 flex-1 flex-col bg-app/70">
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-          {chat.messages.length === 0 && !chat.streaming ? (
+          {chat.messages.length === 0 && !activeStreaming ? (
             <div className="mx-auto flex max-w-md flex-col items-center px-2 py-12 text-center">
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
                 <Bot size={24} />
@@ -302,6 +310,8 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
           ) : (
             <div className="space-y-4">
               {chat.messages.map((message) => <SidebarMessage key={message.id} message={message} />)}
+              {activeStreaming && <SkillActivity events={chat.liveSkillEvents} />}
+              {activeStreaming && <RuleActivity events={chat.liveRuleEvents} />}
               {chat.liveTimeline.map((item) => item.kind === 'text'
                 ? (
                     <div key={item.id} className="flex gap-3">
@@ -314,7 +324,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 : item.kind === 'stage' ? (
                     <div key={item.id} className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-[11px] text-muted">
                       <span className={cn('h-2 w-2 rounded-full', item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'completed' ? 'bg-ok' : 'bg-danger')} />
-                      <span>阶段：{item.stageId}</span>
+                      <span>{isOrdinaryChapterAgentStage(item.stageId) ? '智能体' : '阶段'}：{agentStageLabel(item.stageId)}</span>
                     </div>
                   ) : (
                     <ToolRunRow
@@ -326,8 +336,8 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                       compact
                     />
                   ))}
-              {chat.streaming && shouldShowThinking(chat.liveTimeline) && (
-                <ThinkingRow label={`${defaultModel?.model ?? '模型'} 正在思考`} />
+              {activeStreaming && shouldShowThinking(chat.liveTimeline) && (
+                <ThinkingRow label={agentThinkingLabel(activeLiveStage, defaultModel?.model ?? '模型')} />
               )}
               {chat.error && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{chat.error}</div>}
             </div>
@@ -385,20 +395,26 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                   setAttachOpen(false)
                   setReferenceOpen(true)
                 }}
+                onCompressContext={() => chat.compressContext().catch((error) => { useChat.setState({ error: error instanceof Error ? error.message : String(error) }) })}
+                compressing={chat.contextCompressing || chat.streaming}
               />
             </div>
             <div className="absolute bottom-2 right-2 flex items-center gap-1">
               <ContextUsageMeter
                 ringOnly
                 usedTokens={contextUsage.usedTokens}
-                contextTokens={contextUsage.contextTokens}
+                contextTokens={contextUsage.inputBudgetTokens}
+                contextWindowTokens={contextUsage.contextTokens}
                 compressing={chat.contextCompressing}
                 compressedMessages={chat.contextCompression?.summarizedMessages}
               />
-              {chat.streaming ? (
+              {activeStreaming ? (
                 <Button variant="outline" size="sm" onClick={() => void chat.abort()} title="中止生成"><Square size={12} /></Button>
               ) : (
-                <Button variant="primary" size="sm" onClick={() => void send()} disabled={!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length}><Send size={12} /></Button>
+                <>
+                  {backgroundStreaming && <Button variant="outline" size="sm" onClick={() => void selectSession(chat.runningSessionId!)} title="返回正在运行的会话"><History size={12} /></Button>}
+                  <Button variant="primary" size="sm" onClick={() => void send()} title="发送当前会话消息" disabled={!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length}><Send size={12} /></Button>
+                </>
               )}
             </div>
             {referenceOpen && (
@@ -472,9 +488,13 @@ function SidebarMessage({ message }: { message: ChatMessage }): React.ReactEleme
   return (
     <div className="flex gap-3">
       <SidebarAvatar assistant />
-      <div className={cn('min-w-0 flex-1 rounded-xl border border-line bg-panel px-3.5 py-3', message.isError && 'border-danger/40')}>
-        {message.text && <Markdown text={message.text} />}
-        {message.files && <SidebarFiles files={message.files} />}
+      <div className="min-w-0 flex-1">
+        {message.agentIdentity && <div className="mb-1 text-[10px] font-medium text-accent">{message.agentIdentity.label} · {message.agentIdentity.model}</div>}
+        <div className={cn('rounded-xl border border-line bg-panel px-3.5 py-3', message.isError && 'border-danger/40')}>
+          {message.text && <Markdown text={message.text} />}
+          {message.files && <SidebarFiles files={message.files} />}
+        </div>
+        <RunActivityDetails activity={message.runActivity} />
       </div>
     </div>
   )

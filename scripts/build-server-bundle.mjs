@@ -1,6 +1,6 @@
 /**
  * 生成随安装包分发的服务端部署包：release/<version>/storyfabric-server-<version>.tar.gz
- * 内容见 src/core/deploy/bundle.ts 的 BUNDLE_ENTRIES。
+ * 内容清单在本脚本中明确列出，供手动 Docker 部署使用。
  */
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'

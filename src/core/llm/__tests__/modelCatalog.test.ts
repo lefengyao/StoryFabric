@@ -52,6 +52,8 @@ describe('profileForModel', () => {
   it('Gemini 3 取保守输出上限', () => {
     expect(profileForModel('gemini-3-pro').maxOutputTokens).toBe(64000)
     expect(profileForModel('gemini-3-pro').reasoning).toBe(true)
+    expect(profileForModel('models/gemini-3.8-flash').maxOutputTokens).toBe(64000)
+    expect(profileForModel('models/gemini-3.8-flash').reasoning).toBe(true)
   })
 
   it('未知模型回落到通用档案（128K / 8K / max_tokens / 无 reasoning）', () => {

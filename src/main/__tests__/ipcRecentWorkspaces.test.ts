@@ -30,6 +30,30 @@ vi.mock('electron', () => ({
 describe('主进程近期工作区 IPC', () => {
   beforeEach(() => handlers.clear())
 
+  it('can rename a project and forget it without deleting its folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sf-ipc-recent-actions-'))
+    try {
+      const workspace = join(root, 'folder-name')
+      await mkdir(workspace)
+      await initializeWorkspace(new NodeFileStore(workspace), '原项目名')
+      const settingsFile = join(root, 'settings.json')
+      const settings = new SettingsService(settingsFile)
+      await settings.recordRecentWorkspace(workspace)
+      const { registerIpc } = await import('../ipc')
+      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never })
+
+      const renamed = await handlers.get(IPC.RenameWorkspace)!(null, workspace, '新的项目名') as { name: string; path: string }
+      expect(renamed).toMatchObject({ name: '新的项目名', path: workspace })
+      expect(((await handlers.get(IPC.ListRecentWorkspaces)!()) as Array<{ name: string }>).map((item) => item.name)).toContain('新的项目名')
+      await handlers.get(IPC.ForgetRecentWorkspace)!(null, workspace)
+      expect((await settings.load()).recentWorkspaces).not.toContain(workspace)
+      expect((await settings.load()).lastWorkspacePath).toBeUndefined()
+      await expect(access(join(workspace, 'storyfabric.json'))).resolves.toBeUndefined()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     { recentWorkspaces: null, recentWorkspaceOpenedAt: null },
     { recentWorkspaces: 'legacy-workspace', recentWorkspaceOpenedAt: [] },
@@ -45,8 +69,7 @@ describe('主进程近期工作区 IPC', () => {
         win: () => null,
         settings: new SettingsService(file),
         agent: {} as never,
-        usage: {} as never,
-        deploy: {} as never
+        usage: {} as never
       })
 
       const handler = handlers.get(IPC.ListRecentWorkspaces)
@@ -73,7 +96,7 @@ describe('主进程近期工作区 IPC', () => {
         return SettingsService.prototype.recordRecentWorkspace.call(settings, path, signal)
       })
       const { registerIpc } = await import('../ipc')
-      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never, deploy: {} as never })
+      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never })
 
       const open = handlers.get(IPC.OpenWorkspaceByPath)!(null, workspace, 'cancel-open-1') as Promise<unknown>
       await entered.promise
@@ -108,7 +131,7 @@ describe('主进程近期工作区 IPC', () => {
         return SettingsService.prototype.recordRecentWorkspace.call(settings, path, signal)
       })
       const { registerIpc } = await import('../ipc')
-      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never, deploy: {} as never })
+      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never })
 
       const importing = handlers.get(IPC.ImportWorkspace)!(null, archive.bytes, '导入源.storyfabric.zip', { parentDir: parent, name: '取消导入' }, 'cancel-import-1') as Promise<unknown>
       await entered.promise
@@ -137,7 +160,7 @@ describe('主进程近期工作区 IPC', () => {
       const settings = new SettingsService(join(root, 'settings.json'))
       const record = vi.spyOn(settings, 'recordRecentWorkspace').mockRejectedValue(new Error('设置暂不可用'))
       const { registerIpc } = await import('../ipc')
-      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never, deploy: {} as never })
+      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never })
 
       const imported = await handlers.get(IPC.ImportWorkspace)!(null, archive.bytes, '导入源.storyfabric.zip', { parentDir: parent, name: '保留导入' })
 
@@ -158,7 +181,7 @@ describe('主进程近期工作区 IPC', () => {
       await initializeWorkspace(new NodeFileStore(workspace), '自动恢复工作区')
       const settings = new SettingsService(join(root, 'settings.json'))
       const { registerIpc } = await import('../ipc')
-      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never, deploy: {} as never })
+      registerIpc({ win: () => null, settings, agent: {} as never, usage: {} as never })
 
       await handlers.get(IPC.CloseWorkspace)! (null)
       await settings.update({ lastWorkspacePath: workspace })
@@ -171,6 +194,36 @@ describe('主进程近期工作区 IPC', () => {
       await handlers.get(IPC.CloseWorkspace)! (null)
       expect((await settings.load()).lastWorkspacePath).toBeUndefined()
       await expect(handlers.get(IPC.GetCurrentWorkspace)!()).resolves.toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps writing statistics available when a recent workspace path has disappeared', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sf-ipc-writing-stale-'))
+    try {
+      const valid = join(root, 'valid')
+      const stale = join(root, 'deleted-parent', 'old-workspace')
+      await mkdir(valid)
+      const store = new NodeFileStore(valid)
+      await initializeWorkspace(store, '仍可访问')
+      await store.writeText('.storyfabric/writing-stats/2026-09.json', JSON.stringify([
+        { date: '2026-09-26', added: 8, deleted: 2, net: 6, totalWords: 106, updatedAt: 1 }
+      ]))
+      const settingsFile = join(root, 'settings.json')
+      await writeFile(settingsFile, JSON.stringify({ recentWorkspaces: [stale, valid] }), 'utf-8')
+      const { registerIpc } = await import('../ipc')
+      registerIpc({
+        win: () => null,
+        settings: new SettingsService(settingsFile),
+        agent: {} as never,
+        usage: { listBuckets: async () => [] } as never
+      })
+      await handlers.get(IPC.CloseWorkspace)!(null)
+
+      await expect(handlers.get(IPC.GetWritingDays)!()).resolves.toEqual([
+        { workspaceId: valid, date: '2026-09-26', added: 8, deleted: 2, net: 6, totalWords: 106, updatedAt: 1 }
+      ])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

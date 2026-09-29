@@ -7,17 +7,16 @@ When changing the application version or any code shipped to the Linux server, t
 Required release flow:
 
 1. Update `package.json` and the root package entry in `package-lock.json` to the same version.
-2. Run `npm run server:bundle` to rebuild the server payload. This must create `release/<version>/storyfabric-server-<version>.tar.gz` and update `release/<version>/server-bundle/VERSION`.
-3. Run the platform packaging command, for Windows `npm run dist:win`. It reruns the server bundle step and embeds the resulting archive as `resources/server-bundle.tar.gz`.
+2. When releasing the standalone Linux server, run `npm run server:bundle`. This must create `release/<version>/storyfabric-server-<version>.tar.gz` and update `release/<version>/server-bundle/VERSION`.
+3. When releasing the Windows desktop app, run `npm run dist:win`. It no longer rebuilds or embeds the standalone server bundle.
 4. Before reporting the release as ready, verify all of the following are the new version:
    - `package.json` and the root `package-lock.json` entry;
    - `release/<version>/server-bundle/VERSION`;
    - `VERSION` inside `release/<version>/storyfabric-server-<version>.tar.gz`;
-   - `VERSION` inside `release/<version>/win-unpacked/resources/server-bundle.tar.gz`;
-   - `release/<version>/latest.yml` and the new installer filenames.
-5. Compare the SHA256 of the standalone server archive and the archive embedded in the unpacked installer. They must match exactly.
+   - `release/<version>/latest.yml` and the new installer filenames when a desktop release is produced.
+5. For a server release, record and verify the standalone archive SHA256 printed by `npm run server:bundle`; use `server-bundle/SHA256SUMS` to verify the files contained inside the archive.
 
-The server deployment service uploads the standalone bundle during deployment, while a packaged desktop app reads the embedded `resources/server-bundle.tar.gz`. Updating only `package.json`, `package-lock.json`, or `latest.yml` is insufficient. Every version must have its own `release/<version>/` directory; never put new artifacts in the release root or select a package by an unversioned path.
+The standalone server archive is deployed manually. Updating only `package.json`, `package-lock.json`, or `latest.yml` is insufficient. Every version must have its own `release/<version>/` directory; never put new artifacts in the release root or select a package by an unversioned path.
 
 ## Linux server data boundary
 

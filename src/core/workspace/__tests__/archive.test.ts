@@ -28,6 +28,7 @@ describe('workspace archive', () => {
     const source = new MemoryFileStore()
     await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '测试项目' }))
     await source.writeText('.storyfabric/layout.json', JSON.stringify({ char_1: { x: 1, y: 2 } }))
+    await source.writeText('.storyfabric/memory.md', '---\nenabled: true\n---\n- 项目偏好')
     await source.writeText('.storyfabric/sessions/sess_1.json', JSON.stringify({ id: 'sess_1', title: '测试会话' }))
     await source.writeText('.storyfabric/trash/index.json', JSON.stringify([{ id: 'char_1' }]))
     await source.writeText('.storyfabric/index.json', JSON.stringify({ derived: true }))
@@ -37,6 +38,7 @@ describe('workspace archive', () => {
     await importWorkspaceArchive(target, archive.bytes)
 
     expect(await target.readText('.storyfabric/layout.json')).not.toBeNull()
+    expect(await target.readText('.storyfabric/memory.md')).toContain('项目偏好')
     expect(await target.readText('.storyfabric/sessions/sess_1.json')).toBeNull()
     expect(await target.readText('.storyfabric/trash/index.json')).toBeNull()
     expect(await target.readText('.storyfabric/index.json')).toBeNull()

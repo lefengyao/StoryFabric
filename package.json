@@ -1,6 +1,6 @@
 {
   "name": "storyfabric",
-  "version": "0.1.8-snapshot",
+  "version": "0.2.16",
   "description": "依托智能体的小说创作工作台",
   "main": "./out/main/index.js",
   "author": "StoryFabric",
@@ -22,18 +22,21 @@
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^7.1.6",
+    "@capacitor/clipboard": "^7.0.4",
     "@capacitor/core": "^7.6.9",
     "@capacitor/filesystem": "^7.1.8",
     "@capacitor/preferences": "^7.0.4",
     "@capacitor/share": "^7.0.4",
     "js-yaml": "^4.3.2",
     "jszip": "^3.10.1",
-    "ssh2": "^1.17.0"
+    "pdfjs-dist": "5.4.530",
+    "saxes": "6.0.0"
   },
   "devDependencies": {
     "@capacitor/android": "^7.6.9",
     "@capacitor/cli": "^7.6.9",
     "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/search": "^6.7.2",
     "@radix-ui/react-dialog": "^1.1.23",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
@@ -42,7 +45,6 @@
     "@types/node": "^26.3.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
-    "@types/ssh2": "^1.15.6",
     "@vitejs/plugin-react": "^5.2.0",
     "@xyflow/react": "^12.11.3",
     "codemirror": "^6.0.2",

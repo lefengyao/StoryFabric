@@ -35,6 +35,8 @@ describe('global skill resolver', () => {
     expect(events).toEqual(['checked', 'matched', 'loaded', 'applied'])
     await library.setEnabled(pkg.manifest.id, pkg.manifest.version, false)
     expect((await resolver.listSkills(snapshot))).toHaveLength(1)
+    const read = await executeSkillTool(library, 'read_skill', JSON.stringify({ skillId: 'dialogue' }), snapshot)
+    expect(read.readSkill).toEqual(expect.objectContaining({ packageId: 'dialogue-pack', skillId: 'dialogue', version: '1.0.0' }))
   })
 
   it('returns none for a stage-incompatible automatic match and does not install proposals', async () => {
@@ -66,5 +68,33 @@ describe('global skill resolver', () => {
     })
 
     expect(result.skills.map((skill) => skill.ref.skillId)).toEqual(['dialogue'])
+  })
+
+  it('keeps the preflight stage narrow so a normal writing request can load enabled skills', async () => {
+    const library = new GlobalSkillLibrary(new MemoryFileStore())
+    await library.install(pkg)
+    const snapshot = await new SkillResolver(library).createSnapshot()
+    const result = await new SkillResolver(library).resolve({
+      runId: 'run-4',
+      stageId: 'write',
+      agentId: 'basic',
+      query: '写第一章',
+      snapshot
+    })
+
+    expect(result.skills.map((skill) => skill.ref.skillId)).toEqual(['dialogue'])
+    expect(result.events.map((event) => event.status)).toEqual(['checked', 'matched', 'loaded', 'applied'])
+  })
+
+  it('honors an explicitly selected skill even when it is outside the inferred stage', async () => {
+    const library = new GlobalSkillLibrary(new MemoryFileStore())
+    await library.install(pkg)
+    const snapshot = await new SkillResolver(library).createSnapshot()
+    const result = await new SkillResolver(library).resolve({
+      runId: 'run-5', stageId: 'review', agentId: 'basic', query: '检查内容',
+      selectedSkillIds: ['dialogue'], snapshot
+    })
+    expect(result.skills.map((skill) => skill.ref.skillId)).toEqual(['dialogue'])
+    expect(result.skills[0].reason).toBe('用户显式选择')
   })
 })

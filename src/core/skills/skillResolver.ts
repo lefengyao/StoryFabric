@@ -82,8 +82,8 @@ export class SkillResolver {
         if (!file) continue
         let skill
         try { skill = parseSkillMarkdown(file.content) } catch { continue }
-        if (input.stageId && !skill.stages.includes(input.stageId)) continue
         const explicitlySelected = selected.has(skill.id) || selected.has(pkg.manifest.id) || selected.has(`${pkg.manifest.id}:${skill.id}`)
+        if (input.stageId && !skill.stages.includes(input.stageId) && !explicitlySelected) continue
         const searchable = tokens(`${skill.name} ${pkg.manifest.name} ${pkg.manifest.description} ${skill.body}`)
         const keywordMatched = queryTokens.size > 0 && searchable.some((token) => queryTokens.has(token))
         const stageMatched = Boolean(input.stageId && skill.stages.includes(input.stageId) && !(input.selectedSkillIds?.length))

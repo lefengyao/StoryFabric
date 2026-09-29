@@ -12,6 +12,18 @@ import { PortableUsageStore } from '../../usage/portableUsageStore'
 import { OrchestrationScheduler } from '../../orchestration/scheduler'
 import { SubagentManager } from '../../orchestration/subagents'
 import { RuleStore } from '../../rules/ruleStore'
+import { GlobalSkillLibrary } from '../../skills/globalSkillLibrary'
+
+type SkillActivityEvent = Extract<AgentEvent, { type: 'skill-activity' }>
+type RuleActivityEvent = Extract<AgentEvent, { type: 'rule-activity' }>
+
+function skillActivityEvents(events: AgentEvent[]): SkillActivityEvent[] {
+  return events.filter((event): event is SkillActivityEvent => event.type === 'skill-activity')
+}
+
+function ruleActivityEvents(events: AgentEvent[]): RuleActivityEvent[] {
+  return events.filter((event): event is RuleActivityEvent => event.type === 'rule-activity')
+}
 
 it('routes orchestration through a budgeted stage runner and includes selected skill guidance', async () => {
   const store = new MemoryFileStore()
@@ -47,16 +59,16 @@ it('uses the provider and model assigned to an orchestration stage', async () =>
   const store = new MemoryFileStore()
   await initializeWorkspace(store, 'audit-stage-model-selection')
   const sessions = new CoreSessionStore(store)
-  const calls: Array<{ baseUrl: string; model: string }> = []
+  const calls: Array<{ baseUrl: string; model: string; temperature?: number }> = []
   const service = new CoreAgentService({
     store,
     sessions,
     settings: async () => ({ providers: [
       { id: 'default', protocol: 'openai', baseUrl: 'https://default.invalid/v1', apiKey: 'default-key' },
       { id: 'writer', protocol: 'openai', baseUrl: 'https://writer.invalid/v1', apiKey: 'writer-key' }
-    ] }),
-    getAdapter: (_protocol, baseUrl) => ({ stream: async (model) => {
-      calls.push({ baseUrl, model })
+    ], agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false } }),
+    getAdapter: (_protocol, baseUrl) => ({ stream: async (model, request) => {
+      calls.push({ baseUrl, model, temperature: request.params?.temperature })
       return { text: 'draft', stopReason: 'stop' as const, toolCalls: [] }
     } }),
     emit: () => undefined
@@ -68,10 +80,10 @@ it('uses the provider and model assigned to an orchestration stage', async () =>
   } })
 
   expect(calls).toEqual([
-    { baseUrl: 'https://default.invalid/v1', model: 'default-model' },
-    { baseUrl: 'https://default.invalid/v1', model: 'default-model' },
-    { baseUrl: 'https://default.invalid/v1', model: 'default-model' },
-    { baseUrl: 'https://writer.invalid/v1', model: 'writer-model' }
+    { baseUrl: 'https://default.invalid/v1', model: 'default-model', temperature: 0.5 },
+    { baseUrl: 'https://default.invalid/v1', model: 'default-model', temperature: 0.5 },
+    { baseUrl: 'https://default.invalid/v1', model: 'default-model', temperature: 0.5 },
+    { baseUrl: 'https://writer.invalid/v1', model: 'writer-model', temperature: 0.5 }
   ])
 })
 
@@ -108,7 +120,7 @@ it('runs bounded read-only subagents through the shared budget before orchestrat
   const store = new MemoryFileStore()
   await initializeWorkspace(store, 'audit-orchestration-subagents')
   const sessions = new CoreSessionStore(store)
-  const calls: Array<{ baseUrl: string; model: string; task: string }> = []
+  const calls: Array<{ baseUrl: string; model: string; task: string; temperature?: number }> = []
   const usage: Array<{ purpose?: string; model?: string; parentAgentId?: string }> = []
   const events: AgentEvent[] = []
   const service = new CoreAgentService({
@@ -118,10 +130,10 @@ it('runs bounded read-only subagents through the shared budget before orchestrat
       { id: 'default', protocol: 'openai', baseUrl: 'https://default.invalid/v1', apiKey: 'default-key' },
       { id: 'reviewer', protocol: 'openai', baseUrl: 'https://reviewer.invalid/v1', apiKey: 'reviewer-key' },
       { id: 'stylist', protocol: 'openai', baseUrl: 'https://stylist.invalid/v1', apiKey: 'stylist-key' }
-    ] }),
+    ], agentGeneration: { agentTemperature: 65, proseAlternativesEnabled: false } }),
     getAdapter: (_protocol, baseUrl) => ({ stream: async (model, request, _key, handlers) => {
       const task = request.messages[0]?.text ?? ''
-      calls.push({ baseUrl, model, task })
+      calls.push({ baseUrl, model, task, temperature: request.params?.temperature })
       if (task.includes('连续性')) handlers.onText('连续性建议')
       if (task.includes('文风')) handlers.onText('文风建议')
       return {
@@ -161,6 +173,7 @@ it('runs bounded read-only subagents through the shared budget before orchestrat
   ]))
   expect(events).toContainEqual({ type: 'stage-start', stageId: 'subagent:continuity' })
   expect(events).toContainEqual({ type: 'stage-complete', stageId: 'subagent:style' })
+  expect(calls.map((call) => call.temperature)).toEqual([0.55, 0.55, 0.55])
 })
 
 it('cancels a subagent run before it can start another child or orchestration stage', async () => {
@@ -343,6 +356,137 @@ it('includes selected builtin rule content in a basic model request', async () =
   })
   await service.run({ providerId: 'mock', model: 'audit-model', message: 'write', creative: { mode: 'basic', orchestrationEnabled: false, subagentsEnabled: false, intensity: 'standard', selectedSkillIds: [], selectedRuleSetIds: ['natural-dialogue'] } })
   expect(prompt).toContain('对白解释已知事实')
+})
+
+it('emits rule inspection and application evidence before a basic run', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-rule-evidence')
+  await new RuleStore(store).save([{ source: 'workspace', rules: [{ id: 'voice', kind: 'guidance', target: 'all', key: 'voice', value: '克制', severity: 'prefer', enabled: true }] }])
+  const sessions = new CoreSessionStore(store)
+  const events: AgentEvent[] = []
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async () => ({ text: 'answer', stopReason: 'stop' as const, toolCalls: [] }) }),
+    emit: (_sid, event) => events.push(event)
+  })
+  await service.run({ providerId: 'mock', model: 'audit-model', message: 'write' })
+  expect(ruleActivityEvents(events).map((event) => event.activity.status)).toEqual(['checked', 'matched', 'applied'])
+  expect(ruleActivityEvents(events).find((event) => event.activity.status === 'applied')?.activity.rules[0]).toMatchObject({ id: 'voice', source: 'workspace' })
+})
+
+it('preflights enabled skills and stage rules for ordinary Chinese writing requests', async () => {
+  const store = new MemoryFileStore()
+  const globalStore = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-basic-skill-preflight')
+  const library = new GlobalSkillLibrary(globalStore)
+  const writeSkill = structuredClone(builtinPackages[1])
+  writeSkill.manifest.id = 'test.write-style'
+  writeSkill.manifest.name = '写作阶段指导'
+  writeSkill.manifest.skills[0].id = 'write-style'
+  writeSkill.manifest.skills[0].path = 'skills/write-style/SKILL.md'
+  writeSkill.manifest.ruleSets = []
+  writeSkill.files = [{ path: 'skills/write-style/SKILL.md', content: '---\nid: write-style\nname: 写作阶段指导\nstages: [write]\n---\nENABLED_WRITE_SKILL_GUIDANCE' }]
+  const disabledSkill = structuredClone(writeSkill)
+  disabledSkill.manifest.id = 'test.disabled-style'
+  disabledSkill.manifest.name = '已停用技能'
+  disabledSkill.manifest.skills[0].id = 'disabled-style'
+  disabledSkill.manifest.skills[0].path = 'skills/disabled-style/SKILL.md'
+  disabledSkill.files[0].path = 'skills/disabled-style/SKILL.md'
+  disabledSkill.files[0].content = '---\nid: disabled-style\nname: 已停用技能\nstages: [write]\n---\nDISABLED_SKILL_GUIDANCE'
+  await library.install(writeSkill, true)
+  await library.install(disabledSkill, false)
+  await new RuleStore(store).save([{ source: 'workspace', rules: [
+    { id: 'write-voice', kind: 'guidance', target: 'write', key: 'voice', value: 'WRITE_STAGE_RULE_GUIDANCE', severity: 'must', enabled: true },
+    { id: 'review-only', kind: 'guidance', target: 'review', key: 'tone', value: 'REVIEW_ONLY_RULE', severity: 'prefer', enabled: true }
+  ] }])
+  const sessions = new CoreSessionStore(store)
+  let prompt = ''
+  const events: AgentEvent[] = []
+  const service = new CoreAgentService({
+    store, sessions, globalSkillLibrary: library,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }] }),
+    getAdapter: () => ({ stream: async (_model, request) => { prompt = request.system; return { text: 'answer', stopReason: 'stop' as const, toolCalls: [] } } }),
+    emit: (_sid, event) => events.push(event)
+  })
+
+  await service.run({ providerId: 'mock', model: 'audit-model', message: '写第一章' })
+
+  expect(prompt).toContain('ENABLED_WRITE_SKILL_GUIDANCE')
+  expect(prompt).toContain('WRITE_STAGE_RULE_GUIDANCE')
+  expect(prompt).not.toContain('DISABLED_SKILL_GUIDANCE')
+  expect(prompt).not.toContain('REVIEW_ONLY_RULE')
+  expect(skillActivityEvents(events).map((event) => event.activity.status)).toEqual(['checked', 'matched', 'loaded', 'applied'])
+  expect(skillActivityEvents(events).find((event) => event.activity.status === 'applied')?.activity.skills.map((skill) => skill.skillId)).toContain('write-style')
+  expect(skillActivityEvents(events).find((event) => event.activity.status === 'applied')?.activity.skills.map((skill) => skill.skillId)).not.toContain('disabled-style')
+  expect(ruleActivityEvents(events).map((event) => event.activity.status)).toEqual(['checked', 'matched', 'applied'])
+  const appliedRuleIds = ruleActivityEvents(events).find((event) => event.activity.status === 'applied')?.activity.rules.map((rule) => rule.id) ?? []
+  expect(appliedRuleIds).toContain('write-voice')
+  expect(appliedRuleIds).not.toContain('review-only')
+})
+
+it('scopes the system prompt to the current project and migrates the legacy value only when absent', async () => {
+  const store = new MemoryFileStore()
+  await initializeWorkspace(store, 'audit-project-prompt')
+  await store.writeText('docs/system-prompt.md', 'PROJECT_ONLY_PROMPT')
+  const sessions = new CoreSessionStore(store)
+  let prompt = ''
+  const service = new CoreAgentService({
+    store,
+    sessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }], customPrompt: 'LEGACY_GLOBAL_PROMPT' }),
+    getAdapter: () => ({ stream: async (_model, request) => { prompt = request.system; return { text: 'answer', stopReason: 'stop' as const, toolCalls: [] } } }),
+    emit: () => undefined
+  })
+  await service.run({ providerId: 'mock', model: 'audit-model', message: 'write' })
+  expect(prompt).toContain('PROJECT_ONLY_PROMPT')
+  expect(prompt).not.toContain('LEGACY_GLOBAL_PROMPT')
+
+  const migratedStore = new MemoryFileStore()
+  await initializeWorkspace(migratedStore, 'audit-project-prompt-migration')
+  const migratedSessions = new CoreSessionStore(migratedStore)
+  const migrated = new CoreAgentService({
+    store: migratedStore,
+    sessions: migratedSessions,
+    settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }], customPrompt: 'LEGACY_GLOBAL_PROMPT' }),
+    getAdapter: () => ({ stream: async () => ({ text: 'answer', stopReason: 'stop' as const, toolCalls: [] }) }),
+    emit: () => undefined
+  })
+  await migrated.run({ providerId: 'mock', model: 'audit-model', message: 'write' })
+  expect(await migratedStore.readText('docs/system-prompt.md')).toBe('LEGACY_GLOBAL_PROMPT')
+})
+
+it('consumes the legacy global prompt once so it cannot leak into a second empty project', async () => {
+  let legacyPrompt: string | undefined = 'LEGACY_GLOBAL_PROMPT'
+  const prompts: string[] = []
+  const runProject = async (name: string): Promise<MemoryFileStore> => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, name)
+    const service = new CoreAgentService({
+      store,
+      sessions: new CoreSessionStore(store),
+      settings: async () => ({ providers: [{ id: 'mock', protocol: 'openai', baseUrl: 'https://unused.invalid', apiKey: 'fake' }], customPrompt: legacyPrompt }),
+      consumeLegacyCustomPrompt: async (migrate) => {
+        const prompt = legacyPrompt?.trim()
+        if (!prompt) return undefined
+        await migrate(prompt)
+        legacyPrompt = undefined
+        return prompt
+      },
+      getAdapter: () => ({ stream: async (_model, request) => { prompts.push(request.system); return { text: 'answer', stopReason: 'stop' as const, toolCalls: [] } } }),
+      emit: () => undefined
+    })
+    await service.run({ providerId: 'mock', model: 'audit-model', message: 'write' })
+    return store
+  }
+
+  const firstProject = await runProject('legacy-prompt-first-project')
+  const secondProject = await runProject('legacy-prompt-second-project')
+  expect(await firstProject.readText('docs/system-prompt.md')).toBe('LEGACY_GLOBAL_PROMPT')
+  expect(await secondProject.readText('docs/system-prompt.md')).toBeNull()
+  expect(prompts[0]).toContain('LEGACY_GLOBAL_PROMPT')
+  expect(prompts[1]).not.toContain('LEGACY_GLOBAL_PROMPT')
 })
 
 it('uses every enabled content package when chat no longer carries per-message skill selections', async () => {

@@ -32,6 +32,19 @@ export class HttpPlatformApi implements StoryFabricApi {
   setCreativePackageEnabled(id: string, version: string, enabled: boolean): Promise<CreativePackageSummary> { return this.rpc('setCreativePackageEnabled', [id, version, enabled]) }
   listCreativeRules(): Promise<RuleLayer[]> { return this.rpc('listCreativeRules') }
   saveCreativeRules(layers: RuleLayer[]): Promise<void> { return this.rpc('saveCreativeRules', [layers]) }
+  listInspirationSources(): Promise<import('../../../shared/inspiration').InspirationSource[]> { return this.rpc('listInspirationSources') }
+  importInspirationSource(input: import('../../../shared/inspiration').InspirationImport): Promise<import('../../../shared/inspiration').InspirationSource> {
+    // JSON-RPC does not preserve a Uint8Array (it becomes an object with
+    // numeric keys), so send a plain byte array over the remote boundary.
+    return this.rpc('importInspirationSource', [{ name: input.name, bytes: Array.from(input.bytes) }])
+  }
+  importInspirationPath(path: string): Promise<import('../../../shared/inspiration').InspirationSource | import('../../../shared/inspiration').InspirationSource[]> { return this.rpc('importInspirationPath', [path]) }
+  removeInspirationSource(id: string): Promise<void> { return this.rpc('removeInspirationSource', [id]) }
+  extractInspirationSource(id: string): Promise<import('../../../shared/inspiration').InspirationSource> { return this.rpc('extractInspirationSource', [id]) }
+  readInspirationSource(id: string, maxChars?: number): Promise<string> { return this.rpc('readInspirationSource', [id, maxChars]) }
+  readInspirationDoc(name: string): Promise<string | null> { return this.rpc('readInspirationDoc', [name]) }
+  saveInspirationDoc(name: string, content: string): Promise<void> { return this.rpc('saveInspirationDoc', [name, content]) }
+  saveInspirationArtifact(input: import('../../../shared/inspiration').InspirationArtifactInput): Promise<void> { return this.rpc('saveInspirationArtifact', [input]) }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return this.auth.kind === 'bearer' ? { authorization: `Bearer ${this.auth.token}`, ...extra } : extra
@@ -73,6 +86,8 @@ export class HttpPlatformApi implements StoryFabricApi {
   getDefaultWorkspaceDir(): Promise<string> { return Promise.resolve('') }
   listWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces') }
   listRecentWorkspaces(): Promise<WorkspaceListItem[]> { return this.rest('/api/workspaces/recent') }
+  renameWorkspace(path: string, name: string): Promise<WorkspaceListItem> { return this.rpc('renameWorkspace', [path, name]) }
+  forgetRecentWorkspace(path: string): Promise<void> { return this.rpc('forgetRecentWorkspace', [path]) }
   async createWorkspace(_parentDir: string, name: string): Promise<string> { return (await this.rest<WorkspaceSummary>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }), headers: { 'content-type': 'application/json' } })).path }
   openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST', signal: options?.signal }) }
   openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
@@ -130,12 +145,17 @@ export class HttpPlatformApi implements StoryFabricApi {
   deleteNote(id: string): Promise<void> { return this.rpc('deleteNote', [id]) }
   getSettings(): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('getSettings') }
   updateSettings(patch: Parameters<StoryFabricApi['updateSettings']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('updateSettings', [patch]) }
+  getMemory(scope: import('../../../shared/memory').MemoryScope): ReturnType<StoryFabricApi['getMemory']> { return this.rpc('getMemory', [scope]) }
+  updateMemory(scope: import('../../../shared/memory').MemoryScope, patch: import('../../../shared/memory').MemoryUpdate): ReturnType<StoryFabricApi['updateMemory']> { return this.rpc('updateMemory', [scope, patch]) }
   getUsageRecords(): Promise<import('../../../shared/types').UsageRecord[]> { return this.rpc('getUsageRecords') }
+  getUsageBuckets(): Promise<import('../../../core/usage/usageArchive').UsageBucket[]> { return this.rpc('getUsageBuckets') }
+  getWritingDays(): Promise<Array<import('../../../core/usage/writingStats').WritingDay & { workspaceId: string }>> { return this.rpc('getWritingDays') }
   saveProvider(input: Parameters<StoryFabricApi['saveProvider']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('saveProvider', [input]) }
   deleteProvider(id: string): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('deleteProvider', [id]) }
   fetchModels(input: Parameters<StoryFabricApi['fetchModels']>[0]): Promise<string[]> { return this.rpc('fetchModels', [input]) }
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }> { return this.rpc('agentRun', [req]) }
-  agentConfirm(changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [changeId, approved]) }
+  compressSessionContext(sessionId: string, providerId: string, model: string): Promise<ChatSession> { return this.rpc('compressSessionContext', [sessionId, providerId, model]) }
+  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [sessionId, changeId, approved]) }
   agentAbort(sessionId: string): Promise<void> { return this.rpc('agentAbort', [sessionId]) }
   agentAnswerQuestion(answer: import('../../../shared/agentQuestions').AgentQuestionAnswer): Promise<void> { return this.rpc('agentAnswerQuestion', [answer]) }
   agentResolveSkillCandidate(candidateId: string, action: import('../../../shared/agentQuestions').SkillCandidateAction): Promise<void> { return this.rpc('agentResolveSkillCandidate', [candidateId, action]) }
@@ -154,21 +174,6 @@ export class HttpPlatformApi implements StoryFabricApi {
   recoverRunEvents(runId: string, afterSeq = 0): Promise<RunReplay> {
     return this.rest(`/api/runs/${encodeURIComponent(runId)}/events?after=${Math.max(0, Math.floor(afterSeq))}`)
   }
-
-  /* 远程部署仅桌面端可用 */
-  private unsupported(): never {
-    throw new Error('远程部署仅支持桌面端')
-  }
-  deployTestConnection(): Promise<never> { return this.unsupported() }
-  deployInstall(): Promise<never> { return this.unsupported() }
-  deployUpdate(): Promise<never> { return this.unsupported() }
-  deployCancel(): Promise<never> { return this.unsupported() }
-  deployLogs(): Promise<never> { return this.unsupported() }
-  deployUninstall(): Promise<never> { return this.unsupported() }
-  deployListTargets(): Promise<never> { return this.unsupported() }
-  deploySaveTarget(): Promise<never> { return this.unsupported() }
-  deployDeleteTarget(): Promise<never> { return this.unsupported() }
-  onDeployEvent(): () => void { return () => undefined }
 
   onAgentEvent(callback: (envelope: AgentEventEnvelope) => void): () => void {
     if (this.auth.kind === 'cookie' && typeof EventSource !== 'undefined') {

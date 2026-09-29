@@ -1,9 +1,8 @@
-import { BookOpen, FolderOpen, FolderPlus, History, Server } from 'lucide-react'
+import { BookOpen, FolderOpen, FolderPlus, History } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrandMark } from '../../components/icons/BrandMark'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
-import { DeployWizard } from './DeployWizard'
 import { RecentWorkspaceList } from './RecentWorkspaceList'
 import { api } from '../../lib/api'
 import { useWorkspace } from '../../stores/workspaceStore'
@@ -13,10 +12,7 @@ import { installPlatformApi } from '../../platform/platformApi'
 import { loginRemote } from '../../platform/webAuth'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../../lib/workspaceArchiveFile'
 import type { StoryFabricApi, WorkspaceImportTarget } from '../../../../shared/api'
-import type { DeployTargetPublic, WorkspaceListItem } from '../../../../shared/types'
-
-/** 服务器部署与远程连接尚未完成可用性验证，稳定版暂不向用户开放。 */
-export const SERVER_DEPLOYMENT_ENABLED = false
+import type { WorkspaceListItem } from '../../../../shared/types'
 
 export function createRecentConfigKey(
   isWeb: boolean,
@@ -124,6 +120,7 @@ export function WelcomePage(): React.ReactElement {
   const [workspaceMode, setWorkspaceMode] = useState<'open' | 'import'>('open')
   const [workspacePath, setWorkspacePath] = useState('')
   const [archiveName, setArchiveName] = useState('')
+  const [archiveParentDir, setArchiveParentDir] = useState('')
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null)
   const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
@@ -159,11 +156,6 @@ export function WelcomePage(): React.ReactElement {
   const recentOpeningRequestId = useRef(0)
   const recentWorkspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
   const [recentLoadGeneration, setRecentLoadGeneration] = useState(0)
-  const [deployOpen, setDeployOpen] = useState(false)
-  const [targets, setTargets] = useState<DeployTargetPublic[]>([])
-  const [targetNotice, setTargetNotice] = useState<Record<string, string>>({})
-  const [targetBusy, setTargetBusy] = useState<string | null>(null)
-  const [logs, setLogs] = useState<{ title: string; text: string } | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const localApiRef = useRef<StoryFabricApi | null>(null)
   const recentLoadId = useRef(0)
@@ -282,91 +274,6 @@ export function WelcomePage(): React.ReactElement {
     }
   }, [currentConfigKey])
 
-  const reloadTargets = useCallback(async (): Promise<void> => {
-    try {
-      setTargets(await api.deployListTargets())
-    } catch {
-      // 非桌面端不支持远程部署，静默忽略
-      setTargets([])
-    }
-  }, [])
-
-  useEffect(() => {
-    if (SERVER_DEPLOYMENT_ENABLED) void reloadTargets()
-  }, [reloadTargets])
-
-  const checkUpdate = async (target: DeployTargetPublic): Promise<void> => {
-    setTargetBusy(target.id)
-    setTargetNotice((prev) => ({ ...prev, [target.id]: '检查中…' }))
-    try {
-      const result = await api.deployTestConnection({
-        targetId: target.id,
-        host: target.host,
-        port: target.port,
-        username: target.username
-      })
-      const installed = result.probe.installedImage?.split(':')[1]
-      setTargetNotice((prev) => ({
-        ...prev,
-        [target.id]:
-          installed === result.bundleVersion
-            ? `已是最新（${result.bundleVersion}）`
-            : `有新版本可更新：${installed ?? '未知'} → ${result.bundleVersion}`
-      }))
-    } catch (err) {
-      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
-    } finally {
-      setTargetBusy(null)
-    }
-  }
-
-  const runUpdate = async (target: DeployTargetPublic): Promise<void> => {
-    setTargetBusy(target.id)
-    setTargetNotice((prev) => ({ ...prev, [target.id]: '更新中…' }))
-    try {
-      const result = await api.deployUpdate(target.id)
-      if (result.ok) {
-        // 更新不会换密钥，但如果本地服务地址就是这台机器，顺手同步一下密钥
-        const expected = `http://${target.host}:${target.servicePort}`
-        if (result.accessKey && serviceUrl.trim().replace(/\/+$/, '') === expected) setServiceKey(result.accessKey)
-      }
-      setTargetNotice((prev) => ({
-        ...prev,
-        [target.id]: result.ok ? `已更新到 ${result.version}` : result.error ?? '更新失败'
-      }))
-      await reloadTargets()
-    } catch (err) {
-      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
-    } finally {
-      setTargetBusy(null)
-    }
-  }
-
-  const showLogs = async (target: DeployTargetPublic): Promise<void> => {
-    setTargetBusy(target.id)
-    try {
-      setLogs({ title: `${target.label} · 容器日志`, text: await api.deployLogs(target.id) })
-    } catch (err) {
-      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
-    } finally {
-      setTargetBusy(null)
-    }
-  }
-
-  const removeTarget = async (target: DeployTargetPublic): Promise<void> => {
-    if (!window.confirm(`卸载 ${target.label} 上的 StoryFabric？\n容器与镜像会被删除，数据目录 ${target.installDir}/data 会保留。`)) return
-    setTargetBusy(target.id)
-    try {
-      await api.deployUninstall(target.id)
-      await api.deployDeleteTarget(target.id)
-      await reloadTargets()
-    } catch (err) {
-      setTargetNotice((prev) => ({ ...prev, [target.id]: err instanceof Error ? err.message : String(err) }))
-    } finally {
-      setTargetBusy(null)
-    }
-  }
-
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
     if (dir) setParentDir(dir)
@@ -434,6 +341,20 @@ export function WelcomePage(): React.ReactElement {
         if (recentWorkspaceRequest.current === request) recentWorkspaceRequest.current = null
       }
     }
+  }
+
+  const renameRecentWorkspace = async (path: string, name: string): Promise<void> => {
+    const expectedConfigKey = recentItemsConfigKey
+    if (!expectedConfigKey || expectedConfigKey !== currentConfigKey) return
+    await getPlatformApi().renameWorkspace(path, name)
+    await loadRecentWorkspaces(expectedConfigKey)
+  }
+
+  const forgetRecentWorkspace = async (path: string): Promise<void> => {
+    const expectedConfigKey = recentItemsConfigKey
+    if (!expectedConfigKey || expectedConfigKey !== currentConfigKey) return
+    await getPlatformApi().forgetRecentWorkspace(path)
+    await loadRecentWorkspaces(expectedConfigKey)
   }
 
   const connectService = (): void => {
@@ -556,7 +477,7 @@ export function WelcomePage(): React.ReactElement {
       const bytes = await readWorkspaceArchiveFile(file)
       if (!isCurrent()) return
       requireWorkspaceApi()
-      let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined }
+      let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined, ...(isAndroid && archiveParentDir.startsWith('saf:') ? { parentDir: archiveParentDir } : {}) }
       if (mode === 'local' && !isAndroid && !isWeb) {
         if (!isCurrent()) return
         const parentDir = await api.pickFolder()
@@ -687,22 +608,6 @@ export function WelcomePage(): React.ReactElement {
     }
   }
 
-  if (SERVER_DEPLOYMENT_ENABLED && deployOpen) {
-    return (
-      <DeployWizard
-        onClose={() => setDeployOpen(false)}
-        onDone={({ url, accessKey }) => {
-          setMode('remote')
-          setServiceUrl(url)
-          setServiceKey(accessKey)
-          setRecentLoadConfig({ mode: 'remote', serviceRoot: url.trim().replace(/\/+$/, ''), serviceKey: accessKey.trim(), serviceConfigSubmitted: true })
-          setDeployOpen(false)
-          void reloadTargets()
-        }}
-      />
-    )
-  }
-
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
       <div className="w-full max-w-6xl">
@@ -719,24 +624,19 @@ export function WelcomePage(): React.ReactElement {
 
         <Card className="grid min-w-0 gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-6">
           <div className="min-w-0">
-          {!isWeb && SERVER_DEPLOYMENT_ENABLED && (
+          {!isWeb && (
             <div className="mb-4 grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
               <button type="button" aria-pressed={mode === 'local'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('local'); setServiceError(null); setRecentLoadConfig({ mode: 'local', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: true }); if (localApiRef.current) installPlatformApi(localApiRef.current) }} className={`rounded-md px-3 py-2 ${mode === 'local' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>本地</button>
               <button type="button" aria-pressed={mode === 'remote'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('remote'); setRecentError(null); setRecentItems([]); setRecentLoadConfig({ mode: 'remote', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: false }) }} className={`rounded-md px-3 py-2 ${mode === 'remote' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>服务</button>
             </div>
           )}
-          {SERVER_DEPLOYMENT_ENABLED && mode === 'remote' && !isWeb && (
+          {mode === 'remote' && !isWeb && (
             <form className="mb-4 space-y-2" onSubmit={(event) => { event.preventDefault(); connectService() }}>
               <label htmlFor="service-url" className="sr-only">服务地址</label>
               <Input id="service-url" value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
               <label htmlFor="service-key" className="sr-only">访问密钥</label>
               <Input id="service-key" type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
               <Button type="submit" size="sm" variant="outline" loading={serviceConnecting} disabled={serviceConnecting}>连接服务</Button>
-              {!isAndroid && (
-                <Button type="button" size="sm" variant="outline" onClick={() => setDeployOpen(true)}>
-                  <Server size={13} /> 安装到服务器
-                </Button>
-              )}
               {serviceError && <div id="service-error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
             </form>
           )}
@@ -751,51 +651,6 @@ export function WelcomePage(): React.ReactElement {
 
           {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
-          {SERVER_DEPLOYMENT_ENABLED && mode === 'remote' && !isWeb && targets.length > 0 && (
-            <div className="mt-5 space-y-2">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted">
-                <Server size={13} /> 已部署的服务器
-              </div>
-              {targets.map((target) => (
-                <div key={target.id} className="rounded-lg border border-line p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{target.label}</span>
-                    <span className="shrink-0 text-xs text-faint">
-                      {target.host}:{target.servicePort} · {target.installedVersion ?? '未知版本'}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
-                    {target.lastStatus === 'ok' && <span className="text-ok">上次部署成功</span>}
-                    {target.lastStatus === 'failed' && <span className="text-danger">上次部署失败</span>}
-                    {target.passwordStorage === 'plain' && <span className="text-danger">密码为降级明文存储</span>}
-                    {target.isRoot === false && <span>非 root（使用 sudo）</span>}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <Button size="sm" variant="ghost" loading={targetBusy === target.id} onClick={() => void checkUpdate(target)}>
-                      检查更新
-                    </Button>
-                    <Button size="sm" variant="soft" loading={targetBusy === target.id} onClick={() => void runUpdate(target)}>
-                      更新
-                    </Button>
-                    <Button size="sm" variant="ghost" loading={targetBusy === target.id} onClick={() => void showLogs(target)}>
-                      查看日志
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-danger hover:text-danger"
-                      loading={targetBusy === target.id}
-                      onClick={() => void removeTarget(target)}
-                    >
-                      卸载
-                    </Button>
-                  </div>
-                  {targetNotice[target.id] && <p className="mt-2 text-[11px] text-muted">{targetNotice[target.id]}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-
           </div>
           <div className="min-w-0 border-t border-line pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
             <RecentWorkspaceList
@@ -804,6 +659,8 @@ export function WelcomePage(): React.ReactElement {
               error={recentItemsConfigKey === currentConfigKey ? recentError : null}
               openingPath={recentOpeningPath}
               onOpen={openRecentWorkspace}
+              onRename={renameRecentWorkspace}
+              onForget={forgetRecentWorkspace}
               onRetry={loadRecentWorkspaces}
             />
           </div>
@@ -824,8 +681,10 @@ export function WelcomePage(): React.ReactElement {
         {workspaceMode === 'open' ? (
           <div className="space-y-4">
             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <Input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder={isAndroid ? '输入应用内部路径，例如 workspaces/星海拾遗' : '粘贴工作区路径…'} className="min-w-0 flex-1" />
-              {mode === 'local' && !isWeb && !isAndroid && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">浏览文件夹</Button>}
+              {isAndroid && workspacePath.startsWith('saf:')
+                ? <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-2 text-sm">已授权外部工作区</div>
+                : <Input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder={isAndroid ? '输入应用内部路径，或选择外部项目文件夹' : '粘贴工作区路径…'} className="min-w-0 flex-1" />}
+              {mode === 'local' && !isWeb && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">{isAndroid ? '选择项目文件夹' : '浏览文件夹'}</Button>}
             </div>
             <Button variant="primary" onClick={() => void openTypedWorkspace()} disabled={!workspacePath.trim()} loading={workspaceActionBusy} className="w-full justify-center">打开路径</Button>
             <div>
@@ -855,6 +714,13 @@ export function WelcomePage(): React.ReactElement {
             <Field label="新工作区名称（可选）" hint="留空时从归档文件名推导名称">
               <Input value={archiveName} onChange={(event) => setArchiveName(event.target.value)} placeholder="例如：星海拾遗" />
             </Field>
+            {isAndroid && <Field label="导入位置" hint="外部目录中的项目在卸载应用后仍会保留">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-2 text-sm">{archiveParentDir.startsWith('saf:') ? '已选择外部文件夹' : '应用内部存储'}</div>
+                <Button onClick={() => void api.pickFolder().then((path) => { if (path) setArchiveParentDir(path) }).catch((error: unknown) => setWorkspacePickerError(error instanceof Error ? error.message : String(error)))}>选择外部文件夹</Button>
+                {archiveParentDir.startsWith('saf:') && <Button variant="ghost" onClick={() => setArchiveParentDir('')}>改用内部</Button>}
+              </div>
+            </Field>}
             <input
               ref={archiveInput}
               type="file"
@@ -871,21 +737,18 @@ export function WelcomePage(): React.ReactElement {
         {workspacePickerError && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspacePickerError}</div>}
       </Modal>
 
-      <Modal open={Boolean(logs)} onOpenChange={() => setLogs(null)} title={logs?.title ?? '容器日志'}>
-        <pre className="max-h-80 overflow-auto rounded-lg bg-app p-2 text-[11px] leading-4">{logs?.text || '（空）'}</pre>
-      </Modal>
-
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={mode === 'remote' ? '将在当前服务的数据目录内创建一个新的托管工作区' : isAndroid ? '工作区将保存在应用内部，可通过 ZIP 导入/导出' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
+      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={mode === 'remote' ? '将在当前服务的数据目录内创建一个新的托管工作区' : isAndroid ? '可以保存在应用内部，也可以选一个外部文件夹；外部项目卸载后仍保留' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
         <div className="space-y-4">
           <Field label="小说名称 *">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：星海拾遗" autoFocus />
           </Field>
-          {mode === 'local' && <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? 'Android 应用内部存储（无需申请文件夹权限）' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
+          {mode === 'local' && <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? '选择外部文件夹后，系统会保存读写授权；重新安装应用时需重新选择项目文件夹' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
             <div className="flex flex-col gap-2 sm:flex-row">
-            <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="输入或选择存放文件夹…" className="min-w-0 flex-1" />
-              {!isAndroid && <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">
-                浏览
-              </Button>}
+              {isAndroid
+                ? <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-2 text-sm">{parentDir.startsWith('saf:') ? '已选择外部文件夹' : '应用内部存储'}</div>
+                : <Input value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="输入或选择存放文件夹…" className="min-w-0 flex-1" />}
+              <Button onClick={() => void pickParent()} className="shrink-0 whitespace-nowrap">{isAndroid ? '选择外部文件夹' : '浏览'}</Button>
+              {isAndroid && parentDir.startsWith('saf:') && <Button variant="ghost" onClick={() => setParentDir('workspaces')}>改用内部</Button>}
             </div>
           </Field>}
           <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">

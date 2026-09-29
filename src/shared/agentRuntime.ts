@@ -4,7 +4,7 @@ import { parseAgentQuestion, parseSkillCandidate } from './agentQuestions'
 export const RUNTIME_EVENT_TYPES = [
   'run-start', 'stage-start', 'text-delta', 'tool-generating', 'tool-complete', 'artifact-delta',
   'stage-complete', 'child-start', 'child-complete', 'usage-update', 'pending-change', 'change-result',
-  'goal-plan', 'goal-task', 'goal-validation', 'approval-policy', 'request-context', 'tool-receipt', 'skill-activity',
+  'goal-plan', 'goal-task', 'goal-validation', 'approval-policy', 'request-context', 'tool-receipt', 'skill-activity', 'rule-activity',
   'run-paused', 'run-error', 'run-done', 'agent-question', 'skill-candidate', 'waiting-user'
 ] as const
 
@@ -43,6 +43,34 @@ export interface LegacyEventContext {
   event: AgentEvent
 }
 
+/**
+ * The legacy event stream carries structured identity inside a few event
+ * payloads. Keep that identity when adapting to the run-event envelope;
+ * otherwise the compatibility boundary labels every event as orchestration.
+ */
+export function legacyEventIdentity(event: AgentEvent): { agentId: string; stageId?: string } {
+  switch (event.type) {
+    case 'agent-question':
+      return { agentId: event.question.agentId, ...(event.question.stageId ? { stageId: event.question.stageId } : {}) }
+    case 'skill-candidate':
+      return { agentId: event.candidate.agentId }
+    case 'stage-start':
+    case 'stage-complete':
+      return { agentId: 'orchestration', stageId: event.stageId }
+    case 'error':
+    case 'run-paused':
+      return { agentId: 'orchestration', ...(event.stageId ? { stageId: event.stageId } : {}) }
+    case 'tool-receipt':
+      return { agentId: event.receipt.agentId, stageId: event.receipt.stageId }
+    case 'skill-activity':
+      return { agentId: event.activity.agentId, ...(event.activity.stageId ? { stageId: event.activity.stageId } : {}) }
+    case 'rule-activity':
+      return { agentId: event.activity.agentId, ...(event.activity.stageId ? { stageId: event.activity.stageId } : {}) }
+    default:
+      return { agentId: 'orchestration' }
+  }
+}
+
 const RUNTIME_EVENT_TYPE_SET = new Set<string>(RUNTIME_EVENT_TYPES)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,6 +85,54 @@ function requiredString(value: unknown, name: string): string {
 function payloadRecord(event: Record<string, unknown>, name: string): Record<string, unknown> {
   if (!isRecord(event.payload)) throw new Error(`${name} 的 payload 必须是对象`)
   return event.payload
+}
+
+function validateRuleActivity(payload: Record<string, unknown>): void {
+  const activity = payload.activity
+  if (!isRecord(activity)) throw new Error('rule-activity.payload.activity 必须是对象')
+  requiredString(activity.runId, 'rule-activity.activity.runId')
+  requiredString(activity.agentId, 'rule-activity.activity.agentId')
+  if (!['checked', 'matched', 'applied', 'none', 'failed'].includes(String(activity.status))) throw new Error('rule-activity.activity.status 无效')
+  if (!Array.isArray(activity.rules)) throw new Error('rule-activity.activity.rules 必须是数组')
+  if (typeof activity.conflicts !== 'number' || activity.conflicts < 0 || typeof activity.overridden !== 'number' || activity.overridden < 0) throw new Error('rule-activity.activity 统计字段无效')
+  for (const item of activity.rules) {
+    if (!isRecord(item)) throw new Error('rule-activity.activity.rules 项必须是对象')
+    for (const key of ['id', 'source', 'target', 'key', 'reason']) requiredString(item[key], `rule-activity.rule.${key}`)
+    if (item.severity !== 'must' && item.severity !== 'prefer') throw new Error('rule-activity.rule.severity 无效')
+  }
+}
+
+function validateSkillActivity(payload: Record<string, unknown>): void {
+  const activity = payload.activity
+  if (!isRecord(activity)) throw new Error('skill-activity.payload.activity 必须是对象')
+  requiredString(activity.runId, 'skill-activity.activity.runId')
+  requiredString(activity.agentId, 'skill-activity.activity.agentId')
+  if (activity.stageId !== undefined) requiredString(activity.stageId, 'skill-activity.activity.stageId')
+  if (!['checked', 'matched', 'loaded', 'applied', 'none', 'failed'].includes(String(activity.status))) throw new Error('skill-activity.activity.status 无效')
+  if (!Array.isArray(activity.skills)) throw new Error('skill-activity.activity.skills 必须是数组')
+  for (const item of activity.skills) {
+    if (!isRecord(item)) throw new Error('skill-activity.activity.skills 项必须是对象')
+    for (const key of ['libraryId', 'packageId', 'skillId', 'version', 'contentHash', 'reason']) requiredString(item[key], `skill-activity.skill.${key}`)
+  }
+}
+
+function validateActivityIdentity(
+  activity: Record<string, unknown>,
+  kind: 'skill' | 'rule',
+  identity?: { runId: string; agentId: string; stageId?: string }
+): void {
+  if (!identity) return
+  if (activity.runId !== identity.runId || activity.agentId !== identity.agentId || activity.stageId !== identity.stageId) {
+    throw new Error(`${kind}-activity 的身份字段与运行事件 envelope 不匹配`)
+  }
+}
+
+const APPLIED_CHANGE_ENTITY_KINDS = new Set(['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc', 'relationship'])
+
+function validateAppliedChange(value: unknown): void {
+  if (!isRecord(value)) throw new Error('change-result.payload.appliedChange 必须是对象')
+  if (typeof value.entityKind !== 'string' || !APPLIED_CHANGE_ENTITY_KINDS.has(value.entityKind)) throw new Error('change-result.payload.appliedChange.entityKind 无效')
+  requiredString(value.entityId, 'change-result.payload.appliedChange.entityId')
 }
 
 function validateStructuredEventPayload(event: Record<string, unknown>, identity?: { runId: string; sessionId: string; agentId: string; stageId?: string }): void {
@@ -88,6 +164,16 @@ function validateStructuredEventPayload(event: Record<string, unknown>, identity
     if (hasQuestionId) requiredString(payload.questionId, 'event.payload.questionId')
     if (hasCandidateId) requiredString(payload.candidateId, 'event.payload.candidateId')
   }
+  if (event.type === 'skill-activity') {
+    const payload = payloadRecord(event, event.type)
+    validateSkillActivity(payload)
+    validateActivityIdentity(payload.activity as Record<string, unknown>, 'skill', identity)
+  }
+  if (event.type === 'rule-activity') {
+    const payload = payloadRecord(event, event.type)
+    validateRuleActivity(payload)
+    validateActivityIdentity(payload.activity as Record<string, unknown>, 'rule', identity)
+  }
   if (event.type === 'stage-start' || event.type === 'stage-complete') {
     const payload = payloadRecord(event, event.type)
     const stageId = requiredString(payload.stageId, `${event.type}.payload.stageId`)
@@ -118,6 +204,7 @@ function validateEventShape(event: Record<string, unknown>): void {
     case 'request-context':
     case 'tool-receipt':
     case 'skill-activity':
+    case 'rule-activity':
     case 'run-paused':
     case 'run-error':
       payloadRecord(event, event.type)
@@ -127,6 +214,7 @@ function validateEventShape(event: Record<string, unknown>): void {
       requiredString(payload.changeId, 'change-result.payload.changeId')
       if (payload.status !== 'applied' && payload.status !== 'rejected' && payload.status !== 'conflict' && payload.status !== 'failed') throw new Error('change-result.payload.status 无效')
       requiredString(payload.message, 'change-result.payload.message')
+      if (payload.appliedChange !== undefined) validateAppliedChange(payload.appliedChange)
       return
     }
     case 'run-done':
@@ -187,7 +275,7 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
   let runtime: RuntimeEvent
   switch (event.type) {
     case 'session':
-      runtime = { type: 'run-start', payload: { session: event.session } }
+      runtime = { type: 'run-start' }
       break
     case 'text-delta':
       runtime = { type: 'text-delta', messageId: event.messageId, delta: event.delta }
@@ -220,7 +308,15 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'change-result', payload: { changeId: event.changeId, status: event.approved ? 'applied' : 'rejected', message: event.approved ? '变更已应用' : '变更已拒绝' } }
       break
     case 'change-result':
-      runtime = { type: 'change-result', payload: { changeId: event.changeId, status: event.status, message: event.message } }
+      runtime = {
+        type: 'change-result',
+        payload: {
+          changeId: event.changeId,
+          status: event.status,
+          message: event.message,
+          ...(event.appliedChange ? { appliedChange: event.appliedChange } : {})
+        }
+      }
       break
     case 'goal-plan':
       runtime = { type: 'goal-plan', payload: event.goal }
@@ -242,6 +338,9 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       break
     case 'skill-activity':
       runtime = { type: 'skill-activity', payload: { activity: event.activity } }
+      break
+    case 'rule-activity':
+      runtime = { type: 'rule-activity', payload: { activity: event.activity } }
       break
     case 'run-paused':
       runtime = { type: 'run-paused', payload: event }
@@ -271,7 +370,7 @@ export function adaptLegacyAgentEvent(context: LegacyEventContext): RunEventEnve
       runtime = { type: 'run-error', payload: { message: event.message } }
       break
     case 'done':
-      runtime = { type: 'run-done', payload: event.session ? { session: event.session } : undefined }
+      runtime = { type: 'run-done' }
       break
     default:
       return assertNever(event)

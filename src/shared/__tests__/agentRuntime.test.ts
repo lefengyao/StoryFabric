@@ -84,6 +84,17 @@ describe('agent runtime contract', () => {
     expect(ledger.append({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'a', event: { type: 'run-start' } })).toMatchObject({ seq: 1, event: { type: 'run-start' } })
   })
 
+  it('keeps complete sessions out of replayable runtime events', () => {
+    const session = { id: 's', messages: [{ id: 'm', text: 'x'.repeat(200_000) }] } as never
+    const start = adaptLegacyAgentEvent({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'basic', seq: 1, event: { type: 'session', session } })
+    const done = adaptLegacyAgentEvent({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'basic', seq: 2, event: { type: 'done', session } })
+
+    expect(start.event).toEqual({ type: 'run-start' })
+    expect(done.event).toEqual({ type: 'run-done' })
+    expect(JSON.stringify(start).length).toBeLessThan(500)
+    expect(JSON.stringify(done).length).toBeLessThan(500)
+  })
+
   it('requires structured question and skill-candidate payloads beyond stable identity', () => {
     expect(() => validateRuntimeEvent({ type: 'agent-question', payload: { questionId: 'question-1' } })).toThrow(/问题|question|title|description|fields/)
     expect(() => validateRuntimeEvent({ type: 'skill-candidate', payload: { candidateId: 'candidate-1' } })).toThrow(/候选|candidate|package/)
@@ -236,6 +247,65 @@ describe('agent runtime contract', () => {
       event: { type: 'change-applied', changeId: 'change-1', approved: true }
     })
     expect(envelope.event).toEqual({ type: 'change-result', payload: { changeId: 'change-1', status: 'applied', message: '变更已应用' } })
+  })
+
+  it('adapts rule activity as a validated runtime event', () => {
+    const activity = { runId: 'r', agentId: 'basic', status: 'applied' as const, rules: [{ id: 'rule-1', source: 'workspace', target: 'all', key: 'voice', severity: 'prefer' as const, reason: '当前项目规则' }], conflicts: 0, overridden: 1 }
+    const envelope = adaptLegacyAgentEvent({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'basic', seq: 1, event: { type: 'rule-activity', activity } })
+    expect(envelope.event).toEqual({ type: 'rule-activity', payload: { activity } })
+    expect(validateRunEventEnvelope(envelope)).toEqual(envelope)
+  })
+
+  it('keeps skill activity identity and rejects cross-run activity payloads', () => {
+    const activity = {
+      runId: 'r', stageId: 'write', agentId: 'write', status: 'applied' as const,
+      skills: [{ libraryId: 'global', packageId: 'dialogue-pack', skillId: 'dialogue', version: '1.0.0', contentHash: 'hash', reason: '当前阶段适用' }]
+    }
+    const envelope = adaptLegacyAgentEvent({ workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'write', stageId: 'write', seq: 1, event: { type: 'skill-activity', activity } })
+    expect(envelope.event).toEqual({ type: 'skill-activity', payload: { activity } })
+    expect(validateRunEventEnvelope(envelope)).toEqual(envelope)
+    expect(() => validateRunEventEnvelope({ ...envelope, runId: 'other' })).toThrow(/skill-activity.*身份/)
+  })
+
+  it('rejects rule activity whose stage identity differs from the envelope', () => {
+    expect(() => validateRunEventEnvelope({
+      schemaVersion: 1, workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'write', stageId: 'write', seq: 1, at: Date.now(),
+      event: { type: 'rule-activity', payload: { activity: {
+        runId: 'r', stageId: 'review', agentId: 'write', status: 'none', rules: [], conflicts: 0, overridden: 0
+      } } }
+    })).toThrow(/rule-activity.*身份/)
+  })
+
+  it('preserves the small affected-entity descriptor on an applied change result', () => {
+    const envelope = adaptLegacyAgentEvent({
+      workspaceId: 'w', sessionId: 's', runId: 'r', agentId: 'writer', seq: 1,
+      event: {
+        type: 'change-result',
+        changeId: 'change-1',
+        status: 'applied',
+        message: '已保存章节',
+        appliedChange: { entityKind: 'chapter', entityId: 'cha_1' }
+      } as unknown as AgentEvent
+    })
+
+    expect(envelope.event).toEqual({
+      type: 'change-result',
+      payload: {
+        changeId: 'change-1',
+        status: 'applied',
+        message: '已保存章节',
+        appliedChange: { entityKind: 'chapter', entityId: 'cha_1' }
+      }
+    })
+    expect(() => validateRuntimeEvent({
+      type: 'change-result',
+      payload: {
+        changeId: 'change-1',
+        status: 'applied',
+        message: '已保存章节',
+        appliedChange: { entityKind: 'chapter', entityId: '' }
+      }
+    })).toThrow(/entityId/)
   })
 
   it('returns the existing run for an identical client id and rejects changed input', () => {

@@ -1,19 +1,22 @@
 import type { FileStore } from '../storage/fileStore'
 import type { EntityKind, PendingChange, ToolDefJson } from '../../shared/types'
-import { applyProjectDocSnapshot, listProjectDocs, readProjectDoc, snapshotProjectDoc } from '../workspace/projectDocs'
+import { applyProjectDocRename, applyProjectDocSnapshot, listProjectDocs, readProjectDoc, snapshotProjectDoc, snapshotProjectDocRename } from '../workspace/projectDocs'
 import type { ToolOutcome } from './registry'
 import { contentRevision } from '../workspace/resourceRevision'
+import { coordinatorFor } from '../workspace/mutationCoordinator'
 
 export const PROJECT_DOC_TOOL_DEFS: ToolDefJson[] = [
-  { name: 'list_project_docs', description: '列出 docs 中的项目规划和临时参考文档，不返回正文。', parameters: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } } } },
-  { name: 'read_project_doc', description: '按需读取 docs 中的一篇 Markdown 或 TXT 文档，支持分段读取。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 50000 } }, required: ['path'] } },
-  { name: 'save_project_doc', description: '保存 docs 中的一篇 Markdown 或 TXT 文档；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['path', 'content'] } }
+  { name: 'list_project_docs', description: '递归列出 docs 中的项目规划、临时参考资料和常见文本文件，不返回正文。', parameters: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } } } },
+  { name: 'read_project_doc', description: '按需读取 docs 中的常见文本、DOCX 或 PDF 文件，支持子目录和分段读取。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 50000 } }, required: ['path'] } },
+  { name: 'save_project_doc', description: '保存 docs 中的一篇常见文本文件；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['path', 'content'] } },
+  { name: 'rename_project_doc', description: '在 docs 内安全重命名项目文档；不会覆盖已有目标，确认前不会移动文件。baseRevision 来自 read_project_doc 的 fileRevision（纯文本也可使用 writeRevision）。', parameters: { type: 'object', additionalProperties: false, properties: { fromPath: { type: 'string' }, toPath: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['fromPath', 'toPath', 'baseRevision'] } }
 ]
 
 const known: Record<string, string[]> = {
   list_project_docs: ['offset', 'limit'],
   read_project_doc: ['path', 'offset', 'maxChars'],
-  save_project_doc: ['path', 'content', 'baseRevision']
+  save_project_doc: ['path', 'content', 'baseRevision'],
+  rename_project_doc: ['fromPath', 'toPath', 'baseRevision']
 }
 
 function clip(text: string, max = 160): string { return text.length > max ? `${text.slice(0, max)}…` : text }
@@ -30,6 +33,20 @@ export async function executeProjectDocTool(store: FileStore, name: string, args
     const result = await readProjectDoc(store, args.path, args.offset as number | undefined, args.maxChars as number | undefined)
     return { kind: 'result', ok: true, text: JSON.stringify(result), preview: clip(result.content) }
   }
+  if (name === 'rename_project_doc') {
+    const snapshot = await snapshotProjectDocRename(store, args.fromPath, args.toPath, args.baseRevision)
+    const change: PendingChange = {
+      id: `chg_${Date.now().toString(36)}`,
+      toolName: name,
+      entityKind: 'projectDoc' as EntityKind,
+      entityId: snapshot.fromPath,
+      title: `重命名项目文档：${snapshot.fromPath} → ${snapshot.toPath}`,
+      beforeText: snapshot.fromPath,
+      afterText: snapshot.toPath,
+      mutationKind: 'move'
+    }
+    return { kind: 'pending', change, apply: () => coordinatorFor(store).run('projectDocs:rename', () => applyProjectDocRename(store, snapshot)) }
+  }
   if (name !== 'save_project_doc') throw new Error(`未知项目文档工具：${name}`)
   const snapshot = await snapshotProjectDoc(store, args.path, args.content)
   if (snapshot.existed && (typeof args.baseRevision !== 'string' || contentRevision(snapshot.beforeText) !== args.baseRevision)) {
@@ -45,5 +62,5 @@ export async function executeProjectDocTool(store: FileStore, name: string, args
     beforeText: snapshot.beforeText,
     afterText: snapshot.afterText
   }
-  return { kind: 'pending', change, apply: () => applyProjectDocSnapshot(store, snapshot) }
+  return { kind: 'pending', change, apply: () => coordinatorFor(store).run(`projectDoc:${snapshot.path}`, () => applyProjectDocSnapshot(store, snapshot)) }
 }

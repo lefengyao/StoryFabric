@@ -27,6 +27,20 @@ describe('web platform api', () => {
     expect(requests[0].init?.credentials).toBe('include')
   })
 
+  it('sends rename and recent-list removal through authenticated RPC', async () => {
+    const calls: unknown[] = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ result: null }), { status: 200 })
+    })
+    await api.renameWorkspace('ws_1', '新名称')
+    await api.forgetRecentWorkspace('ws_1')
+    expect(calls).toEqual([
+      { method: 'renameWorkspace', args: ['ws_1', '新名称'] },
+      { method: 'forgetRecentWorkspace', args: ['ws_1'] }
+    ])
+  })
+
   it('invokes the default browser fetch with the global receiver', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = function (this: unknown, _input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
