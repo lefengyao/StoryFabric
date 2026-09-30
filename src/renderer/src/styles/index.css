@@ -754,6 +754,18 @@ button {
   font-size: var(--chat-font-size, 14px);
 }
 
+.chat-selectable-text {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.chat-user-message-text::selection,
+.chat-user-message-text ::selection {
+  color: #1c1917;
+  background: #fde68a;
+}
+
 .chat-surface .chat-text-meta {
   font-size: var(--chat-font-meta-size, 12px);
 }

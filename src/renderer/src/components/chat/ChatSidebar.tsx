@@ -8,6 +8,7 @@ import { SkillActivity } from './SkillActivity'
 import { RuleActivity } from './RuleActivity'
 import { RunActivityDetails } from './RunActivityDetails'
 import { Button, Input } from '../ui/primitives'
+import { CopyButton } from '../ui/CopyButton'
 import { shouldSendOnKey } from '../../lib/sendShortcut'
 import { prepareMessageFiles } from '../../lib/prepareMessageFiles'
 import { cn, formatTime } from '../../lib/utils'
@@ -326,8 +327,9 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 ? (
                     <div key={item.id} className="flex gap-3">
                       <SidebarAvatar assistant />
-                      <div className="min-w-0 flex-1 rounded-xl border border-line bg-panel px-3.5 py-3">
-                        <Markdown text={item.text} />
+                      <div className="min-w-0 flex-1">
+                        <div className="rounded-xl border border-line bg-panel px-3.5 py-3"><Markdown text={item.text} /></div>
+                        {item.text && <div className="mt-1"><CopyButton text={item.text} label="复制AI回复" /></div>}
                       </div>
                     </div>
                   )
@@ -490,7 +492,10 @@ function SidebarMessage({ message }: { message: ChatMessage }): React.ReactEleme
   if (message.role === 'user') {
     return (
       <div className="flex justify-end gap-2">
-        <div className="chat-text-body max-w-[86%] whitespace-pre-wrap rounded-xl bg-accent px-3.5 py-2.5 leading-relaxed text-accent-fg">{message.text}</div>
+        <div className="min-w-0 max-w-[86%]">
+          <div data-native-text-selection="true" className="chat-text-body chat-selectable-text chat-user-message-text whitespace-pre-wrap break-words rounded-xl bg-accent px-3.5 py-2.5 leading-relaxed text-accent-fg">{message.text}</div>
+          {message.text && <div className="mt-1 text-right"><CopyButton text={message.text} label="复制用户消息" /></div>}
+        </div>
         <SidebarAvatar />
       </div>
     )
@@ -504,6 +509,7 @@ function SidebarMessage({ message }: { message: ChatMessage }): React.ReactEleme
           {message.text && <Markdown text={message.text} />}
           {message.files && <SidebarFiles files={message.files} />}
         </div>
+        {message.text && <div className="mt-1"><CopyButton text={message.text} label="复制AI回复" /></div>}
         <RunActivityDetails activity={message.runActivity} />
       </div>
     </div>

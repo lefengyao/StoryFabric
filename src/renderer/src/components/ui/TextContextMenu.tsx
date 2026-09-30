@@ -149,6 +149,9 @@ export function TextContextMenu(): React.ReactElement | null {
     }
 
     const onContextMenu = (event: MouseEvent): void => {
+      // Keep Android's selection handles and native copy menu for message text.
+      if (window.Capacitor?.isNativePlatform?.() && event.target instanceof Element &&
+        event.target.closest('[data-native-text-selection]') && !findEditableElement(event.target)) return
       if (Date.now() < suppressContextUntil.current) {
         event.preventDefault()
         return

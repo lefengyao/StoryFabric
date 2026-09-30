@@ -27,6 +27,7 @@ import { AgentQuestionDialog } from '../../components/chat/AgentQuestionDialog'
 import { SkillCandidateDialog } from '../../components/chat/SkillCandidateDialog'
 import { ContextUsageMeter, shouldShowThinking, ThinkingRow, ToolRunRow } from '../../components/chat/AgentActivity'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
+import { CopyButton } from '../../components/ui/CopyButton'
 import { chatDensityClasses } from '../../lib/chatDensity'
 import { resolveCapability, resolveContextWindow } from '../../lib/modelCapability'
 import { shouldSendOnKey } from '../../lib/sendShortcut'
@@ -450,6 +451,7 @@ export function ChatPage(): React.ReactElement {
                       <div className={cn('rounded-xl border border-line bg-panel', densityClasses.assistantBubble)}>
                         <Markdown text={item.text} />
                       </div>
+                      {item.text && <div className="mt-1"><CopyButton text={item.text} label="复制AI回复" /></div>}
                     </div>
                   </div>
                 )
@@ -687,9 +689,12 @@ function MessageItemInner({ msg, density, alternativesEnabled, onChooseAlternati
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end gap-3">
-        <div className={cn('chat-text-body max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-accent text-accent-fg', cls.userBubble)}>
-          {msg.text && <div>{msg.text}</div>}
-          {msg.files && <MessageFiles files={msg.files} compact />}
+        <div className="min-w-0 max-w-[85%]">
+          <div data-native-text-selection="true" className={cn('chat-text-body chat-selectable-text chat-user-message-text whitespace-pre-wrap break-words rounded-xl bg-accent text-accent-fg', cls.userBubble)}>
+            {msg.text && <div>{msg.text}</div>}
+            {msg.files && <MessageFiles files={msg.files} compact />}
+          </div>
+          {msg.text && <div className="mt-1 text-right"><CopyButton text={msg.text} label="复制用户消息" /></div>}
         </div>
         <Avatar icon={<UserRound size={14} />} />
       </div>
@@ -714,6 +719,7 @@ function MessageItemInner({ msg, density, alternativesEnabled, onChooseAlternati
           {msg.text && <Markdown text={msg.text} />}
           {msg.files && <MessageFiles files={msg.files} />}
         </div>
+        {msg.text && <div className="mt-1"><CopyButton text={msg.text} label="复制AI回复" /></div>}
         <RunActivityDetails activity={msg.runActivity} />
         {alternativesEnabled && msg.text && <AlternativePicker text={msg.text} onChoose={onChooseAlternative} />}
       </div>
