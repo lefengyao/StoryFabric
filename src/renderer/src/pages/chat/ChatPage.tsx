@@ -6,6 +6,7 @@ import {
   Bot,
   Download,
   FileText,
+  History,
   ListTree,
   MessageSquarePlus,
   Network,
@@ -55,6 +56,7 @@ import { parseProseAlternatives } from '../../lib/proseAlternatives'
 import { SkillActivity } from '../../components/chat/SkillActivity'
 import { RuleActivity } from '../../components/chat/RuleActivity'
 import { RunActivityDetails } from '../../components/chat/RunActivityDetails'
+import { useChatInputAutosize } from '../../components/chat/useChatInputAutosize'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -109,6 +111,7 @@ export function ChatPage(): React.ReactElement {
   const modeSwitchingRef = useRef(false)
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
+  const composerRef = useChatInputAutosize(input.text, isAndroid, settings?.chatFontSize)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -286,7 +289,7 @@ export function ChatPage(): React.ReactElement {
 
   return (
     <div className={cn(workbenchShellClass(), 'chat-surface')}>
-      <div className={workbenchTopbarClass()}>
+      <div data-chat-topbar className={workbenchTopbarClass()}>
         <button data-android-session-trigger type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2 text-xs text-muted lg:hidden" aria-label="打开会话列表" onClick={() => setSessionListOpen(true)}><PanelLeftOpen size={15} />会话</button>
         <ChatWorkbenchIdentity showSessionLength={Boolean(settings?.showSessionLength)} messageCount={chat.messages.length} totalChars={totalChars} />
         <span className="chat-text-meta hidden truncate text-faint xl:inline">资料不进提示词 · 需要时自动查阅</span>
@@ -350,6 +353,7 @@ export function ChatPage(): React.ReactElement {
           {visibleSessions.map((s) => (
             <div
               key={s.id}
+              data-android-session-row
               className={cn('group flex items-center rounded-lg transition', chat.activeId === s.id ? 'bg-accent-soft' : 'hover:bg-elevated')}
             >
               {renamingId === s.id ? (
@@ -411,17 +415,17 @@ export function ChatPage(): React.ReactElement {
       </aside>
 
       {/* 对话区 */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div data-chat-column className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 消息列表 */}
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-app/70 px-3 py-4 sm:px-6 sm:py-6">
+        <div data-chat-conversation ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-app/70 px-3 py-4 sm:px-6 sm:py-6">
           {chat.messages.length === 0 && !activeStreaming && (
-            <div className="mx-auto max-w-xl">
+            <div data-chat-empty className="mx-auto max-w-xl">
               <EmptyState
                 icon={<Bot size={36} />}
                 title="让智能体成为你的创作搭档"
                 hint="它会在需要时自行查阅人物卡、关系、大纲、事件与正文；修改项目资料前都会先请你确认。"
               />
-              <div className="mt-4 space-y-2">
+              <div data-chat-quick-actions className="mt-4 space-y-2">
                 {QUICK_ACTIONS.map((q) => (
                   <button
                     key={q}
@@ -483,7 +487,7 @@ export function ChatPage(): React.ReactElement {
         <div className="chat-composer shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 backdrop-blur-xl sm:p-4">
           <div className="relative mx-auto w-full max-w-6xl">
             {chat.attachments.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-1.5">
+              <div data-chat-attachments className="mb-2 flex flex-wrap gap-1.5">
                 {chat.attachments.map((a) => (
                   <span key={`${a.kind}_${a.id}`} className="inline-flex items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
                     {ATTACH_ICONS[a.kind]}
@@ -496,7 +500,7 @@ export function ChatPage(): React.ReactElement {
               </div>
             )}
             {chat.messageFiles.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-1.5">
+              <div data-chat-attachments className="mb-2 flex flex-wrap gap-1.5">
                 {chat.messageFiles.map((file) => (
                   <FileChip key={file.id} file={file} onRemove={() => chat.setMessageFiles(chat.messageFiles.filter((item) => item.id !== file.id))} />
                 ))}
@@ -516,6 +520,7 @@ export function ChatPage(): React.ReactElement {
                 </div>
               )}
               <textarea
+                ref={composerRef}
                 value={input.text}
                 onChange={(e) => input.setText(e.target.value)}
                 onKeyDown={(e) => {
@@ -530,7 +535,7 @@ export function ChatPage(): React.ReactElement {
                     void send()
                   }
                 }}
-                rows={2}
+                rows={isAndroid ? 1 : 2}
                 placeholder={
                   (settings?.sendShortcut ?? 'enter') === 'mod+enter'
                     ? '和智能体聊聊你的故事……（Ctrl/⌘+Enter 发送 / Enter 换行）'
@@ -538,8 +543,9 @@ export function ChatPage(): React.ReactElement {
                 }
                 className="chat-text-body min-h-[4.5rem] w-full resize-none rounded-xl bg-transparent px-4 py-3 leading-6 outline-none placeholder:text-faint"
               />
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/70 px-2 py-2">
-                <div className="flex min-w-0 items-center gap-1">
+              <div data-chat-toolbar className="flex flex-wrap items-center justify-between gap-2 border-t border-line/70 px-2 py-2">
+                <div data-chat-toolbar-group className="flex min-w-0 items-center gap-1">
+                <div data-chat-tool="attachments">
                 <AttachmentMenu
                   open={attachOpen}
                   onOpenChange={setAttachOpen}
@@ -562,7 +568,9 @@ export function ChatPage(): React.ReactElement {
                   onCompressContext={() => chat.compressContext().catch((error) => { useChat.setState({ error: error instanceof Error ? error.message : String(error) }) })}
                   compressing={chat.contextCompressing || chat.streaming}
                 />
+                </div>
                 <select
+                  data-chat-tool="approval"
                   value={chat.approvalPolicy}
                   onChange={(e) => void chat.updateApprovalPolicy(e.target.value as ApprovalPolicy).catch((error) => useChat.setState({ error: error instanceof Error ? error.message : String(error) }))}
                   disabled={approvalPolicyPickerDisabled({ activeId: chat.activeId, streaming: chat.streaming })}
@@ -574,11 +582,12 @@ export function ChatPage(): React.ReactElement {
                   <option value="delete-confirm">自动审批（删除确认）</option>
                   <option value="auto">自动执行</option>
                 </select>
-                <WebSearchModeMenu mode={webSearchMode} onChange={setWebSearchMode} disabled={chat.streaming} />
+                <div data-chat-tool="search"><WebSearchModeMenu mode={webSearchMode} onChange={setWebSearchMode} disabled={chat.streaming} /></div>
                 </div>
-                <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
+                <div data-chat-toolbar-group className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
                 {providerOptions.length > 0 && (
                   <select
+                    data-chat-tool="model"
                     value={defaultModel ? `${defaultModel.providerId}::${defaultModel.model}` : ''}
                     onChange={(e) => {
                       const [providerId, model] = e.target.value.split('::')
@@ -601,6 +610,7 @@ export function ChatPage(): React.ReactElement {
                 )}
                 {providerOptions.length > 0 && (
                   <select
+                    data-chat-tool="reasoning"
                     value={selectedReasoning}
                     disabled={chat.streaming || !chat.activeId || !selectedCapability.reasoning}
                     onChange={(e) => {
@@ -621,7 +631,8 @@ export function ChatPage(): React.ReactElement {
                     <option value="high">思考：高</option>
                   </select>
                 )}
-                <AttachPicker open={referenceOpen} onOpenChange={setReferenceOpen} />
+                <div data-chat-tool="reference"><AttachPicker open={referenceOpen} onOpenChange={setReferenceOpen} /></div>
+                <div data-chat-tool="usage">
                 <ContextUsageMeter
                   ringOnly
                 usedTokens={contextUsage.usedTokens}
@@ -630,6 +641,8 @@ export function ChatPage(): React.ReactElement {
                   compressing={chat.contextCompressing}
                   compressedMessages={chat.contextCompression?.summarizedMessages}
                 />
+                </div>
+                <div data-chat-tool="send" className="flex items-center gap-1">
                 {activeStreaming ? (
                   <Button variant="outline" size="sm" onClick={() => void chat.abort()} title="中止生成">
                     <Square size={13} /> 停止
@@ -638,7 +651,7 @@ export function ChatPage(): React.ReactElement {
                   <>
                     {backgroundStreaming && (
                       <Button variant="outline" size="sm" onClick={() => void chat.openSession(chat.runningSessionId!)} title="返回正在运行的会话">
-                        返回运行会话
+                        <History size={13} /><span className="chat-return-label">返回运行会话</span>
                       </Button>
                     )}
                     <Button variant="primary" size="sm" onClick={() => void send()} disabled={modeSwitching || (!input.text.trim() && !chat.messageFiles.length && !chat.attachments.length)}>
@@ -646,6 +659,7 @@ export function ChatPage(): React.ReactElement {
                     </Button>
                   </>
                 )}
+                </div>
                 </div>
               </div>
             </div>

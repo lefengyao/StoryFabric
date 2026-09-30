@@ -25,6 +25,7 @@ import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
 import { creativePreferencesForSurface } from '../../lib/creativePreferences'
 import { agentStageLabel, agentThinkingLabel, isOrdinaryChapterAgentStage } from '../../lib/agentStagePresentation'
 import { approvalPolicyPickerDisabled } from '../../stores/chatScope'
+import { useChatInputAutosize } from './useChatInputAutosize'
 
 const QUICK_QUESTIONS = [
   '检查当前章节与前文的设定冲突。',
@@ -57,6 +58,8 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   }, [open])
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+  const composerRef = useChatInputAutosize(input.text, isAndroid, settings?.chatFontSize)
 
   const providerOptions = useMemo(() => (settings?.providers ?? []).filter((provider) => provider.models.length > 0), [settings])
   const defaultModel = settings?.defaultChatModel
@@ -301,16 +304,16 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col bg-app/70">
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <div data-chat-column className="flex min-h-0 flex-1 flex-col bg-app/70">
+        <div data-chat-conversation ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
           {chat.messages.length === 0 && !activeStreaming ? (
-            <div className="mx-auto flex max-w-md flex-col items-center px-2 py-12 text-center">
+            <div data-chat-empty className="mx-auto flex max-w-md flex-col items-center px-2 py-12 text-center">
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
                 <Bot size={24} />
               </span>
               <h2 className="mt-4 text-lg font-semibold">把你的问题放在故事旁边</h2>
               <p className="mt-2 text-xs leading-5 text-muted">智能体会按需查阅章节、前后文、人物、事件与设定，写回前仍由你确认。</p>
-              <div className="mt-6 w-full space-y-2">
+              <div data-chat-quick-actions className="mt-6 w-full space-y-2">
                 {QUICK_QUESTIONS.map((question) => (
                   <button key={question} type="button" onClick={() => input.setText(question)} className="w-full cursor-pointer rounded-xl border border-line bg-panel px-4 py-3 text-left text-xs leading-5 text-muted transition hover:border-accent hover:text-fg">
                     {question}
@@ -356,9 +359,9 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
           )}
         </div>
 
-        <div className="shrink-0 border-t border-line p-3">
+        <div className="chat-composer chat-sidebar-composer shrink-0 border-t border-line p-3">
           {chat.messageFiles.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-1.5">
+            <div data-chat-attachments className="mb-2 flex flex-wrap gap-1.5">
               {chat.messageFiles.map((file) => (
                 <span key={file.id} className="inline-flex max-w-full items-center gap-1 rounded-md bg-elevated px-2 py-1 text-[10px] text-muted">
                   {file.kind === 'image' ? '图片' : '文件'} · <span className="max-w-40 truncate">{file.name}</span>
@@ -367,8 +370,9 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
               ))}
             </div>
           )}
-          <div className="relative rounded-xl border border-line bg-panel shadow-sm transition focus-within:border-accent">
+          <div className="chat-composer-field relative rounded-xl border border-line bg-panel shadow-sm transition focus-within:border-accent">
             <textarea
+              ref={composerRef}
               value={input.text}
               onChange={(event) => input.setText(event.target.value)}
               onKeyDown={(event) => {
@@ -383,11 +387,11 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                   void send()
                 }
               }}
-              rows={3}
+              rows={isAndroid ? 1 : 3}
               placeholder="随时问智能体…"
               className="chat-text-body w-full resize-none bg-transparent px-3.5 py-3 pr-14 outline-none placeholder:text-faint"
             />
-            <div className="absolute bottom-2 left-2">
+            <div className="chat-sidebar-composer-attach absolute bottom-2 left-2">
               <AttachmentMenu
                 open={attachOpen}
                 onOpenChange={setAttachOpen}
@@ -411,7 +415,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
                 compressing={chat.contextCompressing || chat.streaming}
               />
             </div>
-            <div className="absolute bottom-2 right-2 flex items-center gap-1">
+            <div className="chat-sidebar-composer-send absolute bottom-2 right-2 flex items-center gap-1">
               <ContextUsageMeter
                 ringOnly
                 usedTokens={contextUsage.usedTokens}
