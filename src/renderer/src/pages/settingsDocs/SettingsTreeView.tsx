@@ -13,15 +13,15 @@ import {
 } from '@xyflow/react'
 import { BookOpen, Download, GitBranch, List } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import type { SettingMeta } from '../../../../shared/types'
-import { Markdown } from '../../components/markdown/Markdown'
-import { Modal } from '../../components/ui/modal'
+import type { SettingDoc, SettingMeta } from '../../../../shared/types'
 import { Button, EmptyState } from '../../components/ui/primitives'
 import { api } from '../../lib/api'
 import { shareFiles } from '../../lib/shareFiles'
 import { buildSettingsTree, SETTING_NODE_HEIGHT, SETTING_NODE_WIDTH, settingsTreeItems, settingsTreeRootIds, type SettingsTreeNode } from '../../lib/settingsTree'
 import { settingsTreePngFile } from '../../lib/settingsTreeImage'
+import { addSettingsChildNode, deleteSettingsNode, type SettingsNodeDraft } from '../../lib/settingsNodeActions'
 import { SettingsTreeTextView } from './SettingsTreeTextView'
+import { SettingsNodeDialog } from './SettingsNodeDialog'
 
 interface SettingNodeData extends Record<string, unknown> {
   title: string
@@ -55,6 +55,7 @@ interface Props {
   items: SettingMeta[]
   workspaceName: string
   onOpen: (item: SettingMeta) => void
+  onChanged: (settingId: string, doc: SettingDoc | null) => void
   initialRootId?: string
 }
 
@@ -62,7 +63,7 @@ function fileNamePart(value: string): string {
   return value.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || '设定'
 }
 
-export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }: Props): React.ReactElement {
+export function SettingsTreeView({ items, workspaceName, onOpen, onChanged, initialRootId }: Props): React.ReactElement {
   const selectableItems = useMemo(() => settingsTreeItems(items), [items])
   const rootIds = useMemo(() => settingsTreeRootIds(items), [items])
   const rootIdSet = useMemo(() => new Set(rootIds), [rootIds])
@@ -70,12 +71,12 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
   const [mode, setMode] = useState<'chart' | 'text'>('chart')
   const [includeNotes, setIncludeNotes] = useState(true)
   const [detailsByNodeId, setDetailsByNodeId] = useState<Record<string, string>>({})
-  const [activeNode, setActiveNode] = useState<SettingsTreeNode | null>(null)
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
 
   useEffect(() => {
-    if (initialRootId && items.some((item) => item.id === initialRootId)) setSelectedRootId(initialRootId)
-  }, [initialRootId, items])
+    if (initialRootId) setSelectedRootId(initialRootId)
+  }, [initialRootId])
 
   useEffect(() => {
     if (selectedRootId && items.some((item) => item.id === selectedRootId)) return
@@ -84,6 +85,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
 
   const selectedItems = useMemo(() => settingsTreeItems(items, selectedRootId), [items, selectedRootId])
   const graph = useMemo(() => buildSettingsTree(selectedItems), [selectedItems])
+  const activeNode = graph.nodes.find((node) => node.id === activeNodeId)
   const selectedItem = useMemo(() => items.find((item) => item.id === selectedRootId), [items, selectedRootId])
   const warningById = useMemo(() => new Map(graph.warnings.map((warning) => [warning.nodeId, warning.message])), [graph])
   const initialNodes = useMemo<SettingFlowNode[]>(() => graph.nodes.map((node) => ({
@@ -132,12 +134,28 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
   }, [mode, graph])
 
   const openDetail = async (node: SettingsTreeNode): Promise<void> => {
-    setActiveNode(node)
+    setActiveNodeId(node.id)
     if (node.kind === 'tag' || Object.hasOwn(detailsByNodeId, node.id)) return
     setLoadingDetails(true)
     try { await loadSettingDetails([node.id]) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoadingDetails(false) }
+  }
+
+  const addChild = async (parent: SettingsTreeNode, draft: SettingsNodeDraft): Promise<void> => {
+    const doc = await addSettingsChildNode(api, parent, draft)
+    setDetailsByNodeId((previous) => ({ ...previous, [doc.id]: doc.content }))
+    setError(null)
+    onChanged(doc.id, doc)
+  }
+
+  const deleteNode = async (node: SettingsTreeNode): Promise<void> => {
+    const doc = await deleteSettingsNode(api, node)
+    const settingId = node.kind === 'tag' ? node.settingId! : node.id
+    setDetailsByNodeId((previous) => doc ? { ...previous, [settingId]: doc.content } : Object.fromEntries(Object.entries(previous).filter(([id]) => id !== settingId)))
+    setError(null)
+    onChanged(settingId, doc)
+    setActiveNodeId(null)
   }
 
   const exportImage = async (): Promise<void> => {
@@ -214,11 +232,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
           </ReactFlow>
         </div>
       )}
-      <Modal open={activeNode !== null} onOpenChange={(open) => { if (!open) setActiveNode(null) }} title={activeNode?.title ?? '节点详情'} description={activeNode?.summary} wide>
-        {activeNode && (activeNode.kind === 'tag' ? activeNode.content : detailsByNodeId[activeNode.id])
-          ? <Markdown text={(activeNode.kind === 'tag' ? activeNode.content : detailsByNodeId[activeNode.id]) ?? ''} />
-          : <p className="text-sm text-muted">{loadingDetails ? '正在加载详细内容…' : '暂无详细内容'}</p>}
-      </Modal>
+      {activeNode && <SettingsNodeDialog key={activeNode.id} node={activeNode} content={activeNode.kind === 'tag' ? activeNode.content : detailsByNodeId[activeNode.id]} loading={activeNode.kind !== 'tag' && loadingDetails} onClose={() => setActiveNodeId(null)} onAddChild={addChild} onDelete={deleteNode} />}
     </div>
   )
 }

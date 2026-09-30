@@ -75,12 +75,29 @@ export function SettingsDocsPage(): React.ReactElement {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  const showTree = (): void => {
+    if (dirty && !window.confirm('当前设定有未保存的修改，放弃后查看图表？')) return
+    setDraft(null)
+    setDirty(false)
+    setView('tree')
+  }
+
+  const onTreeChanged = (id: string, doc: SettingDoc | null): void => {
+    setError(null)
+    if (doc) {
+      const { content: _content, ...meta } = doc
+      setItems((previous) => previous.map((item) => item.id === id ? meta : item))
+    } else { setItems((previous) => previous.filter((item) => item.id !== id)) }
+    if (selected?.id === id) { setSelected(doc); setDraft(null); setDirty(false) }
+    void refresh().catch((cause) => setError(`节点已保存，刷新项目失败：${cause instanceof Error ? cause.message : String(cause)}`))
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         <div className="flex rounded-lg border border-line p-0.5">
           <button type="button" onClick={() => setView('list')} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${view === 'list' ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg'}`}><List size={13} /> 列表</button>
-          <button type="button" onClick={() => setView('tree')} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${view === 'tree' ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg'}`}><GitBranch size={13} /> 图表</button>
+          <button type="button" onClick={showTree} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${view === 'tree' ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg'}`}><GitBranch size={13} /> 图表</button>
         </div>
         <span className="text-xs text-faint">{items.length} 条设定</span>
         <div className="flex-1" />
@@ -88,7 +105,7 @@ export function SettingsDocsPage(): React.ReactElement {
       </div>
       {error && <p className="shrink-0 border-b border-line bg-danger-soft px-4 py-2 text-xs text-danger" role="alert">{error}</p>}
       {view === 'tree' ? (
-        <SettingsTreeView items={items} workspaceName={summary?.name ?? 'StoryFabric'} initialRootId={selected?.id} onOpen={(item) => { void open(item) }} />
+        <SettingsTreeView items={items} workspaceName={summary?.name ?? 'StoryFabric'} initialRootId={selected?.id} onOpen={(item) => { void open(item) }} onChanged={onTreeChanged} />
       ) : (
         <div data-android-document-layout className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div data-android-list-pane className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
