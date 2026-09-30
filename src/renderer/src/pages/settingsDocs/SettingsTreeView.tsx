@@ -11,19 +11,23 @@ import {
   type Node,
   type NodeProps
 } from '@xyflow/react'
-import { BookOpen, Download, GitBranch } from 'lucide-react'
+import { BookOpen, Download, GitBranch, List } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { SettingMeta } from '../../../../shared/types'
+import { Markdown } from '../../components/markdown/Markdown'
+import { Modal } from '../../components/ui/modal'
 import { Button, EmptyState } from '../../components/ui/primitives'
+import { api } from '../../lib/api'
 import { shareFiles } from '../../lib/shareFiles'
-import { buildSettingsTree, SETTING_NODE_HEIGHT, SETTING_NODE_WIDTH, settingsTreeItems, settingsTreeRootIds } from '../../lib/settingsTree'
+import { buildSettingsTree, SETTING_NODE_HEIGHT, SETTING_NODE_WIDTH, settingsTreeItems, settingsTreeRootIds, type SettingsTreeNode } from '../../lib/settingsTree'
 import { settingsTreePngFile } from '../../lib/settingsTreeImage'
+import { SettingsTreeTextView } from './SettingsTreeTextView'
 
 interface SettingNodeData extends Record<string, unknown> {
   title: string
-  category: string
-  tagCount: number
-  kind?: 'tag'
+  summary?: string
+  depth: number
+  height: number
   warning?: string
 }
 
@@ -32,17 +36,15 @@ type SettingFlowNode = Node<SettingNodeData, 'settingNode'>
 function SettingNode({ data, selected }: NodeProps<SettingFlowNode>): React.ReactElement {
   return (
     <div
-      className={`rounded-xl border-2 px-3 py-2.5 text-left shadow-sm ${data.kind === 'tag' ? 'bg-accent-soft' : 'bg-panel'} ${selected ? 'border-accent' : data.warning ? 'border-coral' : 'border-line'}`}
-      style={{ width: SETTING_NODE_WIDTH, height: SETTING_NODE_HEIGHT }}
+      className={`relative px-3 py-2.5 text-left ${data.depth === 0 ? 'rounded-lg bg-[#f5b400]' : 'border-b-2 border-[#f5b400] bg-panel/95'} ${selected ? 'ring-2 ring-[#cf9000]' : ''}`}
+      style={{ width: SETTING_NODE_WIDTH, height: data.height }}
       title={data.warning}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-accent" />
+      <Handle type="target" position={Position.Left} className="!h-1 !w-1 !border-0 !bg-[#f5b400]" style={{ top: data.depth === 0 ? '50%' : 'calc(100% - 12px)' }} />
       <strong className="block truncate text-sm text-fg">{data.title}</strong>
-      <div className="mt-2 flex items-center gap-2 text-[11px] text-muted">
-        {data.kind === 'tag' ? <span>标签</span> : <><span>{data.category}</span><span>·</span><span>{data.tagCount} 个标签</span></>}
-      </div>
+      {data.summary && <p className="mt-1 whitespace-pre-wrap break-all text-xs leading-[18px] text-fg/75">{data.summary}</p>}
       {data.warning && <span className="mt-1 block truncate text-[10px] text-coral">{data.warning}</span>}
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-accent" />
+      <Handle type="source" position={Position.Right} className="!h-1 !w-1 !border-0 !bg-[#f5b400]" style={{ top: data.depth === 0 ? '50%' : 'calc(100% - 12px)' }} />
     </div>
   )
 }
@@ -65,6 +67,11 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
   const rootIds = useMemo(() => settingsTreeRootIds(items), [items])
   const rootIdSet = useMemo(() => new Set(rootIds), [rootIds])
   const [selectedRootId, setSelectedRootId] = useState<string | undefined>(() => initialRootId ?? rootIds[0] ?? selectableItems[0]?.id)
+  const [mode, setMode] = useState<'chart' | 'text'>('chart')
+  const [includeNotes, setIncludeNotes] = useState(true)
+  const [detailsByNodeId, setDetailsByNodeId] = useState<Record<string, string>>({})
+  const [activeNode, setActiveNode] = useState<SettingsTreeNode | null>(null)
+  const [loadingDetails, setLoadingDetails] = useState(false)
 
   useEffect(() => {
     if (initialRootId && items.some((item) => item.id === initialRootId)) setSelectedRootId(initialRootId)
@@ -85,16 +92,16 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
     position: node.position,
     data: {
       title: node.title,
-      category: node.category === 'background' ? '背景设定' : '其他设定',
-      tagCount: node.tags.length,
-      kind: node.kind,
+      summary: node.summary,
+      depth: node.depth,
+      height: node.height ?? SETTING_NODE_HEIGHT,
       warning: warningById.get(node.id)
     }
   })), [graph.nodes, warningById])
   const initialEdges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
     ...edge,
-    type: 'smoothstep',
-    style: { stroke: 'var(--accent)', strokeWidth: 2 }
+    type: 'default',
+    style: { stroke: '#f5b400', strokeWidth: 2.5 }
   })), [graph.edges])
   const [nodes, setNodes, onNodesChange] = useNodesState<SettingFlowNode>(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges)
@@ -103,13 +110,44 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
 
   useEffect(() => { setNodes(initialNodes); setEdges(initialEdges) }, [initialNodes, initialEdges, setNodes, setEdges])
 
+  const loadSettingDetails = async (ids = graph.nodes.filter((node) => node.kind !== 'tag').map((node) => node.id)): Promise<Record<string, string>> => {
+    const missing = ids.filter((id) => !Object.hasOwn(detailsByNodeId, id))
+    if (missing.length === 0) return detailsByNodeId
+    const entries = await Promise.all(missing.map(async (id) => {
+      const doc = await api.getSetting(id)
+      if (!doc) throw new Error(`未找到设定：${id}`)
+      return [id, doc.content] as const
+    }))
+    const loaded = Object.fromEntries(entries)
+    setDetailsByNodeId((previous) => ({ ...previous, ...loaded }))
+    return { ...detailsByNodeId, ...loaded }
+  }
+
+  useEffect(() => {
+    if (mode !== 'text' || graph.nodes.length === 0) return
+    let active = true
+    setLoadingDetails(true)
+    void loadSettingDetails().catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : String(cause)) }).finally(() => { if (active) setLoadingDetails(false) })
+    return () => { active = false }
+  }, [mode, graph])
+
+  const openDetail = async (node: SettingsTreeNode): Promise<void> => {
+    setActiveNode(node)
+    if (node.kind === 'tag' || Object.hasOwn(detailsByNodeId, node.id)) return
+    setLoadingDetails(true)
+    try { await loadSettingDetails([node.id]) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setLoadingDetails(false) }
+  }
+
   const exportImage = async (): Promise<void> => {
     if (graph.nodes.length === 0) return
     setExporting(true)
     setError(null)
     try {
       const fileName = `${fileNamePart(workspaceName || 'StoryFabric')}-${fileNamePart(selectedItem?.title ?? '设定')}-设定图谱.png`
-      const file = await settingsTreePngFile(graph, fileName)
+      const loaded = includeNotes ? await loadSettingDetails() : {}
+      const file = await settingsTreePngFile(graph, fileName, { includeNotes, detailsByNodeId: loaded })
       await shareFiles([file], '设定图谱', '分享设定图谱')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -137,9 +175,14 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
         {graph.warnings.length > 0 && <span className="text-xs text-coral">{graph.warnings.length} 条关系需要检查</span>}
         {graph.nodes.length === 1 && selectableItems.length > 1 && <span className="text-xs text-faint">当前子树暂无父子关系，可在列表模式设置父级</span>}
         <div className="flex-1" />
+        <div className="flex rounded-md border border-line p-0.5">
+          <button type="button" onClick={() => setMode('chart')} aria-pressed={mode === 'chart'} className={`rounded px-2 py-1 text-xs ${mode === 'chart' ? 'bg-[#f5b400] text-stone-900' : 'text-muted'}`}><GitBranch size={12} className="inline" /> 图</button>
+          <button type="button" onClick={() => setMode('text')} aria-pressed={mode === 'text'} className={`rounded px-2 py-1 text-xs ${mode === 'text' ? 'bg-[#f5b400] text-stone-900' : 'text-muted'}`}><List size={12} className="inline" /> 文字版</button>
+        </div>
         <Button size="sm" variant="ghost" onClick={() => { if (selectedItem) onOpen(selectedItem) }} disabled={!selectedItem} title="打开当前设定">
           <BookOpen size={13} /> 打开设定
         </Button>
+        <label className="flex items-center gap-1 text-xs text-muted"><input type="checkbox" checked={includeNotes} onChange={(event) => setIncludeNotes(event.target.checked)} />导出详细批注</label>
         <Button size="sm" variant="outline" onClick={() => void exportImage()} disabled={graph.nodes.length === 0} loading={exporting}>
           <Download size={13} /> 导出图片
         </Button>
@@ -147,6 +190,8 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
       {error && <p className="border-b border-line bg-danger-soft px-4 py-2 text-xs text-danger" role="alert">{error}</p>}
       {graph.nodes.length === 0 ? (
         <EmptyState icon={<GitBranch size={32} />} title="还没有设定" hint="创建设定后即可查看横向树状图" />
+      ) : mode === 'text' ? (
+        <SettingsTreeTextView graph={graph} detailsByNodeId={detailsByNodeId} loading={loadingDetails} />
       ) : (
         <div className="min-h-0 min-w-0 flex-1">
           <ReactFlow<SettingFlowNode, Edge>
@@ -156,9 +201,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
-            onNodeClick={(_, node) => {
-              if (node.data.kind !== 'tag') setSelectedRootId(node.id)
-            }}
+            onNodeClick={(_, node) => { const target = graph.nodes.find((item) => item.id === node.id); if (target) void openDetail(target) }}
             fitView
             nodesDraggable={false}
             deleteKeyCode={null}
@@ -171,6 +214,11 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
           </ReactFlow>
         </div>
       )}
+      <Modal open={activeNode !== null} onOpenChange={(open) => { if (!open) setActiveNode(null) }} title={activeNode?.title ?? '节点详情'} description={activeNode?.summary} wide>
+        {activeNode && (activeNode.kind === 'tag' ? activeNode.content : detailsByNodeId[activeNode.id])
+          ? <Markdown text={(activeNode.kind === 'tag' ? activeNode.content : detailsByNodeId[activeNode.id]) ?? ''} />
+          : <p className="text-sm text-muted">{loadingDetails ? '正在加载详细内容…' : '暂无详细内容'}</p>}
+      </Modal>
     </div>
   )
 }

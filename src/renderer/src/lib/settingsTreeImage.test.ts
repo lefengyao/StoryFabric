@@ -15,14 +15,23 @@ const graph: SettingsTreeGraph = {
 }
 
 describe('settingsTreeSvg', () => {
+  it('puts full escaped details below the chart when notes are enabled and omits them when disabled', () => {
+    const annotated = settingsTreeSvg(graph, { includeNotes: true, detailsByNodeId: { root: '第一行 <规则> & 例外\n第二行', child: '子设定详情' } })
+    const plain = settingsTreeSvg(graph, { includeNotes: false, detailsByNodeId: { root: '秘密批注' } })
+    expect(annotated.svg).toContain('第一行 &lt;规则&gt; &amp; 例外')
+    expect(annotated.svg).toContain('第二行')
+    expect(annotated.svg.indexOf('第一行')).toBeLessThan(annotated.svg.indexOf('子设定详情'))
+    expect(annotated.height).toBeGreaterThan(plain.height)
+    expect(plain.svg).not.toContain('秘密批注')
+  })
   it('exports nested tag nodes and their connecting edges', () => {
     const nested = buildSettingsTree([{ id: 'world', title: '世界观', category: 'background', tags: ['势力', '哈夫克'], tagParents: { 哈夫克: '势力' } }])
     const { svg } = settingsTreeSvg(nested)
 
     expect(svg).toContain('势力')
     expect(svg).toContain('哈夫克')
-    expect(svg.match(/<path\b/g)).toHaveLength(2)
-    expect(svg.match(/>标签<\/text>/g)).toHaveLength(2)
+    expect(svg.match(/<path d="M [^"]+ C /g)).toHaveLength(2)
+    expect(svg).toContain('stroke="#f5b400"')
   })
   it('escapes dynamic text and includes every node and edge within the image bounds', () => {
     const { svg, width, height } = settingsTreeSvg(graph)
@@ -30,8 +39,8 @@ describe('settingsTreeSvg', () => {
     expect(svg).toContain('世界 &amp; &lt;起源&gt;')
     expect(svg).toContain('山 &gt; 河')
     expect(svg).not.toContain('世界 & <起源>')
-    expect(svg.match(/<rect x="[^"]+" y="[^"]+" width="224" height="92"/g)).toHaveLength(2)
-    expect(svg.match(/<path\b/g)).toHaveLength(1)
+    expect(svg).toContain('width="224" height="60"')
+    expect(svg.match(/<path d="M [^"]+ C /g)).toHaveLength(1)
     expect(width).toBeGreaterThan(graph.width)
     expect(height).toBeGreaterThan(graph.height)
     expect(svg).toContain(`width="${width}" height="${height}"`)

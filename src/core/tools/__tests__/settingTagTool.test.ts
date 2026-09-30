@@ -10,17 +10,20 @@ describe('agent setting hierarchy contract', () => {
     const schema = (TOOL_DEFS.find((tool) => tool.name === 'save_setting')?.parameters as { properties?: { setting?: { properties?: Record<string, unknown> } } })?.properties?.setting
     expect(schema?.properties).toHaveProperty('parentId')
     expect(schema?.properties).toHaveProperty('tagParents')
+    expect(schema?.properties).toHaveProperty('summary')
+    expect(schema?.properties).toHaveProperty('tagDetails')
     expect(SYSTEM_PROMPT).toContain('tagParents')
 
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '设定树')
     const outcome = await executeTool(store, 'save_setting', JSON.stringify({ setting: {
-      title: '世界观', tags: ['势力', '哈夫克'], tagParents: { 哈夫克: '势力' }
+      title: '世界观', summary: '总览', tags: ['势力', '哈夫克'], tagParents: { 哈夫克: '势力' }, tagDetails: { 势力: { summary: '各方组织', content: '组织详情' } }
     } }))
     expect(outcome.kind).toBe('pending')
     if (outcome.kind !== 'pending') return
     await outcome.apply()
     expect((await getSetting(store, outcome.change.entityId))?.tagParents).toEqual({ 哈夫克: '势力' })
+    expect(await getSetting(store, outcome.change.entityId)).toMatchObject({ summary: '总览', tagDetails: { 势力: { summary: '各方组织', content: '组织详情' } } })
 
     const child = await executeTool(store, 'save_setting', JSON.stringify({ setting: {
       title: '三方博弈', parentId: outcome.change.entityId, tags: ['哈夫克']

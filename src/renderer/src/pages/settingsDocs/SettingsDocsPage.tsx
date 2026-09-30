@@ -44,7 +44,7 @@ export function SettingsDocsPage(): React.ReactElement {
   const create = (): void => {
     if (dirty && !window.confirm('当前设定有未保存的修改，放弃后新建设定？')) return
     setSelected(null)
-    setDraft({ id: '', title: '新设定', category: 'background', tags: [], content: '' })
+    setDraft({ id: '', title: '新设定', summary: '', category: 'background', tags: [], content: '' })
     setDirty(true)
     setView('list')
     setError(null)
@@ -129,8 +129,9 @@ export function SettingsDocsPage(): React.ReactElement {
                 {draft.id && <Button variant="ghost" size="sm" className="text-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /></Button>}
                 <Button variant="primary" size="sm" onClick={() => void save()}><Save size={13} /> 保存</Button>
               </div>
-              <TagHierarchyEditor key={draft.id || 'new'} tags={draft.tags} tagParents={draft.tagParents} onChange={(tags, tagParents) => { setDraft({ ...draft, tags, tagParents }); setDirty(true) }} />
-              <div className="min-h-0 flex-1 p-4"><MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} /></div>
+              <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5"><label className="block text-xs text-muted">设定简述<textarea value={draft.summary ?? ''} onChange={(event) => { setDraft({ ...draft, summary: event.target.value }); setDirty(true) }} rows={2} className="mt-1 w-full rounded-lg border border-line bg-panel p-2 text-sm text-fg" placeholder="图表中显示的简短说明" /></label></div>
+              <TagHierarchyEditor key={draft.id || 'new'} tags={draft.tags} tagParents={draft.tagParents} tagDetails={draft.tagDetails} onChange={(tags, tagParents, tagDetails) => { setDraft({ ...draft, tags, tagParents, tagDetails }); setDirty(true) }} />
+              <div className="min-h-0 flex-1 p-4"><div className="mb-2 text-xs text-muted">设定详细内容</div><MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} /></div>
             </div>
           )}
         </div>

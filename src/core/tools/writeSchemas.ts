@@ -79,10 +79,12 @@ export const AGENT_SETTING_SCHEMA = {
     id: { type: 'string', minLength: 1, description: '更新已有设定时必填' },
     baseRevision: { type: 'string', minLength: 1, description: '更新时必填，取自读取工具返回的 writeRevision；不能使用 sourceRevision' },
     title: { type: 'string', minLength: 1 },
+    summary: { type: 'string', description: '设定节点的简述，图表直接显示' },
     category: { type: 'string', enum: ['background', 'other'] },
     tags: { type: 'array', items: { type: 'string' } },
     parentId: { type: 'string', description: '父级设定的 id；省略或空字符串表示根设定' },
     tagParents: { type: 'object', additionalProperties: { type: 'string' }, description: '子标签名到父标签名的映射；未列出的标签直属本设定。例如 {"哈夫克":"势力","安保部门":"哈夫克"}' },
+    tagDetails: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { summary: { type: 'string' }, content: { type: 'string' } } }, description: '每个标签名对应简述和详细内容；图表只显示标题与简述' },
     content: { type: 'string' }
   }
 } as const

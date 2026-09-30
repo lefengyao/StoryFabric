@@ -145,10 +145,14 @@ export interface TermAnnotation {
 export interface SettingDoc {
   id: string
   title: string
+  /** Short line shown beside the title in the tree. */
+  summary?: string
   category: SettingCategory
   tags: string[]
   /** Child tag name -> parent tag name. Other tags belong directly to the setting. */
   tagParents?: Record<string, string>
+  /** Details keyed by a tag name from tags. */
+  tagDetails?: Record<string, { summary?: string; content?: string }>
   parentId?: string
   content: string
 }

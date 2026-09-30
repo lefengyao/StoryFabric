@@ -23,6 +23,27 @@ const setting = (id: string, title: string, parentId?: string): TreeItem => ({
 })
 
 describe('settingsTree', () => {
+  it('projects summaries and tag details onto nested nodes', () => {
+    const graph = buildSettingsTree([{ ...setting('root', '能量体系'), summary: '世界基础', tags: ['灵力', '运转'], tagParents: { 运转: '灵力' }, tagDetails: { 灵力: { summary: '灵在万物', content: '详细内容' } } }])
+    expect(graph.nodes.find((node) => node.id === 'root')).toMatchObject({ summary: '世界基础' })
+    expect(graph.nodes.find((node) => node.title === '灵力')).toMatchObject({ summary: '灵在万物', content: '详细内容', settingId: 'root' })
+    expect(graph.nodes.find((node) => node.title === '运转')?.depth).toBe(2)
+  })
+
+  it('grows a long-summary node and leaves room for the next branch', () => {
+    const graph = buildSettingsTree([{ ...setting('root', '根'), tags: ['甲', '乙'], tagDetails: { 甲: { summary: '很长的描述'.repeat(18) } } }])
+    const first = graph.nodes.find((node) => node.title === '甲')!
+    const second = graph.nodes.find((node) => node.title === '乙')!
+    expect(first.height).toBeGreaterThan(SETTING_NODE_HEIGHT)
+    expect(second.position.y).toBeGreaterThanOrEqual(first.position.y + first.height!)
+  })
+
+  it('reserves space for long intermediate nodes in separate subtrees', () => {
+    const graph = buildSettingsTree([{ ...setting('root', '根'), tags: ['甲', '乙', '甲子', '乙子'], tagParents: { 甲子: '甲', 乙子: '乙' }, tagDetails: { 甲: { summary: '很长的描述'.repeat(45) }, 乙: { summary: '很长的描述'.repeat(45) } } }])
+    const branches = graph.nodes.filter((node) => node.depth === 1).sort((a, b) => a.position.y - b.position.y)
+    expect(branches[1].position.y).toBeGreaterThanOrEqual(branches[0].position.y + branches[0].height! + 40)
+    expect(graph.nodes.every((node) => node.position.y >= 0 && node.position.y + node.height! <= graph.height)).toBe(true)
+  })
   it('lays out a forest left to right in a stable order regardless of input order', () => {
     const items = [
       setting('root-b', '人物'),

@@ -3,6 +3,20 @@ import { MemoryFileStore } from '../../storage/fileStore'
 import { getSetting, listSettings, saveSetting } from '../entityStore'
 
 describe('setting tag hierarchy', () => {
+  it('round trips setting summary and per-tag summary and detail, while leaving legacy fields empty', async () => {
+    const store = new MemoryFileStore()
+    const saved = await saveSetting(store, { title: '能量体系', summary: '世界的基础', content: '根节点详细设定', tags: ['灵力'], tagDetails: { 灵力: { summary: '运转世界', content: '详细规则\n第二行' } } })
+    expect(await getSetting(store, saved.id)).toMatchObject({ summary: '世界的基础', content: '根节点详细设定', tagDetails: { 灵力: { summary: '运转世界', content: '详细规则\n第二行' } } })
+    expect((await listSettings(store))[0]).toMatchObject({ summary: '世界的基础', tagDetails: { 灵力: { summary: '运转世界', content: '详细规则\n第二行' } } })
+    const legacy = await saveSetting(store, { title: '旧设定', tags: ['旧标签'] })
+    expect((await getSetting(store, legacy.id))?.tagDetails).toBeUndefined()
+  })
+
+  it('rejects tag details for unknown tags or non-string content', async () => {
+    const store = new MemoryFileStore()
+    await expect(saveSetting(store, { title: '错误', tags: ['灵力'], tagDetails: { 其他: { content: '内容' } } })).rejects.toThrow('标签详情')
+    await expect(saveSetting(store, { title: '错误', tags: ['灵力'], tagDetails: { 灵力: { content: 42 as unknown as string } } })).rejects.toThrow('标签详情')
+  })
   it('round trips explicit tag parents through front matter', async () => {
     const store = new MemoryFileStore()
     const saved = await saveSetting(store, {

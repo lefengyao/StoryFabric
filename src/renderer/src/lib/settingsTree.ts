@@ -5,18 +5,50 @@ export const SETTING_NODE_HEIGHT = 92
 export const SETTING_LEVEL_GAP = 292
 export const SETTING_ROW_GAP = 132
 
+function textUnit(char: string): number {
+  if (/[\u3000-\u9fff\uff00-\uffef]/u.test(char)) return 1
+  if (/[MW@#%&]/u.test(char)) return 0.9
+  return 0.65
+}
+
+export function wrapSettingsTreeText(value: string, maxUnits = 15): string[] {
+  const lines: string[] = []
+  for (const paragraph of value.replace(/\r\n/g, '\n').split('\n')) {
+    if (!paragraph) { lines.push(''); continue }
+    let line = ''
+    let units = 0
+    for (const char of paragraph) {
+      const size = textUnit(char)
+      if (line && units + size > maxUnits) { lines.push(line); line = ''; units = 0 }
+      line += char
+      units += size
+    }
+    lines.push(line)
+  }
+  return lines
+}
+
+export function settingsTreeNodeHeight(summary?: string): number {
+  if (!summary?.trim()) return SETTING_NODE_HEIGHT
+  return Math.max(SETTING_NODE_HEIGHT, 68 + wrapSettingsTreeText(summary).length * 18)
+}
+
 export type SettingsTreeItem = SettingMeta & { parentId?: string }
 
-type LayoutItem = SettingsTreeItem & { kind?: 'tag' }
+type LayoutItem = SettingsTreeItem & { kind?: 'tag'; settingId?: string; content?: string }
 
 export interface SettingsTreeNode {
   id: string
   title: string
+  summary?: string
+  content?: string
+  settingId?: string
   category: SettingMeta['category']
   tags: string[]
   kind?: 'tag'
   parentId?: string
   depth: number
+  height?: number
   position: { x: number; y: number }
 }
 
@@ -84,6 +116,9 @@ function expandedTags(input: readonly SettingsTreeItem[]): { items: LayoutItem[]
       items.push({
         id: tagNodeId(setting.id, tag),
         title: tag,
+        summary: setting.tagDetails?.[tag]?.summary,
+        content: setting.tagDetails?.[tag]?.content,
+        settingId: setting.id,
         category: setting.category,
         tags: [],
         parentId: valid && typeof parent === 'string' ? tagNodeId(setting.id, parent) : setting.id,
@@ -173,53 +208,65 @@ export function buildSettingsTree(input: readonly SettingsTreeItem[]): SettingsT
 
   const nodes: SettingsTreeNode[] = []
   const edges: SettingsTreeEdge[] = []
-  const nodeById = new Map<string, SettingsTreeNode>()
-  const visited = new Set<string>()
-  let nextLeafRow = 0
+  const heightById = new Map(items.map((item) => [item.id, settingsTreeNodeHeight(item.summary)]))
+  const subtreeHeight = new Map<string, number>()
+  const branchGap = SETTING_ROW_GAP - SETTING_NODE_HEIGHT
 
+  // Measure each branch before positioning it so tall intermediate nodes have
+  // their own space even when their descendants are short.
   for (const rootId of roots) {
-    const stack: { id: string; depth: number; exit: boolean }[] = [
-      { id: rootId, depth: 0, exit: false }
-    ]
-
+    const stack: { id: string; exit: boolean }[] = [{ id: rootId, exit: false }]
     while (stack.length > 0) {
       const frame = stack.pop()!
       const children = childrenByParent.get(frame.id) ?? []
-
       if (frame.exit) {
-        const node = nodeById.get(frame.id)!
-        node.position.y = children.length > 0
-          ? children.reduce((total, id) => total + nodeById.get(id)!.position.y, 0) / children.length
-          : nextLeafRow++ * SETTING_ROW_GAP
+        const childrenHeight = children.reduce((sum, id) => sum + subtreeHeight.get(id)!, 0) + Math.max(0, children.length - 1) * branchGap
+        subtreeHeight.set(frame.id, Math.max(heightById.get(frame.id)!, childrenHeight))
         continue
       }
+      stack.push({ ...frame, exit: true })
+      for (let index = children.length - 1; index >= 0; index--) stack.push({ id: children[index], exit: false })
+    }
+  }
 
-      if (visited.has(frame.id)) continue
-      visited.add(frame.id)
+  let rootY = 0
+  for (const rootId of roots) {
+    const stack = [{ id: rootId, depth: 0, top: rootY }]
+    while (stack.length > 0) {
+      const frame = stack.pop()!
       const item = byId.get(frame.id)!
+      const height = heightById.get(frame.id)!
+      const blockHeight = subtreeHeight.get(frame.id)!
       const node: SettingsTreeNode = {
         id: item.id,
         title: item.title,
+        summary: item.summary,
+        content: item.content,
+        settingId: item.settingId,
         category: item.category,
         tags: [...item.tags],
         kind: item.kind,
         parentId: normalizedParentId(item),
         depth: frame.depth,
-        position: { x: frame.depth * SETTING_LEVEL_GAP, y: 0 }
+        height,
+        position: { x: frame.depth * SETTING_LEVEL_GAP, y: frame.top + (blockHeight - height) / 2 }
       }
       nodes.push(node)
-      nodeById.set(node.id, node)
-
       const parentId = parents.get(frame.id)
-      if (parentId) {
-        edges.push({ id: `setting:${parentId}:${frame.id}`, source: parentId, target: frame.id })
-      }
-
-      stack.push({ ...frame, exit: true })
-      for (let index = children.length - 1; index >= 0; index--) {
-        stack.push({ id: children[index], depth: frame.depth + 1, exit: false })
+      if (parentId) edges.push({ id: `setting:${parentId}:${frame.id}`, source: parentId, target: frame.id })
+      const children = childrenByParent.get(frame.id) ?? []
+      const childrenHeight = children.reduce((sum, id) => sum + subtreeHeight.get(id)!, 0) + Math.max(0, children.length - 1) * branchGap
+      let childTop = frame.top + (blockHeight - childrenHeight) / 2
+      const childFrames = children.map((id) => {
+        const childFrame = { id, depth: frame.depth + 1, top: childTop }
+        childTop += subtreeHeight.get(id)! + branchGap
+        return childFrame
+      })
+      for (let index = childFrames.length - 1; index >= 0; index--) {
+        stack.push(childFrames[index])
       }
     }
+    rootY += subtreeHeight.get(rootId)! + branchGap
   }
 
   return {
@@ -227,7 +274,7 @@ export function buildSettingsTree(input: readonly SettingsTreeItem[]): SettingsT
     edges,
     warnings,
     width: Math.max(...nodes.map((node) => node.position.x + SETTING_NODE_WIDTH)),
-    height: Math.max(...nodes.map((node) => node.position.y + SETTING_NODE_HEIGHT))
+    height: Math.max(...nodes.map((node) => node.position.y + (node.height ?? SETTING_NODE_HEIGHT)))
   }
 }
 

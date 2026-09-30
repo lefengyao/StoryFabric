@@ -349,6 +349,17 @@ export function validateSettingTagParents(tags: string[], tagParents: Record<str
   }
 }
 
+export function validateSettingTagDetails(tags: string[], tagDetails: SettingDoc['tagDetails']): void {
+  if (tagDetails === undefined) return
+  if (!tagDetails || typeof tagDetails !== 'object' || Array.isArray(tagDetails)) throw new Error('标签详情必须是对象')
+  const known = new Set(tags)
+  for (const [name, detail] of Object.entries(tagDetails)) {
+    if (!known.has(name) || !detail || typeof detail !== 'object' || Array.isArray(detail) ||
+      (detail.summary !== undefined && typeof detail.summary !== 'string') ||
+      (detail.content !== undefined && typeof detail.content !== 'string')) throw new Error(`标签详情无效：${name}`)
+  }
+}
+
 async function loadSettings(store: FileStore): Promise<StoredSetting[]> {
   const out: StoredSetting[] = []
   for (const filePath of await listMd(store, 'settings')) {
@@ -388,11 +399,12 @@ export async function saveSetting(store: FileStore, input: Partial<SettingDoc> &
   const existing = input.id ? all.find((item) => item.doc.id === input.id) : undefined
   const doc = existing
     ? ({ ...existing.doc, ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)), id: existing.doc.id } as SettingDoc)
-    : ({ id: input.id ?? genId('set'), title: input.title?.trim() || '未命名设定', category: input.category === 'other' ? 'other' : 'background', tags: input.tags ?? [], tagParents: input.tagParents, parentId: input.parentId, content: input.content ?? '' } satisfies SettingDoc)
+    : ({ id: input.id ?? genId('set'), title: input.title?.trim() || '未命名设定', summary: input.summary, category: input.category === 'other' ? 'other' : 'background', tags: input.tags ?? [], tagParents: input.tagParents, tagDetails: input.tagDetails, parentId: input.parentId, content: input.content ?? '' } satisfies SettingDoc)
   const parentId = settingParentId(doc.parentId)
   if (parentId) doc.parentId = parentId
   else delete doc.parentId
   validateSettingTagParents(doc.tags, doc.tagParents)
+  validateSettingTagDetails(doc.tags, doc.tagDetails)
   validateSettingParent(all, doc.id, doc.parentId, existing?.doc.parentId)
   const base = `${sanitizeFileName(doc.title)}.md`
   const relative = `${doc.category}/${base}`
