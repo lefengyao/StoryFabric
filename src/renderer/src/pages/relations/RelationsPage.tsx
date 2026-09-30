@@ -16,6 +16,7 @@ import { seedPosition } from '../../lib/graphSeed'
 import { Network, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
+import { useAndroidOverlayFocus } from '../../components/layout/useAndroidOverlayFocus'
 import { api } from '../../lib/api'
 import { cn, factionColor } from '../../lib/utils'
 import type { CharacterDoc, Relationship } from '../../../../shared/types'
@@ -125,6 +126,9 @@ export function RelationsPage(): React.ReactElement {
   const refresh = useWorkspace((s) => s.refresh)
   const [view, setView] = useState<'graph' | 'list'>('graph')
   const [editing, setEditing] = useState<Relationship | null>(null)
+  const backgroundRef = useRef<HTMLDivElement | null>(null)
+  const inspectorRef = useAndroidOverlayFocus(Boolean(editing), '[data-android-inspector-return="relations"]', backgroundRef)
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const [isNew, setIsNew] = useState(false)
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<CharNodeData>>([])
@@ -199,9 +203,9 @@ export function RelationsPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+    <div className="relative flex h-full min-h-0">
+      <div ref={backgroundRef} className="flex min-w-0 flex-1 flex-col">
+        <div data-android-page-toolbar className="flex items-center gap-2 border-b border-line px-4 py-2.5">
           <div className="flex rounded-lg border border-line p-0.5">
             {(['graph', 'list'] as const).map((v) => (
               <button
@@ -227,7 +231,7 @@ export function RelationsPage(): React.ReactElement {
             </span>
           ))}
           <div className="flex-1" />
-          <Button size="sm" variant="primary" onClick={startNew} disabled={chars.length < 2}>
+          <Button data-android-inspector-return="relations" size="sm" variant="primary" onClick={startNew} disabled={chars.length < 2}>
             <Plus size={13} /> 新增关系
           </Button>
         </div>
@@ -292,7 +296,7 @@ export function RelationsPage(): React.ReactElement {
 
       {/* 编辑侧栏 */}
       {editing && (
-        <aside className="w-80 shrink-0 space-y-3.5 overflow-y-auto border-l border-line p-4">
+        <aside ref={inspectorRef} tabIndex={isAndroid ? -1 : undefined} role={isAndroid ? 'dialog' : undefined} aria-label="编辑关系" data-android-inspector className="w-80 shrink-0 space-y-3.5 overflow-y-auto border-l border-line p-4">
           <div className="text-sm font-medium">{isNew ? '新增关系' : '编辑关系'}</div>
           <Field label="起始人物">
             <select value={editing.fromId} onChange={(e) => setEditing({ ...editing, fromId: e.target.value })} className={REL_SELECT_CLS}>

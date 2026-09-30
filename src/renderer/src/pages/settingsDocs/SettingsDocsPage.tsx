@@ -90,8 +90,8 @@ export function SettingsDocsPage(): React.ReactElement {
       {view === 'tree' ? (
         <SettingsTreeView items={items} workspaceName={summary?.name ?? 'StoryFabric'} initialRootId={selected?.id} onOpen={(item) => { void open(item) }} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
+        <div data-android-document-layout className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <div data-android-list-pane className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
             <div className="flex items-center justify-between p-3 pb-2"><span className="text-xs font-medium text-muted">设定资料</span><Button size="sm" variant="primary" onClick={create} title="新建设定"><Plus size={14} /></Button></div>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
               {(['background', 'other'] as SettingCategory[]).map((category) => (

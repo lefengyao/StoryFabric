@@ -137,9 +137,9 @@ export function CharactersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col sm:flex-row">
+    <div data-android-document-layout className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 左列：搜索 + 卡片列表 */}
-      <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+      <div data-android-list-pane className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="flex items-center gap-2 p-3 pb-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
@@ -337,7 +337,7 @@ function CharacterForm({
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 flex-1 min-h-0 sm:grid-cols-[280px_1fr]">
+      <div data-android-character-editor className="grid grid-cols-1 flex-1 min-h-0 sm:grid-cols-[280px_1fr]">
         <div className="space-y-3.5 overflow-y-auto border-b border-line p-4 sm:border-b-0 sm:border-r">
           <Field label="姓名 *">
             <Input value={draft.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="林晚" />

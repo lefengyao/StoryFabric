@@ -44,7 +44,16 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [agentMode, setAgentMode] = useState<AgentMode>('normal')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const referencePanelRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setDetailsOpen(false)
+      return
+    }
+    if (window.Capacitor?.isNativePlatform?.()) closeButtonRef.current?.focus()
+  }, [open])
   const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
   const input = useChatDraft(draftScope)
 
@@ -135,6 +144,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
 
   return (
     <div
+      data-android-agent-sidebar
       className={cn(
         'chat-sidebar-flyout chat-surface fixed inset-0 z-50 overflow-hidden transition-[width,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:relative sm:inset-auto sm:z-auto sm:h-full sm:shrink-0',
         open
@@ -144,7 +154,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
       aria-hidden={!open}
       inert={!open}
     >
-    <aside className={cn('chat-sidebar-panel absolute inset-y-0 right-0 flex w-full min-w-0 flex-col border-line bg-panel shadow-2xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:w-[420px] sm:border-l lg:w-[460px]', open ? 'translate-x-0' : 'translate-x-full')}>
+    <aside data-android-agent-panel className={cn('chat-sidebar-panel absolute inset-y-0 right-0 flex w-full min-w-0 flex-col border-line bg-panel shadow-2xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:w-[420px] sm:border-l lg:w-[460px]', open ? 'translate-x-0' : 'translate-x-full')}>
       <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line px-4">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-sm">
           <Sparkles size={17} />
@@ -167,7 +177,7 @@ export function ChatSidebar({ open }: { open: boolean }): React.ReactElement {
         <button type="button" onClick={() => void createSession()} title="新建会话" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg">
           <MessageSquarePlus size={16} />
         </button>
-        <button type="button" onClick={close} title="关闭侧栏" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg">
+        <button ref={closeButtonRef} type="button" onClick={close} title="关闭侧栏" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-elevated hover:text-fg">
           <X size={17} />
         </button>
       </header>

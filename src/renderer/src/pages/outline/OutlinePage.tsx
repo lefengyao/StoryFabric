@@ -90,8 +90,8 @@ export function OutlinePage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col sm:flex-row">
-      <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
+    <div data-android-document-layout className="flex h-full min-h-0 flex-col sm:flex-row">
+      <div data-android-list-pane className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-64 sm:border-b-0 sm:border-r">
         <div className="flex items-center justify-between p-3 pb-2">
           <div className="flex items-center gap-1"><Button size="sm" variant={kind === 'total' ? 'soft' : 'ghost'} onClick={() => { setKind('total'); setSelectedId(null); setDraft(null) }}>总纲</Button><Button size="sm" variant={kind === 'chapter' ? 'soft' : 'ghost'} onClick={() => { setKind('chapter'); setSelectedId(null); setDraft(null) }}>章纲</Button></div>
           <Button size="sm" variant="primary" onClick={() => void create()}>

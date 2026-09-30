@@ -89,7 +89,7 @@ export function UsagePage(): React.ReactElement {
   const totalDeleted = writing.reduce((sum, day) => sum + day.deleted, 0)
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div data-android-usage-page className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl space-y-6 p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -167,7 +167,7 @@ export function UsagePage(): React.ReactElement {
           </Card>
         ) : (
           <>
-            <div className="grid gap-3 sm:grid-cols-[1fr_1.6fr_1fr]">
+            <div data-android-usage-stats className="grid gap-3 sm:grid-cols-[1fr_1.6fr_1fr]">
               <Card className="p-4">
                 <div className="text-xs text-muted">调用次数</div>
                 <div className="mt-1 text-xl font-semibold">{fmt(stats.calls)}</div>

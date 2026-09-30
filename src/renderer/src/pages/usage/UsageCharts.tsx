@@ -13,7 +13,7 @@ export function UsageTokenPie({ promptTokens, completionTokens }: { promptTokens
   const outputPercent = total ? (output / total) * 100 : 0
 
   return (
-    <div className="mt-2 flex items-center gap-4">
+    <div data-android-token-pie className="mt-2 flex items-center gap-4">
       <div
         role="img"
         aria-label={`输入 ${fmt(input)} token，占 ${inputPercent.toFixed(1)}%；输出 ${fmt(output)} token，占 ${outputPercent.toFixed(1)}%`}
@@ -62,7 +62,7 @@ export function UsageBarChart({
 
   return (
     <div className="overflow-x-auto pb-1">
-      <div className="flex gap-1.5" style={{ minWidth }}>
+      <div data-android-usage-bars className="flex gap-1.5" style={{ minWidth }}>
         {items.map((item) => {
           const input = nonnegative(item.promptTokens)
           const output = nonnegative(item.completionTokens)

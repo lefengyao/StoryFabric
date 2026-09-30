@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MarkdownEditor } from '../../components/editor/MarkdownEditor'
+import { useAndroidOverlayFocus } from '../../components/layout/useAndroidOverlayFocus'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
@@ -144,6 +145,9 @@ export function EventsPage(): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null)
   const [editing, setEditing] = useState<StoryEvent | null>(null)
+  const backgroundRef = useRef<HTMLDivElement | null>(null)
+  const inspectorRef = useAndroidOverlayFocus(Boolean(editing), '[data-android-inspector-return="events"]', backgroundRef)
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const [isNew, setIsNew] = useState(false)
   const [tagsText, setTagsText] = useState('')
   const [saving, setSaving] = useState(false)
@@ -303,12 +307,12 @@ export function EventsPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full min-h-0">
+      <div ref={backgroundRef} className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
           <span className="text-xs text-faint">全局主线 · 共 {events.length} 个事件</span>
           <div className="mx-1 h-5 w-px bg-line" />
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          <div data-android-volume-tabs className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {layout.volumes.map((volume) => (
               <button
                 key={volume.id}
@@ -322,7 +326,7 @@ export function EventsPage(): React.ReactElement {
           </div>
           <Button size="sm" variant="ghost" onClick={() => void flow?.zoomOut()} title="缩小"><ZoomOut size={13} /></Button>
           <Button size="sm" variant="ghost" onClick={() => void flow?.zoomIn()} title="放大"><ZoomIn size={13} /></Button>
-          <Button size="sm" variant="primary" onClick={startNew}><Plus size={13} /> 新增事件</Button>
+          <Button data-android-inspector-return="events" size="sm" variant="primary" onClick={startNew}><Plus size={13} /> 新增事件</Button>
         </div>
 
         {events.length === 0 ? (
@@ -377,7 +381,7 @@ export function EventsPage(): React.ReactElement {
       )}
 
       {editing && (
-        <aside className="w-[390px] shrink-0 space-y-3.5 overflow-y-auto border-l border-line p-4">
+        <aside ref={inspectorRef} tabIndex={isAndroid ? -1 : undefined} role={isAndroid ? 'dialog' : undefined} aria-label="编辑事件" data-android-inspector className="w-[390px] shrink-0 space-y-3.5 overflow-y-auto border-l border-line p-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">{isNew ? '新增事件' : '编辑事件'}</span>
             {!isNew && <Button variant="ghost" size="sm" className="text-danger hover:text-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> 删除</Button>}

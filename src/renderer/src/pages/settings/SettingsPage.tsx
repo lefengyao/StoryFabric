@@ -142,7 +142,7 @@ export function SettingsPage(): React.ReactElement {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
+      <div data-android-tab-strip className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -158,7 +158,7 @@ export function SettingsPage(): React.ReactElement {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-6 p-6">
+        <div data-android-settings-content className="mx-auto max-w-2xl space-y-6 p-6">
           {active === 'models' && (
             <>
               {/* 供应商 */}

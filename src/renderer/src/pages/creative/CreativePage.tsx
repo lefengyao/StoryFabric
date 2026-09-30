@@ -16,7 +16,7 @@ export function CreativePage(): React.ReactElement {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2" role="tablist" aria-label="创作资源">
+      <div data-android-tab-strip className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2" role="tablist" aria-label="创作资源">
         {TABS.map((tab) => (
           <button
             key={tab.key}

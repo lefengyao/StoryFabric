@@ -83,6 +83,20 @@ export function ChatPage(): React.ReactElement {
   const [renameText, setRenameText] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sessionImportRef = useRef<HTMLInputElement | null>(null)
+  const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+
+  useEffect(() => {
+    if (!isAndroid) return
+    const closeOnLandscape = (): void => {
+      if (window.matchMedia('(orientation: landscape)').matches) setSessionListOpen(false)
+    }
+    window.addEventListener('resize', closeOnLandscape)
+    window.addEventListener('orientationchange', closeOnLandscape)
+    return () => {
+      window.removeEventListener('resize', closeOnLandscape)
+      window.removeEventListener('orientationchange', closeOnLandscape)
+    }
+  }, [isAndroid])
   const [sessionTransferBusy, setSessionTransferBusy] = useState(false)
   const [questionDialogOpen, setQuestionDialogOpen] = useState(false)
   const [skillCandidateDialogOpen, setSkillCandidateDialogOpen] = useState(false)
@@ -272,7 +286,7 @@ export function ChatPage(): React.ReactElement {
   return (
     <div className={cn(workbenchShellClass(), 'chat-surface')}>
       <div className={workbenchTopbarClass()}>
-        <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2 text-xs text-muted lg:hidden" aria-label="打开会话列表" onClick={() => setSessionListOpen(true)}><PanelLeftOpen size={15} />会话</button>
+        <button data-android-session-trigger type="button" className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-panel px-2 text-xs text-muted lg:hidden" aria-label="打开会话列表" onClick={() => setSessionListOpen(true)}><PanelLeftOpen size={15} />会话</button>
         <ChatWorkbenchIdentity showSessionLength={Boolean(settings?.showSessionLength)} messageCount={chat.messages.length} totalChars={totalChars} />
         <span className="chat-text-meta hidden truncate text-faint xl:inline">资料不进提示词 · 需要时自动查阅</span>
         <select
@@ -293,10 +307,10 @@ export function ChatPage(): React.ReactElement {
       </div>
       <div className={workbenchColumnsClass()}>
       {/* 会话列表 */}
-      {sessionListOpen && <button type="button" className="fixed inset-0 z-30 bg-[#071024]/50 lg:hidden" aria-label="关闭会话列表" onClick={() => setSessionListOpen(false)} />}
-      <aside className={cn('chat-session-drawer shrink-0 flex-col border-r border-line bg-[#f1efe9] lg:relative lg:flex lg:h-auto lg:w-60', sessionListOpen ? 'fixed inset-y-0 left-0 z-40 flex w-[min(84vw,20rem)] shadow-2xl' : 'hidden')}>
+      {sessionListOpen && <button data-android-session-backdrop type="button" className="fixed inset-0 z-30 bg-[#071024]/50 lg:hidden" aria-label="关闭会话列表" onClick={() => setSessionListOpen(false)} />}
+      <aside data-android-session-list data-open={sessionListOpen} className={cn('chat-session-drawer shrink-0 flex-col border-r border-line bg-[#f1efe9] lg:relative lg:flex lg:h-auto lg:w-60', sessionListOpen ? 'fixed inset-y-0 left-0 z-40 flex w-[min(84vw,20rem)] shadow-2xl' : 'hidden')}>
         <div className="p-3 pb-2">
-          <div className="flex gap-2">
+          <div data-android-session-actions className="flex gap-2">
                 <Button size="sm" variant="outline" className="min-w-0 flex-1 justify-center" onClick={() => { setSessionListOpen(false); void chat.newSession() }} disabled={sessionTransferBusy}>
             <MessageSquarePlus size={14} /> 新会话
             </Button>
@@ -357,7 +371,7 @@ export function ChatPage(): React.ReactElement {
                   </div>
                 </button>
               )}
-              <div className="mr-1 flex shrink-0 gap-0.5 lg:hidden lg:group-hover:flex">
+              <div data-android-session-row-actions className="mr-1 flex shrink-0 gap-0.5 lg:hidden lg:group-hover:flex">
                 {chat.runningSessionIds.includes(s.id) && (
                   <button
                     onClick={() => void chat.stopSession(s.id).catch((error) => useChat.setState({ error: error instanceof Error ? error.message : String(error) }))}

@@ -126,7 +126,7 @@ export function InspirationPage(): React.ReactElement {
         <span className="text-xs text-muted">不写正文，只做灵感、资料和方法提炼</span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid max-w-6xl gap-5 p-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <div data-android-inspiration-grid className="mx-auto grid max-w-6xl gap-5 p-5 lg:grid-cols-[280px_minmax(0,1fr)]">
           <aside className="space-y-4">
             <Card className="p-3">
               <div className="mb-2 text-xs font-semibold text-muted">工作模块</div>

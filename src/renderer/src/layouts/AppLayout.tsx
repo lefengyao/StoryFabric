@@ -76,6 +76,8 @@ export function AppLayout(): React.ReactElement {
   const seg = location.pathname.split('/')[1] ?? ''
   const title = TITLE_MAP[seg] ?? ''
   const importInput = useRef<HTMLInputElement>(null)
+  const chatToggleRef = useRef<HTMLButtonElement>(null)
+  const wasChatPanelOpen = useRef(false)
   const [transferBusy, setTransferBusy] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
@@ -85,6 +87,7 @@ export function AppLayout(): React.ReactElement {
   const toggleChatPanel = useUi((s) => s.toggleChatPanel)
   const closeChatPanel = useUi((s) => s.closeChatPanel)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+  const showSidebarExpanded = sidebarExpanded && !isAndroid
   const isWeb = isWebPlatform()
 
   useEffect(() => {
@@ -95,7 +98,25 @@ export function AppLayout(): React.ReactElement {
     if (seg === 'chat') closeChatPanel()
   }, [seg, closeChatPanel])
 
+  useEffect(() => {
+    if (isAndroid && wasChatPanelOpen.current && !chatPanelOpen) chatToggleRef.current?.focus()
+    wasChatPanelOpen.current = chatPanelOpen
+  }, [chatPanelOpen, isAndroid])
+
   useEffect(() => setMobileNavOpen(false), [location.pathname])
+
+  useEffect(() => {
+    if (!isAndroid) return
+    const closeOnLandscape = (): void => {
+      if (window.matchMedia('(orientation: landscape)').matches) setMobileNavOpen(false)
+    }
+    window.addEventListener('resize', closeOnLandscape)
+    window.addEventListener('orientationchange', closeOnLandscape)
+    return () => {
+      window.removeEventListener('resize', closeOnLandscape)
+      window.removeEventListener('orientationchange', closeOnLandscape)
+    }
+  }, [isAndroid])
 
   const downloadArchive = async (): Promise<void> => {
     setTransferBusy(true); setTransferError(null)
@@ -143,7 +164,7 @@ export function AppLayout(): React.ReactElement {
     <WorkspaceViewport>
     <div className="flex h-full min-h-0 flex-row bg-app" data-app-shell>
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-[70] lg:hidden">
+        <div data-android-nav-drawer className="fixed inset-0 z-[70] lg:hidden">
           <button type="button" className="absolute inset-0 bg-[#071024]/55" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />
           <nav className="mobile-nav-drawer absolute inset-y-0 left-0 flex w-[min(82vw,20rem)] flex-col overflow-y-auto bg-[#101936] px-4 py-4 text-white shadow-2xl" aria-label="工作区导航">
             <div className="mb-4 flex items-center justify-between text-base font-semibold">
@@ -164,15 +185,16 @@ export function AppLayout(): React.ReactElement {
         </div>
       )}
       <aside
+        data-android-nav-rail
         data-sidebar-preference-key={SIDEBAR_EXPANDED_KEY}
         className={cn(
           'app-sidebar-scroll order-none hidden h-full shrink-0 flex-col items-center justify-start gap-1.5 overflow-x-hidden overflow-y-auto border-r border-white/10 bg-[#101936] px-3 py-4 text-white/65 shadow-none lg:flex',
-          sidebarWidthClass(sidebarExpanded)
+          sidebarWidthClass(showSidebarExpanded)
         )}
       >
         <NavLink to="/chat" title="织章 · StoryFabric" className="flex items-center gap-3 px-1 pb-5">
           <BrandMark variant="flat" size={38} className="shrink-0 rounded-[10px] shadow-[0_10px_24px_rgba(0,0,0,0.22)]" />
-          {sidebarExpanded && (
+          {showSidebarExpanded && (
             <span className="min-w-0">
               <strong className="block font-serif text-[19px] tracking-[0.08em] text-white">织章</strong>
               <small className="mt-1 block text-[8px] font-semibold tracking-[0.22em] text-white/[0.42]">STORYFABRIC</small>
@@ -180,7 +202,7 @@ export function AppLayout(): React.ReactElement {
           )}
         </NavLink>
 
-        {sidebarExpanded && <div className="mb-2 px-3 text-[10px] font-semibold tracking-[0.16em] text-white/[0.28]">故事工作区</div>}
+        {showSidebarExpanded && <div className="mb-2 px-3 text-[10px] font-semibold tracking-[0.16em] text-white/[0.28]">故事工作区</div>}
         {NAV_ITEMS.map(({ to, icon: Icon, label, load }) => (
           <NavLink
             key={to}
@@ -192,23 +214,23 @@ export function AppLayout(): React.ReactElement {
             className={({ isActive }) =>
               cn(
                 'group relative flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:rounded-lg',
-                sidebarExpanded ? 'sm:w-full sm:justify-start sm:gap-3 sm:px-3' : 'sm:w-10',
+                showSidebarExpanded ? 'sm:w-full sm:justify-start sm:gap-3 sm:px-3' : 'sm:w-10',
                 isActive ? 'bg-[#d85d49] text-white shadow-[0_10px_24px_rgba(216,93,73,0.24)]' : 'text-white/60 hover:bg-white/[0.08] hover:text-white'
               )
             }
           >
             <Icon size={18} />
-            <span className={sidebarLabelClass(sidebarExpanded)}>
+            <span className={sidebarLabelClass(showSidebarExpanded)}>
               {label}
             </span>
-            <span className={cn('pointer-events-none absolute bottom-14 z-30 hidden whitespace-nowrap rounded-md border border-white/10 bg-[#182346] px-2 py-1 text-xs text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block', sidebarExpanded && 'sm:hidden')}>
+            <span className={cn('pointer-events-none absolute bottom-14 z-30 hidden whitespace-nowrap rounded-md border border-white/10 bg-[#182346] px-2 py-1 text-xs text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100 sm:bottom-auto sm:left-12 sm:block', showSidebarExpanded && 'sm:hidden')}>
               {label}
             </span>
           </NavLink>
         ))}
 
         <div className="hidden flex-1 sm:block" />
-        {sidebarExpanded && summary && (
+        {showSidebarExpanded && summary && (
           <div className="mb-2 rounded-xl border border-white/[0.08] bg-white/[0.05] p-3">
             <span className="block text-[9px] text-white/[0.36]">当前工作区</span>
             <strong className="mt-1 block w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-white/[0.84]" title={summary.name}>{summary.name}</strong>
@@ -224,13 +246,13 @@ export function AppLayout(): React.ReactElement {
           className={({ isActive }) =>
             cn(
               'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
-              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
+              showSidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
               isActive ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/[0.08] hover:text-white'
             )
           }
         >
           <SettingsIcon size={18} />
-              <span className={sidebarLabelClass(sidebarExpanded)}>设置</span>
+              <span className={sidebarLabelClass(showSidebarExpanded)}>设置</span>
         </NavLink>
         <NavLink
           to="/user"
@@ -241,13 +263,13 @@ export function AppLayout(): React.ReactElement {
           className={({ isActive }) =>
             cn(
               'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
-              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
+              showSidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
               isActive ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/[0.08] hover:text-white'
             )
           }
         >
           <UserRound size={18} />
-          <span className={sidebarLabelClass(sidebarExpanded)}>用户</span>
+          <span className={sidebarLabelClass(showSidebarExpanded)}>用户</span>
         </NavLink>
         <NavLink
           to="/memory"
@@ -258,13 +280,13 @@ export function AppLayout(): React.ReactElement {
           className={({ isActive }) =>
             cn(
               'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors',
-              sidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
+              showSidebarExpanded && 'sm:w-full sm:justify-start sm:gap-3 sm:px-3',
               isActive ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/[0.08] hover:text-white'
             )
           }
         >
           <Brain size={18} />
-          <span className={sidebarLabelClass(sidebarExpanded)}>记忆</span>
+          <span className={sidebarLabelClass(showSidebarExpanded)}>记忆</span>
         </NavLink>
         <button
           type="button"
@@ -273,6 +295,7 @@ export function AppLayout(): React.ReactElement {
           onClick={() => setSidebarExpanded(!sidebarExpanded)}
           className={cn(
             'hidden h-10 shrink-0 items-center rounded-lg text-white/40 transition-colors hover:bg-white/[0.08] hover:text-white sm:flex',
+            isAndroid && 'sm:!hidden',
             sidebarExpanded ? 'sm:w-full sm:justify-start sm:gap-3 sm:px-3' : 'w-10 justify-center sm:w-10'
           )}
         >
@@ -283,8 +306,8 @@ export function AppLayout(): React.ReactElement {
 
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel/[0.92] px-3 py-2 backdrop-blur-xl sm:min-h-14 sm:flex-wrap sm:px-5 sm:py-2">
-            <button type="button" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-panel text-muted lg:hidden" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={18} /></button>
+          <header data-android-app-header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel/[0.92] px-3 py-2 backdrop-blur-xl sm:min-h-14 sm:flex-wrap sm:px-5 sm:py-2">
+            <button data-android-nav-trigger type="button" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-panel text-muted lg:hidden" aria-label="打开导航" onClick={() => setMobileNavOpen(true)}><Menu size={18} /></button>
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
@@ -305,6 +328,7 @@ export function AppLayout(): React.ReactElement {
             <div className="flex-1" />
             {shouldShowGlobalModelSelector(seg) && modelOptions.length > 0 && (
               <select
+                data-android-desktop-action
                 value={modelValue}
                 onChange={(e) => void changeModel(e.target.value)}
                 title="默认对话模型"
@@ -323,6 +347,7 @@ export function AppLayout(): React.ReactElement {
               </select>
             )}
             <button
+              data-android-desktop-action
               onClick={() => void refresh()}
               disabled={importBusy}
               title="重新加载工作区"
@@ -331,14 +356,15 @@ export function AppLayout(): React.ReactElement {
               <FolderSync size={14} />
               <span className="max-w-28 truncate xl:max-w-40">{summary?.name}</span>
             </button>
-            <button onClick={() => void downloadArchive()} disabled={transferBusy} title="导出工作区" className="hidden rounded-lg p-2 text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-50 lg:block">
+            <button data-android-desktop-action onClick={() => void downloadArchive()} disabled={transferBusy} title="导出工作区" className="hidden rounded-lg p-2 text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-50 lg:block">
               <Download size={14} />
             </button>
-            <button onClick={() => importInput.current?.click()} disabled={transferBusy} title="导入工作区" className="hidden rounded-lg p-2 text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-50 lg:block">
+            <button data-android-desktop-action onClick={() => importInput.current?.click()} disabled={transferBusy} title="导入工作区" className="hidden rounded-lg p-2 text-muted transition hover:bg-elevated hover:text-fg disabled:opacity-50 lg:block">
               <Upload size={14} />
             </button>
             <input ref={importInput} type="file" accept={WORKSPACE_ARCHIVE_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readArchive(file) }} />
             <button
+              data-android-desktop-action
               onClick={() => void close()}
               disabled={importBusy}
               title="关闭当前工作区"
@@ -348,6 +374,7 @@ export function AppLayout(): React.ReactElement {
             </button>
             {seg !== 'chat' && (
               <button
+                ref={chatToggleRef}
                 type="button"
                 onClick={toggleChatPanel}
                 title={chatPanelOpen ? '收起智能体侧栏' : '打开智能体侧栏'}
@@ -365,7 +392,7 @@ export function AppLayout(): React.ReactElement {
             )}
           </header>
           {transferError && <div className="border-b border-danger/30 bg-danger-soft px-4 py-1 text-xs text-danger">{transferError}</div>}
-          <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-app lg:overflow-hidden">
+          <main data-android-main className="min-h-0 min-w-0 flex-1 overflow-auto bg-app lg:overflow-hidden">
             <div className="h-full min-w-0 bg-panel/[0.72] lg:overflow-hidden">
               <Outlet />
             </div>

@@ -417,11 +417,11 @@ export function ChaptersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col sm:flex-row">
+    <div data-android-document-layout className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 章节列表 */}
-      <div className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+      <div data-android-list-pane className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="shrink-0 border-b border-line px-3 py-3">
-          <div className="flex min-w-0 items-center gap-2">
+          <div data-android-chapter-actions className="flex min-w-0 items-center gap-2">
             <div role="tablist" aria-label="章节箱" className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
               <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'draft' ? 'soft' : 'ghost'} onClick={() => changeBox('draft')}>草稿箱</Button>
               <Button size="sm" className="h-8 min-w-0 justify-center px-2" variant={box === 'main' ? 'soft' : 'ghost'} onClick={() => changeBox('main')}>正文箱</Button>
