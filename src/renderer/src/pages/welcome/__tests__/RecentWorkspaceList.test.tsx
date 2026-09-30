@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkspaceListItem } from '../../../../../shared/types'
 import { RecentWorkspaceList, triggerRecentWorkspaceOpen, triggerRecentWorkspaceRetry } from '../RecentWorkspaceList'
-import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, shouldAutoLoadRecentWorkspaces, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker, shouldResetRecentWorkspaces } from '../WelcomePage'
+import { createRecentConfigKey, createWorkspaceOpenRequestGuard, isWorkspaceRequestCurrent, openRecentWorkspaceThenRefresh, shouldClearRecentWorkspaceOpening, shouldClearWorkspaceLoading, shouldCloseWorkspacePicker, shouldResetRecentWorkspaces } from '../WelcomePage'
 
 const item = (index: number, overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem => ({
   name: `工作区 ${index}`,
@@ -33,20 +33,6 @@ const renderedButtons = (markup: string): string[] =>
   Array.from(markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g), (match) => match[0])
 
 describe('RecentWorkspaceList', () => {
-  it('does not log in for each service-key keystroke, but loads immediately after connecting', async () => {
-    const loginRemote = vi.fn()
-    let submitted = false
-
-    for (const _key of ['s', 'se', 'sec', 'secr', 'secret']) {
-      if (shouldAutoLoadRecentWorkspaces(false, 'remote', submitted)) loginRemote()
-    }
-    expect(loginRemote).not.toHaveBeenCalled()
-
-    submitted = true
-    if (shouldAutoLoadRecentWorkspaces(false, 'remote', submitted)) loginRemote()
-    expect(loginRemote).toHaveBeenCalledOnce()
-  })
-
   it('shows an empty state when there are no recent workspaces', () => {
     const markup = renderList({ items: [] })
 
@@ -110,12 +96,12 @@ describe('RecentWorkspaceList', () => {
     expect(onRetry).toHaveBeenCalledOnce()
   })
 
-  it('creates a stable key for the complete recent-list configuration', () => {
-    const key = createRecentConfigKey(false, false, 'remote', 'https://example.test', 'secret')
+  it('creates a stable key for the current platform', () => {
+    const key = createRecentConfigKey(false, false)
 
-    expect(key).toBe(createRecentConfigKey(false, false, 'remote', 'https://example.test', 'secret'))
-    expect(key).not.toBe(createRecentConfigKey(false, false, 'local', '', ''))
-    expect(key).not.toBe(createRecentConfigKey(false, false, 'remote', 'https://example.test', 'other-secret'))
+    expect(key).toBe(createRecentConfigKey(false, false))
+    expect(key).not.toBe(createRecentConfigKey(true, false))
+    expect(key).not.toBe(createRecentConfigKey(false, true))
   })
 
   it('does not cancel the initial recent-workspace load before its result arrives', () => {

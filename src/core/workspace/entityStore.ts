@@ -329,6 +329,26 @@ function validateSettingParent(all: StoredSetting[], id: string, parentId: strin
   }
 }
 
+export function validateSettingTagParents(tags: string[], tagParents: Record<string, string> | undefined): void {
+  if (tagParents === undefined) return
+  if (!tagParents || typeof tagParents !== 'object' || Array.isArray(tagParents)) throw new Error('标签父级关系必须是对象')
+  const names = new Set(tags)
+  const parents = new Map<string, string>()
+  for (const [child, parent] of Object.entries(tagParents)) {
+    if (!names.has(child) || typeof parent !== 'string' || !names.has(parent)) throw new Error(`父标签不存在或子标签无效：${child}`)
+    parents.set(child, parent)
+  }
+  for (const child of parents.keys()) {
+    const visited = new Set<string>()
+    let current: string | undefined = child
+    while (current && parents.has(current)) {
+      if (visited.has(current)) throw new Error('标签父级关系存在循环')
+      visited.add(current)
+      current = parents.get(current)
+    }
+  }
+}
+
 async function loadSettings(store: FileStore): Promise<StoredSetting[]> {
   const out: StoredSetting[] = []
   for (const filePath of await listMd(store, 'settings')) {
@@ -368,10 +388,11 @@ export async function saveSetting(store: FileStore, input: Partial<SettingDoc> &
   const existing = input.id ? all.find((item) => item.doc.id === input.id) : undefined
   const doc = existing
     ? ({ ...existing.doc, ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)), id: existing.doc.id } as SettingDoc)
-    : ({ id: input.id ?? genId('set'), title: input.title?.trim() || '未命名设定', category: input.category === 'other' ? 'other' : 'background', tags: input.tags ?? [], parentId: input.parentId, content: input.content ?? '' } satisfies SettingDoc)
+    : ({ id: input.id ?? genId('set'), title: input.title?.trim() || '未命名设定', category: input.category === 'other' ? 'other' : 'background', tags: input.tags ?? [], tagParents: input.tagParents, parentId: input.parentId, content: input.content ?? '' } satisfies SettingDoc)
   const parentId = settingParentId(doc.parentId)
   if (parentId) doc.parentId = parentId
   else delete doc.parentId
+  validateSettingTagParents(doc.tags, doc.tagParents)
   validateSettingParent(all, doc.id, doc.parentId, existing?.doc.parentId)
   const base = `${sanitizeFileName(doc.title)}.md`
   const relative = `${doc.category}/${base}`

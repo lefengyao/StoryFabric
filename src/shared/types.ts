@@ -147,6 +147,8 @@ export interface SettingDoc {
   title: string
   category: SettingCategory
   tags: string[]
+  /** Child tag name -> parent tag name. Other tags belong directly to the setting. */
+  tagParents?: Record<string, string>
   parentId?: string
   content: string
 }

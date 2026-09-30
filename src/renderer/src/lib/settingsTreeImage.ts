@@ -52,10 +52,10 @@ export function settingsTreeSvg(graph: SettingsTreeGraph): { svg: string; width:
     const x = node.position.x + PADDING
     const y = node.position.y + PADDING
     const category = node.category === 'background' ? '背景设定' : '其他设定'
-    const meta = `${category} · ${node.tags.length} 个标签`
+    const meta = node.kind === 'tag' ? '标签' : `${category} · ${node.tags.length} 个标签`
     const titleClipId = `setting-title-${index}`
     return [
-      `<rect x="${x}" y="${y}" width="${SETTING_NODE_WIDTH}" height="${SETTING_NODE_HEIGHT}" rx="12" fill="#ffffff" stroke="#d6d3d1" stroke-width="1.5"/>`,
+      `<rect x="${x}" y="${y}" width="${SETTING_NODE_WIDTH}" height="${SETTING_NODE_HEIGHT}" rx="12" fill="${node.kind === 'tag' ? '#f4eee7' : '#ffffff'}" stroke="#d6d3d1" stroke-width="1.5"/>`,
       `<clipPath id="${titleClipId}"><rect x="${x + 16}" y="${y + 13}" width="${TITLE_WIDTH}" height="30"/></clipPath>`,
       `<text x="${x + 16}" y="${y + 36}" clip-path="url(#${titleClipId})" fill="#292524" font-size="${TITLE_FONT_SIZE}" font-weight="600" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif"><tspan>${escapeXml(clampedTitle(node.title))}</tspan></text>`,
       `<text x="${x + 16}" y="${y + 65}" fill="#78716c" font-size="12" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif">${escapeXml(meta)}</text>`

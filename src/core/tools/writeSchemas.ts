@@ -81,6 +81,8 @@ export const AGENT_SETTING_SCHEMA = {
     title: { type: 'string', minLength: 1 },
     category: { type: 'string', enum: ['background', 'other'] },
     tags: { type: 'array', items: { type: 'string' } },
+    parentId: { type: 'string', description: '父级设定的 id；省略或空字符串表示根设定' },
+    tagParents: { type: 'object', additionalProperties: { type: 'string' }, description: '子标签名到父标签名的映射；未列出的标签直属本设定。例如 {"哈夫克":"势力","安保部门":"哈夫克"}' },
     content: { type: 'string' }
   }
 } as const

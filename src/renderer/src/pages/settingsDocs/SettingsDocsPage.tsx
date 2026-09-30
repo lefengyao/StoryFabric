@@ -9,6 +9,7 @@ import { availableParentIds } from '../../lib/settingsTree'
 import type { SettingCategory, SettingDoc, SettingMeta } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 import { SettingsTreeView } from './SettingsTreeView'
+import { TagHierarchyEditor } from './TagHierarchyEditor'
 
 export function SettingsDocsPage(): React.ReactElement {
   const summary = useWorkspace((s) => s.summary)
@@ -128,6 +129,7 @@ export function SettingsDocsPage(): React.ReactElement {
                 {draft.id && <Button variant="ghost" size="sm" className="text-danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /></Button>}
                 <Button variant="primary" size="sm" onClick={() => void save()}><Save size={13} /> 保存</Button>
               </div>
+              <TagHierarchyEditor key={draft.id || 'new'} tags={draft.tags} tagParents={draft.tagParents} onChange={(tags, tagParents) => { setDraft({ ...draft, tags, tagParents }); setDirty(true) }} />
               <div className="min-h-0 flex-1 p-4"><MarkdownEditor value={draft.content} onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }} /></div>
             </div>
           )}

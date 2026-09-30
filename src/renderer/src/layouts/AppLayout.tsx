@@ -8,8 +8,7 @@ import { cn } from '../lib/utils'
 import { api } from '../lib/api'
 import { readSidebarExpanded, SIDEBAR_EXPANDED_KEY, writeSidebarExpanded } from '../lib/navigationPreference'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../lib/workspaceArchiveFile'
-import { getPlatformApi } from '../platform/platformApi'
-import { HttpPlatformApi } from '../platform/httpApi'
+import { isWebPlatform } from '../platform/platformApi'
 import { ChatSidebar } from '../components/chat/ChatSidebar'
 import { useUi } from '../stores/uiStore'
 import { WorkspaceViewport } from '../components/layout/WorkspaceViewport'
@@ -86,7 +85,7 @@ export function AppLayout(): React.ReactElement {
   const toggleChatPanel = useUi((s) => s.toggleChatPanel)
   const closeChatPanel = useUi((s) => s.closeChatPanel)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
-  const isRemote = getPlatformApi() instanceof HttpPlatformApi
+  const isWeb = isWebPlatform()
 
   useEffect(() => {
     writeSidebarExpanded(getSidebarStorage(), sidebarExpanded)
@@ -120,7 +119,7 @@ export function AppLayout(): React.ReactElement {
     setTransferBusy(true); setImportBusy(true); setTransferError(null)
     try {
       const bytes = await readWorkspaceArchiveFile(file)
-      if (!isRemote && !isAndroid) {
+      if (!isWeb && !isAndroid) {
         const parentDir = await api.pickFolder()
         if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
         await importArchive(bytes, file.name, { parentDir })

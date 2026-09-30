@@ -23,6 +23,7 @@ interface SettingNodeData extends Record<string, unknown> {
   title: string
   category: string
   tagCount: number
+  kind?: 'tag'
   warning?: string
 }
 
@@ -31,16 +32,14 @@ type SettingFlowNode = Node<SettingNodeData, 'settingNode'>
 function SettingNode({ data, selected }: NodeProps<SettingFlowNode>): React.ReactElement {
   return (
     <div
-      className={`rounded-xl border-2 bg-panel px-3 py-2.5 text-left shadow-sm ${selected ? 'border-accent' : data.warning ? 'border-coral' : 'border-line'}`}
+      className={`rounded-xl border-2 px-3 py-2.5 text-left shadow-sm ${data.kind === 'tag' ? 'bg-accent-soft' : 'bg-panel'} ${selected ? 'border-accent' : data.warning ? 'border-coral' : 'border-line'}`}
       style={{ width: SETTING_NODE_WIDTH, height: SETTING_NODE_HEIGHT }}
       title={data.warning}
     >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-accent" />
       <strong className="block truncate text-sm text-fg">{data.title}</strong>
       <div className="mt-2 flex items-center gap-2 text-[11px] text-muted">
-        <span>{data.category}</span>
-        <span>·</span>
-        <span>{data.tagCount} 个标签</span>
+        {data.kind === 'tag' ? <span>标签</span> : <><span>{data.category}</span><span>·</span><span>{data.tagCount} 个标签</span></>}
       </div>
       {data.warning && <span className="mt-1 block truncate text-[10px] text-coral">{data.warning}</span>}
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-accent" />
@@ -88,6 +87,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
       title: node.title,
       category: node.category === 'background' ? '背景设定' : '其他设定',
       tagCount: node.tags.length,
+      kind: node.kind,
       warning: warningById.get(node.id)
     }
   })), [graph.nodes, warningById])
@@ -133,7 +133,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
             {selectableItems.map((item) => <option key={item.id} value={item.id}>{item.title}{rootIdSet.has(item.id) ? ' · 根节点' : ''}</option>)}
           </select>
         </label>
-        <span className="text-xs text-muted">{graph.nodes.length} 条设定 · {graph.edges.length} 条父子关系</span>
+        <span className="text-xs text-muted">{selectedItems.length} 条设定 · {graph.nodes.length - selectedItems.length} 个标签 · {graph.edges.length} 条父子关系</span>
         {graph.warnings.length > 0 && <span className="text-xs text-coral">{graph.warnings.length} 条关系需要检查</span>}
         {graph.nodes.length === 1 && selectableItems.length > 1 && <span className="text-xs text-faint">当前子树暂无父子关系，可在列表模式设置父级</span>}
         <div className="flex-1" />
@@ -157,7 +157,7 @@ export function SettingsTreeView({ items, workspaceName, onOpen, initialRootId }
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             onNodeClick={(_, node) => {
-              setSelectedRootId(node.id)
+              if (node.data.kind !== 'tag') setSelectedRootId(node.id)
             }}
             fitView
             nodesDraggable={false}

@@ -63,4 +63,12 @@ describe('two-scope user memory', () => {
     expect(results.filter((item) => item.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter((item) => item.status === 'rejected')).toHaveLength(1)
   })
+
+  it('points to the memory page when a scope is full', async () => {
+    const memory = new MemoryStore(new MemoryFileStore(), new MemoryFileStore())
+    const initial = await memory.read('project')
+    await memory.update('project', { baseRevision: initial.revision, enabled: true, content: 'x'.repeat(16_000) })
+
+    await expect(memory.remember('project', '新的偏好')).rejects.toThrow('记忆已满，请先在记忆页整理')
+  })
 })

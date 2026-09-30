@@ -5,6 +5,7 @@ import {
   SETTING_NODE_HEIGHT,
   SETTING_NODE_WIDTH,
   SETTING_ROW_GAP,
+  availableTagParentNames,
   availableParentIds,
   buildSettingsTree,
   settingsTreeItems,
@@ -77,6 +78,38 @@ describe('settingsTree', () => {
     expect(buildSettingsTree([])).toEqual({ nodes: [], edges: [], warnings: [], width: 0, height: 0 })
   })
 
+  it('shows legacy flat tags as children of their setting', () => {
+    const root = { ...setting('world', '世界观'), tags: ['地理', '历史'] }
+    const graph = buildSettingsTree([root])
+    const world = graph.nodes.find((node) => node.id === root.id)!
+    const geography = graph.nodes.find((node) => node.title === '地理')!
+    const history = graph.nodes.find((node) => node.title === '历史')!
+
+    expect(graph.nodes).toHaveLength(3)
+    expect(geography.kind).toBe('tag')
+    expect(history.kind).toBe('tag')
+    expect(geography.depth).toBe(1)
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: world.id, target: geography.id }),
+      expect.objectContaining({ source: world.id, target: history.id })
+    ]))
+  })
+
+  it('connects explicit child and grandchild tags without losing setting descendants', () => {
+    const root = { ...setting('world', '世界观'), tags: ['势力', '哈夫克', '安保部门'], tagParents: { 哈夫克: '势力', 安保部门: '哈夫克' } }
+    const graph = buildSettingsTree([root, setting('location', '地理', 'world')])
+    const byTitle = new Map(graph.nodes.map((node) => [node.title, node]))
+
+    expect(byTitle.get('势力')?.depth).toBe(1)
+    expect(byTitle.get('哈夫克')?.depth).toBe(2)
+    expect(byTitle.get('安保部门')?.depth).toBe(3)
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: byTitle.get('势力')?.id, target: byTitle.get('哈夫克')?.id }),
+      expect.objectContaining({ source: byTitle.get('哈夫克')?.id, target: byTitle.get('安保部门')?.id }),
+      expect.objectContaining({ source: root.id, target: 'location' })
+    ]))
+  })
+
   it('excludes the current setting and all descendants from parent choices', () => {
     const items = [
       setting('b', '人物'),
@@ -145,5 +178,12 @@ describe('settingsTree', () => {
 
   it('returns no items for an unknown selected root', () => {
     expect(settingsTreeItems([setting('root', 'Root')], 'missing')).toEqual([])
+  })
+
+  it('excludes a tag and its descendants from its parent choices', () => {
+    const tags = ['势力', '哈夫克', '安保部门', '地理']
+    const parents = { 哈夫克: '势力', 安保部门: '哈夫克' }
+    expect(availableTagParentNames(tags, parents, '势力')).toEqual(['地理'])
+    expect(availableTagParentNames(tags, parents, '哈夫克')).toEqual(['势力', '地理'])
   })
 })

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { settingsTreePngFile, settingsTreeSvg } from './settingsTreeImage'
+import { buildSettingsTree } from './settingsTree'
 import type { SettingsTreeGraph } from './settingsTree'
 
 const graph: SettingsTreeGraph = {
@@ -14,6 +15,15 @@ const graph: SettingsTreeGraph = {
 }
 
 describe('settingsTreeSvg', () => {
+  it('exports nested tag nodes and their connecting edges', () => {
+    const nested = buildSettingsTree([{ id: 'world', title: '世界观', category: 'background', tags: ['势力', '哈夫克'], tagParents: { 哈夫克: '势力' } }])
+    const { svg } = settingsTreeSvg(nested)
+
+    expect(svg).toContain('势力')
+    expect(svg).toContain('哈夫克')
+    expect(svg.match(/<path\b/g)).toHaveLength(2)
+    expect(svg.match(/>标签<\/text>/g)).toHaveLength(2)
+  })
   it('escapes dynamic text and includes every node and edge within the image bounds', () => {
     const { svg, width, height } = settingsTreeSvg(graph)
 

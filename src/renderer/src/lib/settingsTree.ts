@@ -7,11 +7,14 @@ export const SETTING_ROW_GAP = 132
 
 export type SettingsTreeItem = SettingMeta & { parentId?: string }
 
+type LayoutItem = SettingsTreeItem & { kind?: 'tag' }
+
 export interface SettingsTreeNode {
   id: string
   title: string
   category: SettingMeta['category']
   tags: string[]
+  kind?: 'tag'
   parentId?: string
   depth: number
   position: { x: number; y: number }
@@ -48,6 +51,47 @@ function normalizedParentId(item: SettingsTreeItem): string | undefined {
 
 function sortedSettings(input: readonly SettingsTreeItem[]): SettingsTreeItem[] {
   return [...input].sort(compareSettings)
+}
+
+function tagNodeId(settingId: string, tag: string): string {
+  return `tag:${encodeURIComponent(settingId)}:${encodeURIComponent(tag)}`
+}
+
+function expandedTags(input: readonly SettingsTreeItem[]): { items: LayoutItem[]; warnings: SettingsTreeWarning[] } {
+  const items: LayoutItem[] = []
+  const warnings: SettingsTreeWarning[] = []
+  for (const setting of input) {
+    items.push(setting)
+    const tags = [...new Set(setting.tags.filter((tag) => typeof tag === 'string' && tag.trim()))]
+    const known = new Set(tags)
+    const tagParents = setting.tagParents && typeof setting.tagParents === 'object' && !Array.isArray(setting.tagParents)
+      ? setting.tagParents : {}
+    for (const tag of tags) {
+      const parent = Object.hasOwn(tagParents, tag) ? tagParents[tag] : undefined
+      let valid = typeof parent === 'string' && parent.length > 0
+      let kind: SettingsTreeWarning['kind'] = 'orphan'
+      if (valid) {
+        const seen = new Set([tag])
+        let current: string | undefined = parent
+        while (current) {
+          if (!known.has(current)) { valid = false; break }
+          if (seen.has(current)) { valid = false; kind = 'cycle'; break }
+          seen.add(current)
+          current = Object.hasOwn(tagParents, current) ? tagParents[current] : undefined
+        }
+      }
+      if (parent && !valid) warnings.push({ nodeId: tagNodeId(setting.id, tag), kind, message: kind === 'cycle' ? '标签父级关系存在循环' : `父标签不存在：${parent}` })
+      items.push({
+        id: tagNodeId(setting.id, tag),
+        title: tag,
+        category: setting.category,
+        tags: [],
+        parentId: valid && typeof parent === 'string' ? tagNodeId(setting.id, parent) : setting.id,
+        kind: 'tag'
+      })
+    }
+  }
+  return { items, warnings }
 }
 
 /** Make an acyclic parent map from old or manually edited setting files. */
@@ -108,9 +152,11 @@ function safeParents(items: SettingsTreeItem[]): {
 export function buildSettingsTree(input: readonly SettingsTreeItem[]): SettingsTreeGraph {
   if (input.length === 0) return { nodes: [], edges: [], warnings: [], width: 0, height: 0 }
 
-  const items = [...input].sort(compareSettings)
+  const expanded = expandedTags(input)
+  const items = expanded.items.sort(compareSettings)
   const byId = new Map(items.map((item) => [item.id, item]))
-  const { parents, warnings } = safeParents(items)
+  const { parents, warnings: parentWarnings } = safeParents(items)
+  const warnings = [...expanded.warnings, ...parentWarnings]
   const childrenByParent = new Map<string, string[]>()
   const roots: string[] = []
 
@@ -156,6 +202,7 @@ export function buildSettingsTree(input: readonly SettingsTreeItem[]): SettingsT
         title: item.title,
         category: item.category,
         tags: [...item.tags],
+        kind: item.kind,
         parentId: normalizedParentId(item),
         depth: frame.depth,
         position: { x: frame.depth * SETTING_LEVEL_GAP, y: 0 }
@@ -254,4 +301,19 @@ export function availableParentIds(input: readonly SettingsTreeItem[], currentId
   }
 
   return items.filter((item) => !excluded.has(item.id)).map((item) => item.id)
+}
+
+/** A tag cannot be placed below itself or any of its descendants. */
+export function availableTagParentNames(tags: readonly string[], tagParents: Record<string, string> | undefined, child: string): string[] {
+  return tags.filter((candidate) => {
+    if (candidate === child) return false
+    const visited = new Set<string>()
+    let current: string | undefined = candidate
+    while (current && !visited.has(current)) {
+      if (current === child) return false
+      visited.add(current)
+      current = tagParents && Object.hasOwn(tagParents, current) ? tagParents[current] : undefined
+    }
+    return true
+  })
 }

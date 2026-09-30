@@ -1,4 +1,4 @@
-import { Brain, KeyRound, Pencil, Plus, Settings2, Trash2, UserRound } from 'lucide-react'
+import { Brain, KeyRound, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
@@ -291,11 +291,8 @@ export function SettingsPage(): React.ReactElement {
                   />
                 </Field>
                 <div className="flex flex-wrap items-center gap-4 text-sm">
-                  <Link to="/user" className="inline-flex min-h-9 items-center gap-2 text-accent hover:underline">
-                    <UserRound size={15} />用户偏好
-                  </Link>
                   <Link to="/memory" className="inline-flex min-h-9 items-center gap-2 text-accent hover:underline">
-                    <Brain size={15} />项目记忆
+                    <Brain size={15} />管理记忆
                   </Link>
                 </div>
                 <Field

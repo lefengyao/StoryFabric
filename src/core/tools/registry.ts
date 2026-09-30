@@ -1,5 +1,5 @@
 import type { ChapterDoc, CharacterDoc, EntityKind, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson, ToolFailure, ToolFailureCode } from '../../shared/types'
-import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadChapterDocuments, loadEventDocuments, loadRelationships, readChapterDocumentAt, saveChapter, saveChapterInPlace, saveCharacter, saveNote, saveOutlineDoc, saveRelationships, saveSetting, serializeChapter, serializeCharacter, serializeEvent, serializeNote, serializeOutlineDoc, serializeRelationships } from '../workspace/entityStore'
+import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadChapterDocuments, loadEventDocuments, loadRelationships, readChapterDocumentAt, saveChapter, saveChapterInPlace, saveCharacter, saveNote, saveOutlineDoc, saveRelationships, saveSetting, serializeChapter, serializeCharacter, serializeEvent, serializeNote, serializeOutlineDoc, serializeRelationships, validateSettingTagParents } from '../workspace/entityStore'
 import type { FileStore } from '../storage/fileStore'
 import { getChapterContext, invalidateProjectIndex, lookupTerm, readChapterSlice, readOutlineSlice, searchProjectPage } from '../retrieval'
 import { listTrash, restoreFromTrash } from '../workspace/trash'
@@ -78,7 +78,7 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'save_chapter', description: '新建章节或更新章节结构化字段；必须显式指定 box，且 draft/revised 状态只能在草稿箱 draft，body/final 状态只能在正文箱 main；正文箱还必须指定 volumeId。已有章节禁止通过 content 或 replaceAll 整章覆盖：局部修改用 edit_chapter，末尾续写用 append_chapter。新章节可直接提交完整 content。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
   { name: 'edit_chapter', description: '按唯一片段或精确行范围对章节做局部删改；每次最多修改 12000 字符且不超过章节正文的 25%，整章或大范围覆盖会被工具拒绝；replacement 为空时删除指定行；必须提供 baseRevision，避免整章覆盖。需要用户确认。', parameters: AGENT_CHAPTER_EDIT_SCHEMA },
   { name: 'append_chapter', description: '续写已有章节时只提交新增正文，不要重新生成或传回原有章节。必须先读取章节取得 baseRevision；在末尾追加并保持已有内容不变。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string', minLength: 1 }, baseRevision: { type: 'string', minLength: 1, description: '来自 get_chapter 或 search_project 的 writeRevision' }, appendText: { type: 'string', minLength: 1, maxLength: 30000, description: '仅新增的正文，不包含已有章节内容' } }, required: ['chapterId', 'baseRevision', 'appendText'] } },
-  { name: 'save_setting', description: '新建或更新设定；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { setting: AGENT_SETTING_SCHEMA }, required: ['setting'] } },
+  { name: 'save_setting', description: '新建或更新设定。tags 是平面标签列表；tagParents 指定子标签到父标签的多级关系，未指定的标签直属设定。parentId 连接父级设定。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { setting: AGENT_SETTING_SCHEMA }, required: ['setting'] } },
   { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { note: AGENT_NOTE_SCHEMA }, required: ['note'] } },
   { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { noteId: { type: 'string', description: '要删除的便签 id' }, baseRevision: { type: 'string' } }, required: ['noteId'] } }
   ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷，并自动将不兼容状态改为草稿或正文；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['chapterId', 'box'] } }
@@ -499,7 +499,8 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const beforeText = old ? JSON.stringify(old, null, 2) : ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('设定版本已变化，请重新读取')
     const clean = cleanRevision(patch)
-    const after = (old ? { ...old, ...clean } : { id: genId('set'), title: clean.title, category: clean.category === 'other' ? 'other' : 'background', tags: clean.tags ?? [], content: clean.content ?? '' }) as SettingDoc
+    const after = (old ? { ...old, ...clean } : { id: genId('set'), title: clean.title, category: clean.category === 'other' ? 'other' : 'background', tags: clean.tags ?? [], tagParents: clean.tagParents, parentId: clean.parentId, content: clean.content ?? '' }) as SettingDoc
+    validateSettingTagParents(after.tags, after.tagParents)
     sim = {
       entityId: after.id,
       title: `${old ? '更新' : '新建'}设定：${after.title}`,

@@ -76,7 +76,7 @@ export class MemoryStore {
       const entry = `- ${line}`
       if (current.content.split(/\r?\n/).some((item) => item.trim() === entry)) return true
       const content = `${current.content.trimEnd()}${current.content.trim() ? '\n' : ''}${entry}\n`
-      if (content.length > MAX_CONTENT) throw new Error('记忆已满，请先在用户页整理')
+      if (content.length > MAX_CONTENT) throw new Error('记忆已满，请先在记忆页整理')
       const { store, path } = this.target(scope)
       await store.writeText(path, serializeMemory(true, content))
       return true

@@ -6,30 +6,16 @@ import { Modal } from '../../components/ui/modal'
 import { RecentWorkspaceList } from './RecentWorkspaceList'
 import { api } from '../../lib/api'
 import { useWorkspace } from '../../stores/workspaceStore'
-import { getLocalPlatformApi, getPlatformApi, isWebPlatform } from '../../platform/platformApi'
-import { HttpPlatformApi } from '../../platform/httpApi'
-import { installPlatformApi } from '../../platform/platformApi'
-import { loginRemote } from '../../platform/webAuth'
+import { getPlatformApi, isWebPlatform } from '../../platform/platformApi'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../../lib/workspaceArchiveFile'
-import type { StoryFabricApi, WorkspaceImportTarget } from '../../../../shared/api'
+import type { WorkspaceImportTarget } from '../../../../shared/api'
 import type { WorkspaceListItem } from '../../../../shared/types'
 
 export function createRecentConfigKey(
   isWeb: boolean,
-  isAndroid: boolean,
-  mode: 'local' | 'remote',
-  serviceRoot: string,
-  serviceKey: string
+  isAndroid: boolean
 ): string {
-  return JSON.stringify([isWeb, isAndroid, mode, serviceRoot, serviceKey])
-}
-
-export function shouldAutoLoadRecentWorkspaces(
-  isWeb: boolean,
-  mode: 'local' | 'remote',
-  serviceConfigSubmitted: boolean
-): boolean {
-  return isWeb || mode === 'local' || serviceConfigSubmitted
+  return JSON.stringify([isWeb, isAndroid])
 }
 
 export function isWorkspaceRequestCurrent(
@@ -125,29 +111,12 @@ export function WelcomePage(): React.ReactElement {
   const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [workspaceActionBusy, setWorkspaceActionBusy] = useState(false)
-  const [workspaceApiReady, setWorkspaceApiReady] = useState(false)
   const workspaceLoadId = useRef(0)
   const workspaceLoadingRequest = useRef<{ loadId: number; configKey: string } | null>(null)
   const workspaceRequestSequence = useRef(0)
   const workspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
   const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
-  const [mode, setMode] = useState<'local' | 'remote'>(isWeb ? 'remote' : 'local')
-  const [serviceUrl, setServiceUrl] = useState('')
-  const [serviceKey, setServiceKey] = useState('')
-  const [serviceError, setServiceError] = useState<string | null>(null)
-  const [serviceConnecting, setServiceConnecting] = useState(false)
-  const [recentLoadConfig, setRecentLoadConfig] = useState<{
-    mode: 'local' | 'remote'
-    serviceRoot: string
-    serviceKey: string
-    serviceConfigSubmitted: boolean
-  }>({
-    mode: isWeb ? 'remote' : 'local',
-    serviceRoot: '',
-    serviceKey: '',
-    serviceConfigSubmitted: true
-  })
   const [recentItems, setRecentItems] = useState<WorkspaceListItem[]>([])
   const [recentItemsConfigKey, setRecentItemsConfigKey] = useState<string | null>(null)
   const [recentLoading, setRecentLoading] = useState(false)
@@ -155,28 +124,12 @@ export function WelcomePage(): React.ReactElement {
   const [recentOpeningPath, setRecentOpeningPath] = useState<string | null>(null)
   const recentOpeningRequestId = useRef(0)
   const recentWorkspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
-  const [recentLoadGeneration, setRecentLoadGeneration] = useState(0)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
-  const localApiRef = useRef<StoryFabricApi | null>(null)
   const recentLoadId = useRef(0)
   const mountedRef = useRef(false)
-  if (!localApiRef.current && !isWeb) localApiRef.current = getLocalPlatformApi()
-
-  const currentServiceRoot = !isWeb && mode === 'remote' ? serviceUrl.trim().replace(/\/+$/, '') : ''
-  const currentServiceKey = !isWeb && mode === 'remote' ? serviceKey.trim() : ''
-  const currentConfigKey = createRecentConfigKey(isWeb, isAndroid, mode, currentServiceRoot, currentServiceKey)
-  const recentConfigKey = createRecentConfigKey(
-    isWeb,
-    isAndroid,
-    recentLoadConfig.mode,
-    recentLoadConfig.serviceRoot,
-    recentLoadConfig.serviceKey
-  )
+  const currentConfigKey = createRecentConfigKey(isWeb, isAndroid)
   const currentConfigKeyRef = useRef(currentConfigKey)
   currentConfigKeyRef.current = currentConfigKey
-  const recentConfigKeyRef = useRef(recentConfigKey)
-  recentConfigKeyRef.current = recentConfigKey
-  const serviceConnectionRequestId = useRef(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -194,46 +147,22 @@ export function WelcomePage(): React.ReactElement {
     }
   }, [])
 
-  const loadRecentWorkspaces = useCallback(async (expectedConfigKey: string = recentConfigKey): Promise<void> => {
-    if (!mountedRef.current || recentConfigKeyRef.current !== expectedConfigKey || currentConfigKeyRef.current !== expectedConfigKey) return
+  const loadRecentWorkspaces = useCallback(async (expectedConfigKey: string = currentConfigKey): Promise<void> => {
+    if (!mountedRef.current || currentConfigKeyRef.current !== expectedConfigKey) return
     const loadId = ++recentLoadId.current
     const isCurrent = (): boolean =>
       mountedRef.current &&
       recentLoadId.current === loadId &&
-      recentConfigKeyRef.current === expectedConfigKey &&
       currentConfigKeyRef.current === expectedConfigKey
 
     if (!isCurrent()) return
     setRecentError(null)
 
-    if (!shouldAutoLoadRecentWorkspaces(isWeb, recentLoadConfig.mode, recentLoadConfig.serviceConfigSubmitted)) {
-      setRecentItems([])
-      setRecentItemsConfigKey(null)
-      setRecentLoading(false)
-      return
-    }
-
     setRecentItems([])
     setRecentItemsConfigKey(null)
     setRecentLoading(true)
     try {
-      let recentApi: StoryFabricApi
-      if (isWeb) {
-        recentApi = getPlatformApi()
-      } else if (recentLoadConfig.mode === 'remote') {
-        const token = await loginRemote(recentLoadConfig.serviceRoot, recentLoadConfig.serviceKey)
-        if (!isCurrent()) return
-        const remote = new HttpPlatformApi(fetch, recentLoadConfig.serviceRoot, { kind: 'bearer', token })
-        if (!isCurrent()) return
-        installPlatformApi(remote)
-        recentApi = remote
-      } else {
-        recentApi = localApiRef.current ?? getPlatformApi()
-        if (!isCurrent()) return
-        installPlatformApi(recentApi)
-      }
-
-      const items = await recentApi.listRecentWorkspaces()
+      const items = await getPlatformApi().listRecentWorkspaces()
       if (!isCurrent()) return
       setRecentItems(items)
       setRecentItemsConfigKey(expectedConfigKey)
@@ -245,18 +174,14 @@ export function WelcomePage(): React.ReactElement {
     } finally {
       if (isCurrent()) setRecentLoading(false)
     }
-  }, [isAndroid, isWeb, recentConfigKey, recentLoadConfig])
+  }, [currentConfigKey])
 
   useEffect(() => {
-    const expectedConfigKey = recentConfigKey
-    const requestId = serviceConnectionRequestId.current
-    void loadRecentWorkspaces(expectedConfigKey).finally(() => {
-      if (requestId !== 0 && serviceConnectionRequestId.current === requestId) setServiceConnecting(false)
-    })
+    void loadRecentWorkspaces(currentConfigKey)
     return () => {
       recentLoadId.current += 1
     }
-  }, [isAndroid, isWeb, recentLoadGeneration, loadRecentWorkspaces, recentConfigKey])
+  }, [currentConfigKey, loadRecentWorkspaces])
 
   useEffect(() => {
     const request = recentWorkspaceRequest.current
@@ -281,6 +206,7 @@ export function WelcomePage(): React.ReactElement {
 
   const openCreate = async (): Promise<void> => {
     setCreateOpen(true)
+    if (isWeb) return
     if (isAndroid) {
       setParentDir('workspaces')
       return
@@ -357,25 +283,6 @@ export function WelcomePage(): React.ReactElement {
     await loadRecentWorkspaces(expectedConfigKey)
   }
 
-  const connectService = (): void => {
-    if (serviceConnecting) return
-    const root = serviceUrl.trim().replace(/\/+$/, '')
-    const key = serviceKey.trim()
-    if (!root) {
-      setServiceError('请输入服务地址')
-      return
-    }
-    if (!key) {
-      setServiceError('请输入访问密钥')
-      return
-    }
-    serviceConnectionRequestId.current += 1
-    setServiceConnecting(true)
-    setServiceError(null)
-    setRecentLoadConfig({ mode: 'remote', serviceRoot: root, serviceKey: key, serviceConfigSubmitted: true })
-    setRecentLoadGeneration((generation) => generation + 1)
-  }
-
   const resetWorkspacePicker = (): void => {
     const request = workspaceRequest.current
     request?.controller.abort()
@@ -391,7 +298,6 @@ export function WelcomePage(): React.ReactElement {
     setWorkspaceLoading(false)
     workspaceLoadingRequest.current = null
     setWorkspaceActionBusy(false)
-    setWorkspaceApiReady(false)
     useWorkspace.setState({ error: null })
     if (archiveInput.current) archiveInput.current.value = ''
   }
@@ -417,12 +323,6 @@ export function WelcomePage(): React.ReactElement {
     useWorkspace.setState({ error: message })
   }
 
-  const requireWorkspaceApi = (): void => {
-    if (mode === 'remote' && !workspaceApiReady) {
-      throw new Error(workspaceLoadError ?? '服务尚未连接完成，请稍候再试')
-    }
-  }
-
   const browseWorkspaceFolder = async (): Promise<void> => {
     const path = await api.pickFolder()
     if (path) setWorkspacePath(path)
@@ -445,7 +345,6 @@ export function WelcomePage(): React.ReactElement {
     setWorkspacePickerError(null)
     try {
       if (!requestGuard.isCurrent()) return
-      requireWorkspaceApi()
       const platform = getPlatformApi()
       if (!requestGuard.isCurrent()) return
       const summary = options ? await platform.openWorkspaceByPath(path, options) : await platform.openWorkspaceByPath(path)
@@ -476,9 +375,8 @@ export function WelcomePage(): React.ReactElement {
     try {
       const bytes = await readWorkspaceArchiveFile(file)
       if (!isCurrent()) return
-      requireWorkspaceApi()
       let target: WorkspaceImportTarget | undefined = { name: archiveName.trim() || undefined, ...(isAndroid && archiveParentDir.startsWith('saf:') ? { parentDir: archiveParentDir } : {}) }
-      if (mode === 'local' && !isAndroid && !isWeb) {
+      if (!isAndroid && !isWeb) {
         if (!isCurrent()) return
         const parentDir = await api.pickFolder()
         if (!isCurrent()) return
@@ -517,57 +415,7 @@ export function WelcomePage(): React.ReactElement {
     setWorkspaceOpen(true)
     workspaceLoadingRequest.current = { loadId, configKey: expectedConfigKey }
     setWorkspaceLoading(true)
-    if (isWeb) {
-      setWorkspaceApiReady(true)
-      try {
-        const list = await api.listWorkspaces()
-        if (isCurrent()) setWorkspaces(list)
-      } catch (err) {
-        if (isCurrent()) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (shouldClearWorkspaceLoading(
-          mountedRef.current,
-          expectedConfigKey,
-          workspaceLoadingRequest.current?.configKey ?? null,
-          loadId,
-          workspaceLoadingRequest.current?.loadId ?? null
-        )) {
-          workspaceLoadingRequest.current = null
-          setWorkspaceLoading(false)
-        }
-      }
-      return
-    }
-    if (mode === 'remote') {
-      try {
-        const root = serviceUrl.trim().replace(/\/+$/, '')
-        const token = await loginRemote(root, serviceKey.trim())
-        if (!isCurrent()) return
-        const remote = new HttpPlatformApi(fetch, root, { kind: 'bearer', token })
-        if (!isCurrent()) return
-        installPlatformApi(remote)
-        setWorkspaceApiReady(true)
-        const list = await remote.listWorkspaces()
-        if (isCurrent()) setWorkspaces(list)
-      } catch (err) {
-        if (isCurrent()) setWorkspaceLoadError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (shouldClearWorkspaceLoading(
-          mountedRef.current,
-          expectedConfigKey,
-          workspaceLoadingRequest.current?.configKey ?? null,
-          loadId,
-          workspaceLoadingRequest.current?.loadId ?? null
-        )) {
-          workspaceLoadingRequest.current = null
-          setWorkspaceLoading(false)
-        }
-      }
-      return
-    }
     try {
-      if (localApiRef.current && isCurrent()) installPlatformApi(localApiRef.current)
-      if (isCurrent()) setWorkspaceApiReady(true)
       const list = await getPlatformApi().listWorkspaces()
       if (isCurrent()) setWorkspaces(list)
     } catch (err) {
@@ -587,19 +435,10 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const doCreate = async (): Promise<void> => {
-    if (!name.trim() || (mode === 'local' && !isAndroid && !parentDir)) return
+    if (!name.trim() || (!isWeb && !isAndroid && !parentDir)) return
     setBusy(true)
     try {
-      if (mode === 'remote') {
-        if (!isWeb) {
-          const root = serviceUrl.trim().replace(/\/+$/, '')
-          const token = await loginRemote(root, serviceKey.trim())
-          installPlatformApi(new HttpPlatformApi(fetch, root, { kind: 'bearer', token }))
-        }
-        await createAndOpen('', name.trim())
-      } else {
-        await createAndOpen(parentDir, name.trim())
-      }
+      await createAndOpen(isWeb ? '' : parentDir, name.trim())
       setCreateOpen(false)
     } catch {
       /* 错误已写入 store */
@@ -624,32 +463,16 @@ export function WelcomePage(): React.ReactElement {
 
         <Card className="grid min-w-0 gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-6">
           <div className="min-w-0">
-          {!isWeb && (
-            <div className="mb-4 grid grid-cols-2 rounded-lg border border-line p-1 text-sm">
-              <button type="button" aria-pressed={mode === 'local'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('local'); setServiceError(null); setRecentLoadConfig({ mode: 'local', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: true }); if (localApiRef.current) installPlatformApi(localApiRef.current) }} className={`rounded-md px-3 py-2 ${mode === 'local' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>本地</button>
-              <button type="button" aria-pressed={mode === 'remote'} onClick={() => { serviceConnectionRequestId.current += 1; setServiceConnecting(false); setMode('remote'); setRecentError(null); setRecentItems([]); setRecentLoadConfig({ mode: 'remote', serviceRoot: '', serviceKey: '', serviceConfigSubmitted: false }) }} className={`rounded-md px-3 py-2 ${mode === 'remote' ? 'bg-accent-soft text-accent' : 'text-muted'}`}>服务</button>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy || workspaceLoading}>
+                <FolderOpen size={16} /> 打开其他工作区
+              </Button>
+              <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
+                <FolderPlus size={16} /> 创建新工作区
+              </Button>
             </div>
-          )}
-          {mode === 'remote' && !isWeb && (
-            <form className="mb-4 space-y-2" onSubmit={(event) => { event.preventDefault(); connectService() }}>
-              <label htmlFor="service-url" className="sr-only">服务地址</label>
-              <Input id="service-url" value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} placeholder="服务地址，例如 https://example.com:8787" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
-              <label htmlFor="service-key" className="sr-only">访问密钥</label>
-              <Input id="service-key" type="password" value={serviceKey} onChange={(e) => setServiceKey(e.target.value)} placeholder="访问密钥" aria-describedby={serviceError ? 'service-error' : undefined} aria-invalid={Boolean(serviceError)} />
-              <Button type="submit" size="sm" variant="outline" loading={serviceConnecting} disabled={serviceConnecting}>连接服务</Button>
-              {serviceError && <div id="service-error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{serviceError}</div>}
-            </form>
-          )}
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy || workspaceLoading}>
-              <FolderOpen size={16} /> 打开其他工作区
-            </Button>
-            <Button variant="outline" className="flex-1 justify-center" onClick={() => void openCreate()} disabled={busy}>
-              <FolderPlus size={16} /> 创建新工作区
-            </Button>
-          </div>
 
-          {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
+            {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
           </div>
           <div className="min-w-0 border-t border-line pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
@@ -684,7 +507,7 @@ export function WelcomePage(): React.ReactElement {
               {isAndroid && workspacePath.startsWith('saf:')
                 ? <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-2 text-sm">已授权外部工作区</div>
                 : <Input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder={isAndroid ? '输入应用内部路径，或选择外部项目文件夹' : '粘贴工作区路径…'} className="min-w-0 flex-1" />}
-              {mode === 'local' && !isWeb && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">{isAndroid ? '选择项目文件夹' : '浏览文件夹'}</Button>}
+              {!isWeb && <Button onClick={() => void browseWorkspaceFolder()} className="shrink-0">{isAndroid ? '选择项目文件夹' : '浏览文件夹'}</Button>}
             </div>
             <Button variant="primary" onClick={() => void openTypedWorkspace()} disabled={!workspacePath.trim()} loading={workspaceActionBusy} className="w-full justify-center">打开路径</Button>
             <div>
@@ -737,12 +560,12 @@ export function WelcomePage(): React.ReactElement {
         {workspacePickerError && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{workspacePickerError}</div>}
       </Modal>
 
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={mode === 'remote' ? '将在当前服务的数据目录内创建一个新的托管工作区' : isAndroid ? '可以保存在应用内部，也可以选一个外部文件夹；外部项目卸载后仍保留' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
+      <Modal open={createOpen} onOpenChange={setCreateOpen} title="创建新工作区" description={isWeb ? '将在当前服务的数据目录内创建一个新的工作区' : isAndroid ? '可以保存在应用内部，也可以选一个外部文件夹；外部项目卸载后仍保留' : '将在所选文件夹内创建一个以小说名命名的新文件夹'}>
         <div className="space-y-4">
           <Field label="小说名称 *">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：星海拾遗" autoFocus />
           </Field>
-          {mode === 'local' && <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? '选择外部文件夹后，系统会保存读写授权；重新安装应用时需重新选择项目文件夹' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
+          {!isWeb && <Field label={isAndroid ? '存放位置' : '存放位置（默认为文档目录）'} hint={isAndroid ? '选择外部文件夹后，系统会保存读写授权；重新安装应用时需重新选择项目文件夹' : `创建后工作区路径形如 ${parentDir ? parentDir + '\\' : '文档目录\\'}<小说名>`}>
             <div className="flex flex-col gap-2 sm:flex-row">
               {isAndroid
                 ? <div className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-2 text-sm">{parentDir.startsWith('saf:') ? '已选择外部文件夹' : '应用内部存储'}</div>
@@ -755,7 +578,7 @@ export function WelcomePage(): React.ReactElement {
             <Button variant="ghost" onClick={() => setCreateOpen(false)}>
               取消
             </Button>
-            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || (mode === 'local' && !isAndroid && !parentDir) || (mode === 'remote' && !isWeb && (!serviceUrl.trim() || !serviceKey.trim()))}>
+            <Button variant="primary" onClick={() => void doCreate()} loading={busy} disabled={!name.trim() || (!isWeb && !isAndroid && !parentDir)}>
               创建并打开
             </Button>
           </div>

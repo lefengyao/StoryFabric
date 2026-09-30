@@ -1,14 +1,14 @@
 import { UserRound } from 'lucide-react'
-import { MemoryScopeEditor } from '../memory/MemoryScopeEditor'
+import { Link } from 'react-router-dom'
 
 export function UserPage(): React.ReactElement {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-5 overflow-y-auto p-5 sm:p-8">
       <div>
         <div className="flex items-center gap-2"><UserRound size={22} className="text-accent" /><h1 className="font-serif text-xl font-semibold">用户</h1></div>
-        <p className="mt-1 text-sm text-muted">管理跨项目通用的个人偏好。这里的内容保存在本设备的应用数据中，不随单个项目导出。</p>
+        <p className="mt-1 text-sm text-muted">用户功能正在开发中。</p>
       </div>
-      <MemoryScopeEditor scope="global" title="用户偏好" description="适合稳定的写作习惯、回答偏好和长期协作规则。" />
+      <p className="text-sm text-muted">全局记忆和项目记忆已统一放在<Link to="/memory" className="ml-1 text-accent hover:underline">记忆页面</Link>管理。</p>
     </div>
   )
 }
