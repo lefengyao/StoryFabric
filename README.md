@@ -109,6 +109,10 @@ docker compose up -d --build
 
 部署配置以本 README 和 `docker-compose.yml` 为准；仓库外的辅助记录不参与发行包。
 
+## 许可证
+
+本项目采用 MIT 许可证，版权归 `lefengyao` 所有，详见 [LICENSE](LICENSE)。
+
 ## 工作区交互修正（0.2.37）
 
 侧栏支持结构化需求问答与稍后回答；差异审查提交失败保留原变更并允许重试，关闭弹窗仅表示稍后审查，显式拒绝才会拒绝变更。完整工作台与侧栏在用户向上阅读时保留位置，提供“回到最新”。工具卡支持参数详情，并明确标记参数和结果截断。
@@ -127,7 +131,7 @@ examples/minimal-workspace
 
 ## Git 约定
 
-提交源码、构建配置、测试和示例；`.zcode/`、`.github/`、`docs/` 属于本地辅助资料，不纳入版本控制。不要提交依赖目录、构建目录、运行时工作区、访问密钥、供应商 API Key、截图或 APK/AAB。提交前建议执行：
+提交源码、构建配置、测试和示例；`.zcode/`、`.github/`、`docs/` 属于本地辅助资料，不纳入版本控制。`data/`、`.qa-server-data*/` 是运行时或 QA 工作区数据，`.superpowers/brainstorm/` 是本地视觉稿，均已加入 Git 忽略规则。不要提交依赖目录、构建目录、运行时工作区、访问密钥、供应商 API Key、截图或 APK/AAB。提交前建议执行：
 
 ```bash
 npm test -- --run

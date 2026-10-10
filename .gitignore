@@ -19,6 +19,11 @@ data/
 *.storyfabric.zip
 *.storyfabric.session.json
 
+# Local QA server data and visual brainstorm artifacts
+/.qa-server-data/
+/.qa-server-data-*/
+/.superpowers/brainstorm/
+
 # Secrets and local environment configuration
 secrets/
 .env
