@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import { ClientRunIdRegistry } from '../../shared/agentRuntime'
 import type { RunEventEnvelope, RuntimeEvent } from '../../shared/agentRuntime'
 import { parseAgentQuestion, validateAgentQuestionAnswer, type AgentQuestion, type AgentQuestionAnswer } from '../../shared/agentQuestions'
@@ -166,7 +167,7 @@ export class AgentRuntime {
       throw new Error('问题已经由另一个回答请求处理')
     }
     this.answeringQuestions.add(questionId)
-    this.answerInFlight.set(questionId, structuredClone(answer))
+    this.answerInFlight.set(questionId, cloneValue(answer))
     const previousQuestion = snapshot.waitingQuestion ?? waiter.question
     const previousQuestionId = snapshot.questionId
     delete snapshot.waitingQuestion
@@ -180,7 +181,7 @@ export class AgentRuntime {
         throw Object.assign(new Error('运行已取消，不能恢复问题'), { name: 'AbortError' })
       }
       this.questionWaiters.delete(questionId)
-      this.answeredQuestions.set(questionId, structuredClone(answer))
+      this.answeredQuestions.set(questionId, cloneValue(answer))
       waiter.resolve(answer)
     } catch (error) {
       if (this.questionWaiters.get(questionId) === waiter && !isTerminal(snapshot.status)) {
@@ -198,13 +199,13 @@ export class AgentRuntime {
 
   getSnapshot(runId: string): RuntimeRunSnapshot | null {
     const snapshot = this.runs.get(runId)
-    return snapshot ? structuredClone(snapshot) : null
+    return snapshot ? cloneValue(snapshot) : null
   }
 
   list(workspaceId: string, sessionId?: string): RuntimeRunSnapshot[] {
     return [...this.runs.values()]
       .filter((run) => run.workspaceId === workspaceId && (!sessionId || run.sessionId === sessionId))
-      .map((run) => structuredClone(run))
+      .map((run) => cloneValue(run))
   }
 
   private async execute(snapshot: RuntimeRunSnapshot, input: RuntimeStartInput, controller: AbortController, runner: RuntimeRunner): Promise<void> {
@@ -248,7 +249,7 @@ export class AgentRuntime {
           if (controller.signal.aborted) throw Object.assign(new Error('运行已取消'), { name: 'AbortError' })
           snapshot.status = 'awaiting_user'
           snapshot.questionId = parsed.questionId
-          snapshot.waitingQuestion = structuredClone(parsed)
+          snapshot.waitingQuestion = cloneValue(parsed)
           if (parsed.stageId) {
             progress.stage(parsed.stageId)
           }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveSetting, loadCharacterDocuments, loadEventDocuments, loadNoteDocuments, loadOutlineDocuments, loadSettingDocuments } from '../../workspace/entityStore'
 import { initializeWorkspace } from '../../workspace/workspaceService'
+import { parseFrontMatter } from '../../workspace/frontMatter'
 import { executeTool, type ToolOutcome } from '../registry'
 
 async function call(store: MemoryFileStore, name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
@@ -34,9 +35,21 @@ describe('agent line edits', () => {
     const pending = await call(store, 'edit_content', { kind, id: doc.id, baseRevision: read.writeRevision, lineStart: 2, lineEnd: 2, replacement: '修订第二行' })
     if (pending.kind !== 'pending') throw new Error(pending.text)
     expect(await store.readText(path)).toBe(before)
-    expect((await pending.apply()).ok).toBe(true)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     const after = (await store.readText(path))!
-    expect(after).toBe(before.replace('第一行\n第二行\n第三行', '第一行\n修订第二行\n第三行'))
+    if (kind === 'outline') {
+      const original = parseFrontMatter(before)
+      const edited = parseFrontMatter(after)
+      const { writeRevision: originalRevision, updatedAt: _originalTime, ...originalMetadata } = original.data
+      const { writeRevision: editedRevision, updatedAt: editedTime, ...editedMetadata } = edited.data
+      expect(editedMetadata).toEqual(originalMetadata)
+      expect(edited.content).toBe(original.content.replace('第二行', '修订第二行'))
+      expect(editedRevision).toMatch(/^wr_/)
+      expect(editedRevision).not.toBe(originalRevision)
+      expect(Number.isNaN(Date.parse(String(editedTime)))).toBe(false)
+    } else {
+      expect(after).toBe(before.replace('第一行\n第二行\n第三行', '第一行\n修订第二行\n第三行'))
+    }
   })
 
   it('rejects stale revisions, ambiguous text and changes made during approval', async () => {
@@ -51,7 +64,7 @@ describe('agent line edits', () => {
     const pending = await call(store, 'edit_content', { ...base, lineStart: 2, lineEnd: 2 })
     if (pending.kind !== 'pending') throw new Error(pending.text)
     await saveCharacter(store, { id: doc.id, content: '用户改过' })
-    expect((await pending.apply()).ok).toBe(false)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(false)
     const stale = await call(store, 'edit_content', { ...base, lineStart: 2, lineEnd: 2 })
     expect(stale.kind).toBe('result')
     if (stale.kind === 'result') expect(stale.ok).toBe(false)
@@ -75,7 +88,7 @@ describe('agent line edits', () => {
     const read = data(await call(store, 'read_content_lines', { kind: 'projectDoc', id: 'nested/plan.md' }))
     const pending = await call(store, 'edit_content', { kind: 'projectDoc', id: 'nested/plan.md', baseRevision: read.writeRevision, expectedText: '乙', replacement: '修改' })
     if (pending.kind !== 'pending') throw new Error(pending.text)
-    expect((await pending.apply()).ok).toBe(true)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect(await store.readText('docs/nested/plan.md')).toBe('甲\r\n修改\r\n丙')
     for (const id of ['../escape.md', 'book.pdf']) {
       const result = await call(store, 'read_content_lines', { kind: 'projectDoc', id })
@@ -92,7 +105,7 @@ describe('agent line edits', () => {
     if (pending.kind !== 'pending') throw new Error(pending.text)
     expect(pending.change.beforeText).toBe('甲\n乙\n丙\n丁')
     expect(pending.change.afterText).toBe('甲\n丙\n丁')
-    expect((await pending.apply()).ok).toBe(true)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect(await store.readText('docs/lines.txt')).toBe('甲\n丙\n丁')
   })
 

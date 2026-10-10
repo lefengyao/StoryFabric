@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import { validateSubagentTools } from './toolPolicy'
 
 export interface SubagentSourceRef { workspaceId: string; id: string; revision?: string | number; sourcePath?: string }
@@ -28,7 +29,7 @@ export class SubagentManager {
     const task: ChildTask = { id, status: 'queued', input: { ...input, sourceRefs: input.sourceRefs.map((ref) => ({ ...ref })) } }
     this.children.set(id, task)
     this.schedule()
-    return structuredClone(task)
+    return cloneValue(task)
   }
 
   async waitForIdle(): Promise<void> {
@@ -82,5 +83,5 @@ export class SubagentManager {
     }
   }
 
-  list(): ChildTask[] { return [...this.children.values()].map((task) => structuredClone(task)) }
+  list(): ChildTask[] { return [...this.children.values()].map((task) => cloneValue(task)) }
 }

@@ -16,7 +16,7 @@ export interface WebSearchOptions {
   limit?: number
   signal?: AbortSignal
   model?: string
-  provider?: { protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string }
+  provider?: { protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; authentication?: 'custom-key' | 'trailblazer-session' }
   selfHostedUrl?: string
   fetcher?: typeof fetch
 }
@@ -29,7 +29,7 @@ function nativeEndpoint(protocol: 'openai' | 'anthropic', baseUrl: string): stri
 }
 
 function nativeAvailable(options: WebSearchOptions): options is WebSearchOptions & { model: string; provider: NonNullable<WebSearchOptions['provider']> } {
-  if (!options.model || !options.provider?.apiKey) return false
+  if (!options.model || !options.provider || (!options.provider.apiKey && options.provider.authentication !== 'trailblazer-session')) return false
   const protocol = nativeProtocolFor(options.model)
   return (protocol === 'anthropic-messages' && options.provider.protocol === 'anthropic')
     || (protocol === 'openai-responses' && options.provider.protocol === 'openai')

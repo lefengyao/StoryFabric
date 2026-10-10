@@ -24,9 +24,10 @@ import {
   saveSetting
 } from './services/entityStore'
 import type { SettingsService } from './services/settingsService'
+import type { AppUpdateService } from './services/appUpdateService'
 import type { UsageService } from '../core/usage/usageService'
 import { listWritingDays } from '../core/usage/writingStats'
-import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, listWorkspaces as listLocalWorkspaces, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, renameWorkspace, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout } from './services/workspaceService'
+import { createWorkspace, deleteVolume, importWorkspaceIntoNewFolder, listTrash, listVolumes, listWorkspaces as listLocalWorkspaces, loadSummary, loadWorkspaceListItem, moveChapter, purgeTrash, readGraphLayout, readWritingTools, renameWorkspace, restoreTrash, saveVolume, validateWorkspace, writeGraphLayout, writeWritingTools } from './services/workspaceService'
 import type { AgentService } from './agent/agentLoop'
 import type {
   PublicAppSettings,
@@ -43,6 +44,7 @@ import { exportWorkspaceArchive } from '../core/workspace/archive'
 import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
 import { genId } from '../core/workspace/entityStore'
 import { IPC } from '../shared/ipc'
+import { getDocumentSnapshot, saveDocument, saveHistoryVersion, listHistoryVersions, getHistoryVersion, updateHistoryVersion, deleteHistoryVersion, restoreHistoryVersion } from '../core/workspace/documentWrites'
 import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { serializeWorkspace } from './services/workspaceRuntime'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
@@ -55,10 +57,14 @@ import { normalizeProjectDocPath, validateProjectDocContent } from '../core/work
 import { saveInspirationArtifact } from '../core/inspiration/inspirationService'
 import { MemoryStore } from '../core/memory/memoryStore'
 import type { MemoryScope, MemoryUpdate } from '../shared/memory'
+import type { CloudAccountService } from '../core/cloud/cloudAccountService'
+import { TRAILBLAZER_PROVIDER_ID } from '../shared/cloudAccount'
 
 export interface AppContext {
+  cloudAccount?: CloudAccountService
   win: () => BrowserWindow | null
   settings: SettingsService
+  appUpdates?: AppUpdateService
   agent: AgentService
   usage: UsageService
   runtimeEvents?: { replay: (workspaceId: string, runId: string, afterSeq?: number) => RunReplay }
@@ -149,6 +155,26 @@ async function collectExternalImportFiles(inputPath: string): Promise<ExternalIm
 }
 
 export function registerIpc(ctx: AppContext): void {
+  const cloud = (): CloudAccountService => { if (!ctx.cloudAccount) throw new Error('云端账户未配置'); return ctx.cloudAccount }
+  ipcMain.handle(IPC.CloudState, () => cloud().getState())
+  ipcMain.handle(IPC.CloudLogin, () => cloud().beginLogin())
+  ipcMain.handle(IPC.CloudCancel, () => cloud().cancelLogin())
+  ipcMain.handle(IPC.CloudLogout, () => cloud().logout())
+  ipcMain.handle(IPC.CloudOnboard, () => cloud().retryOnboarding())
+  ipcMain.handle(IPC.CloudAccount, () => cloud().getAccount())
+  ipcMain.handle(IPC.CloudUsage, (_e, page) => cloud().getUsage(page))
+  ipcMain.handle(IPC.CloudChannels, () => cloud().getChannels())
+  ipcMain.handle(IPC.CloudGroups, () => cloud().getGroups())
+  ipcMain.handle(IPC.CloudSupplierLobby, () => cloud().getSupplierLobby())
+  ipcMain.handle(IPC.CloudRedeem, (_e, input) => cloud().redeem(input))
+  ipcMain.handle(IPC.CloudRedeemHistory, () => cloud().getRedeemHistory())
+  ipcMain.handle(IPC.CloudGroup, (_e, input) => cloud().selectGroup(input))
+  ipcMain.handle(IPC.CloudRotate, (_e, input) => cloud().rotateConnection(input))
+  ipcMain.handle(IPC.CloudConfig, () => cloud().getConfig())
+  ipcMain.handle(IPC.CloudConfigUpdate, (_e, value: unknown) => {
+    if (value !== null && typeof value !== 'string') throw new Error('账户服务地址无效')
+    return cloud().setPlatformWebUrl(value)
+  })
   /* ---------- 剪贴板 ---------- */
   ipcMain.handle(IPC.ClipboardReadText, async () => clipboard.readText())
   ipcMain.handle(IPC.ClipboardWriteText, async (_event, text: unknown) => {
@@ -191,21 +217,23 @@ export function registerIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.CreateWorkspace, async (_e, parentDir: string, name: string) => createWorkspace(parentDir, name))
 
-  ipcMain.handle(IPC.OpenWorkspace, async (_e, path: string, requestId?: string) => {
+  ipcMain.handle(IPC.OpenWorkspace, async (_e, path: string, requestId?: string, upgradeLegacy?: boolean) => {
     const signal = requestSignal(requestId)
     try {
       const v = await validateWorkspace(path)
       if (!v.ok) throw new Error(v.reason)
       throwIfWorkspaceRequestAborted(signal)
+      const summary = await loadSummary(path, { upgradeLegacy: upgradeLegacy === true })
+      throwIfWorkspaceRequestAborted(signal)
       await recentPush(ctx.settings, path, signal)
       throwIfWorkspaceRequestAborted(signal)
       currentRoot = path
-      return loadSummary(path)
+      return summary
     } finally {
       finishRequest(requestId)
     }
   })
-  ipcMain.handle(IPC.OpenWorkspaceByPath, async (_e, path: string, requestId?: string) => {
+  ipcMain.handle(IPC.OpenWorkspaceByPath, async (_e, path: string, requestId?: string, upgradeLegacy?: boolean) => {
     const signal = requestSignal(requestId)
     try {
       const value = path.trim()
@@ -213,10 +241,12 @@ export function registerIpc(ctx: AppContext): void {
       const valid = await validateWorkspace(value)
       if (!valid.ok) throw new Error(valid.reason)
       throwIfWorkspaceRequestAborted(signal)
+      const summary = await loadSummary(value, { upgradeLegacy: upgradeLegacy === true })
+      throwIfWorkspaceRequestAborted(signal)
       await recentPush(ctx.settings, value, signal)
       throwIfWorkspaceRequestAborted(signal)
       currentRoot = value
-      return loadSummary(value)
+      return summary
     } finally {
       finishRequest(requestId)
     }
@@ -234,7 +264,14 @@ export function registerIpc(ctx: AppContext): void {
       if (lastWorkspacePath) {
         const valid = await validateWorkspace(lastWorkspacePath)
         if (valid.ok) {
-          currentRoot = lastWorkspacePath
+          try {
+            const summary = await loadSummary(lastWorkspacePath)
+            currentRoot = lastWorkspacePath
+            return summary
+          } catch (error) {
+            if (error instanceof Error && error.message.includes('WORKSPACE_UPGRADE_REQUIRED')) return null
+            throw error
+          }
         } else {
           await ctx.settings.update({ lastWorkspacePath: undefined })
         }
@@ -247,7 +284,7 @@ export function registerIpc(ctx: AppContext): void {
     const root = requireRoot()
     return exportWorkspaceArchive(new NodeFileStore(root), (await loadSummary(root)).name)
   })
-  ipcMain.handle(IPC.ImportWorkspace, async (_e, bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, requestId?: string) => {
+  ipcMain.handle(IPC.ImportWorkspace, async (_e, bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, requestId?: string, upgradeLegacy?: boolean) => {
     const signal = requestSignal(requestId)
     let root: string | null = null
     try {
@@ -255,11 +292,11 @@ export function registerIpc(ctx: AppContext): void {
       if (!parentDir) throw new Error('请选择导入工作区的目标文件夹')
       const derivedName = fileName.replace(/\.storyfabric\.zip$/i, '').replace(/[\\/:*?"<>|]/g, '').trim()
       const workspaceName = target?.name?.trim() || derivedName || '导入工作区'
-      root = await importWorkspaceIntoNewFolder(parentDir, workspaceName, bytes, signal)
-      throwIfWorkspaceRequestAborted(signal)
-      await recentPushBestEffort(ctx.settings, root, signal)
+      root = await importWorkspaceIntoNewFolder(parentDir, workspaceName, bytes, signal, { upgradeLegacy: upgradeLegacy === true })
       throwIfWorkspaceRequestAborted(signal)
       const summary = await loadSummary(root)
+      throwIfWorkspaceRequestAborted(signal)
+      await recentPushBestEffort(ctx.settings, root, signal)
       throwIfWorkspaceRequestAborted(signal)
       currentRoot = root
       return summary
@@ -273,19 +310,37 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.GetChapterBody, async (_e, id: string) => getChapterBody(requireRoot(), id))
   ipcMain.handle(IPC.SearchProject, async (_e, query: string) => searchProject(requireRoot(), query))
   ipcMain.handle(IPC.GetGraphLayout, async () => readGraphLayout(requireRoot()))
+  ipcMain.handle(IPC.GetWritingTools, async () => readWritingTools(requireRoot()))
+  ipcMain.handle(IPC.SaveWritingTools, async (_e, preferences) => writeWritingTools(requireRoot(), preferences))
   ipcMain.handle(IPC.SaveGraphLayout, async (_e, layout) => { const root = requireRoot(); return serializeWorkspace(root, () => writeGraphLayout(root, layout)) })
 
   /* ---------- 实体 ---------- */
+  ipcMain.handle(IPC.GetDocumentSnapshot, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['getDocumentSnapshot']>) => { const root = requireRoot(); return serializeWorkspace(root, () => getDocumentSnapshot(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.SaveHistoryVersion, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['saveHistoryVersion']>) => { const root = requireRoot(); return serializeWorkspace(root, () => saveHistoryVersion(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.ListHistoryVersions, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['listHistoryVersions']>) => { const root = requireRoot(); return serializeWorkspace(root, () => listHistoryVersions(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.GetHistoryVersion, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['getHistoryVersion']>) => { const root = requireRoot(); return serializeWorkspace(root, () => getHistoryVersion(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.UpdateHistoryVersion, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['updateHistoryVersion']>) => { const root = requireRoot(); return serializeWorkspace(root, () => updateHistoryVersion(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.DeleteHistoryVersion, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['deleteHistoryVersion']>) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteHistoryVersion(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.RestoreHistoryVersion, async (_e, ...args: Parameters<import('../shared/api').StoryFabricApi['restoreHistoryVersion']>) => { const root = requireRoot(); return serializeWorkspace(root, () => restoreHistoryVersion(new NodeFileStore(root), ...args)) })
+  ipcMain.handle(IPC.SaveImageFile, async (_e, fileName: string, input: Uint8Array) => {
+    const bytes = new Uint8Array(input)
+    if (bytes.byteLength > 100 * 1024 * 1024 || bytes.byteLength < 8 || ![137,80,78,71,13,10,26,10].every((value,index) => bytes[index] === value)) throw new Error('无效或过大的 PNG 图片')
+    const safeName = basename(fileName).replace(/[<>:"/\\|?*]/g, '_').replace(/\.png$/i, '') || 'StoryFabric'
+    const result = await dialog.showSaveDialog({ defaultPath: safeName + '.png', filters: [{ name: 'PNG 图片', extensions: ['png'] }] })
+    if (result.canceled || !result.filePath) return
+    await fs.writeFile(result.filePath, bytes)
+  })
+
   ipcMain.handle(IPC.SaveCharacter, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveCharacter(root, doc)) })
   ipcMain.handle(IPC.DeleteCharacter, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteCharacter(root, id)) })
   ipcMain.handle(IPC.SaveRelationships, async (_e, list) => { const root = requireRoot(); return serializeWorkspace(root, () => saveRelationships(root, list)) })
-  ipcMain.handle(IPC.SaveOutlineDoc, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveOutlineDoc(root, doc)) })
+  ipcMain.handle(IPC.SaveOutlineDoc, async (_e, doc, options) => { const root = requireRoot(); return serializeWorkspace(root, () => saveDocument(new NodeFileStore(root), 'outline', doc, options)) })
   ipcMain.handle(IPC.DeleteOutlineDoc, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteOutlineDoc(root, id)) })
   ipcMain.handle(IPC.SaveEvent, async (_e, doc) => { const root = requireRoot(); return serializeWorkspace(root, () => saveEvent(root, doc)) })
   ipcMain.handle(IPC.DeleteEvent, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteEvent(root, id)) })
-  ipcMain.handle(IPC.SaveChapter, async (_e, doc) => {
+  ipcMain.handle(IPC.SaveChapter, async (_e, doc, options) => {
     const root = requireRoot()
-    const saved = await serializeWorkspace(root, () => saveChapter(root, doc))
+    const saved = await serializeWorkspace(root, () => saveDocument(new NodeFileStore(root), 'chapter', doc, options))
     const { content: _c, ...meta } = saved
     void _c
     return meta
@@ -308,7 +363,18 @@ export function registerIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.DeleteNote, async (_e, id: string) => { const root = requireRoot(); return serializeWorkspace(root, () => deleteNote(root, id)) })
 
   /* ---------- 设置与供应商 ---------- */
-  ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.load()))
+  ipcMain.handle(IPC.GetSettings, async (): Promise<PublicAppSettings> => {
+    const raw = await ctx.settings.load()
+    const settings = ctx.settings.toPublic(raw)
+    const provider = await ctx.cloudAccount?.publicProvider(raw.trailblazerProvider)
+    if (!provider) return settings
+    return { ...settings, providers: [...settings.providers.filter((item) => item.id !== provider.id), provider] }
+  })
+  ipcMain.handle(IPC.CheckAppUpdate, () => ctx.appUpdates?.check())
+  ipcMain.handle(IPC.GetUpdateDownloadState, () => ctx.appUpdates?.state())
+  ipcMain.handle(IPC.DownloadAppUpdate, () => ctx.appUpdates?.download())
+  ipcMain.handle(IPC.CancelAppUpdateDownload, () => ctx.appUpdates?.cancel())
+  ipcMain.handle(IPC.InstallAppUpdate, () => ctx.appUpdates?.install())
   const memoryStore = (): MemoryStore => new MemoryStore(new NodeFileStore(app.getPath('userData')), new NodeFileStore(requireRoot()))
   ipcMain.handle(IPC.GetMemory, async (_e, scope: MemoryScope) => memoryStore().read(scope))
   ipcMain.handle(IPC.UpdateMemory, async (_e, scope: MemoryScope, patch: MemoryUpdate) => memoryStore().update(scope, patch))
@@ -331,10 +397,28 @@ export function registerIpc(ctx: AppContext): void {
     ctx.settings.toPublic(await ctx.settings.update(patch))
   )
 
-  ipcMain.handle(IPC.SaveProvider, async (_e, input): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.saveProvider(input)))
-  ipcMain.handle(IPC.DeleteProvider, async (_e, id: string): Promise<PublicAppSettings> => ctx.settings.toPublic(await ctx.settings.deleteProvider(id)))
+  ipcMain.handle(IPC.SaveProvider, async (_e, input): Promise<PublicAppSettings> => {
+    const next = input?.id === TRAILBLAZER_PROVIDER_ID
+      ? await ctx.settings.saveTrailblazerProvider(await cloud().scopeModelPreferences({ models: input.models, modelSettings: input.modelSettings ?? {} }))
+      : await ctx.settings.saveProvider(input)
+    const publicSettings = ctx.settings.toPublic(next)
+    const provider = await ctx.cloudAccount?.publicProvider(next.trailblazerProvider)
+    return provider ? { ...publicSettings, providers: [...publicSettings.providers.filter((item) => item.id !== provider.id), provider] } : publicSettings
+  })
+  ipcMain.handle(IPC.DeleteProvider, async (_e, id: string): Promise<PublicAppSettings> => {
+    const next = id === TRAILBLAZER_PROVIDER_ID ? await ctx.settings.load() : await ctx.settings.deleteProvider(id)
+    const publicSettings = ctx.settings.toPublic(next)
+    const provider = await ctx.cloudAccount?.publicProvider(next.trailblazerProvider)
+    return provider ? { ...publicSettings, providers: [...publicSettings.providers.filter((item) => item.id !== provider.id), provider] } : publicSettings
+  })
 
   ipcMain.handle(IPC.FetchModels, async (_e, input: FetchModelsInput): Promise<string[]> => {
+    if (input.providerId === TRAILBLAZER_PROVIDER_ID) {
+      const models = await cloud().fetchModels(input.protocol)
+      const settings = await ctx.settings.load()
+      await ctx.settings.saveTrailblazerProvider(await cloud().scopeModelPreferences({ models, modelSettings: settings.trailblazerProvider.modelSettings }))
+      return models
+    }
     const provider = await ctx.settings.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey, { fetcher: electronFetch })
   })
@@ -351,7 +435,7 @@ export function registerIpc(ctx: AppContext): void {
     const path = typeof rawPath === 'string' ? rawPath.trim() : ''
     if (!path) throw new Error('请输入资料文件地址')
     const files = await collectExternalImportFiles(path)
-    if (!files.length) throw new Error('未找到可读取的资料；支持常见文本、DOCX 和 PDF 文件')
+    if (!files.length) throw new Error('未找到可读取的资料；支持常见文本、EPUB、DOCX 和 PDF 文件')
     const oversized = files.find((file) => file.size > MAX_INSPIRATION_SOURCE_BYTES)
     if (oversized) throw new Error(`单份灵感资料不能超过 100 MiB：${oversized.relativeName}`)
     const total = files.reduce((sum, file) => sum + file.size, 0)
@@ -386,7 +470,7 @@ export function registerIpc(ctx: AppContext): void {
   /* ---------- 智能体 ---------- */
   ipcMain.handle(IPC.AgentRun, async (_e, req: RunAgentRequest) => ctx.agent.run(requireRoot(), req))
   ipcMain.handle(IPC.CompressSessionContext, async (_e, sessionId: string, providerId: string, model: string) => ctx.agent.compressSessionContext(requireRoot(), sessionId, providerId, model))
-  ipcMain.handle(IPC.AgentConfirm, async (_e, sessionId: string, changeId: string, approved: boolean) => ctx.agent.confirmChangeForWorkspace(requireRoot(), changeId, approved, sessionId))
+  ipcMain.handle(IPC.AgentConfirm, async (_e, sessionId: string, changeId: string, approved: boolean, decision) => ctx.agent.confirmChangeForWorkspace(requireRoot(), changeId, approved, sessionId, decision))
   ipcMain.handle(IPC.AgentAbort, async (_e, sessionId: string) => ctx.agent.abortForWorkspace(requireRoot(), sessionId))
   ipcMain.handle(IPC.AgentAnswerQuestion, async (_e, answer: import('../shared/agentQuestions').AgentQuestionAnswer) => ctx.agent.answerQuestion(requireRoot(), answer))
   ipcMain.handle(IPC.AgentResolveSkillCandidate, async (_e, candidateId: string, action: import('../shared/agentQuestions').SkillCandidateAction) => ctx.agent.resolveSkillCandidate(requireRoot(), candidateId, action))

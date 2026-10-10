@@ -44,6 +44,8 @@ export interface Relationship {
 
 export interface OutlineDoc {
   id: string
+  writeRevision?: import('./documentHistory').WriteRevision
+  updatedAt?: string
   title: string
   order: number
   /** Markdown 正文 */
@@ -80,6 +82,8 @@ export type ChapterStatus = 'draft' | 'revised' | 'body' | 'final'
 
 export interface ChapterMeta {
   id: string
+  writeRevision?: import('./documentHistory').WriteRevision
+  updatedAt?: string
   title: string
   volume: string
   order: number
@@ -205,7 +209,11 @@ export interface ModelRef {
 }
 
 export interface AppSettings {
+  /** 老版本设置缺失时迁移为默认的官网和 GitHub 更新源。 */
+  updatePreferences?: import('./updates').UpdatePreferences
   providers: ProviderStored[]
+  /** 本地保存的官方 Trailblazer 供应商模型偏好；认证配置由账户中心托管。 */
+  trailblazerProvider: ManagedProviderPreferences
   defaultChatModel?: ModelRef
   /** 默认的智能体编排计划；会话发送时从这里读取阶段、模型和预算。 */
   orchestrationDefaults: OrchestrationPreferences
@@ -298,13 +306,18 @@ export interface ProviderPublic {
   baseUrl: string
   models: string[]
   hasKey: boolean
+  authentication?: 'custom-key' | 'trailblazer-session'
   keyPreview?: string
   /** 系统密钥不可用时标记为明文降级，提示用户风险。 */
   keyStorage?: 'encrypted' | 'plain' | 'none'
   modelSettings: Record<string, ModelSettings>
+  /** 固定的官方托管供应商，不能删除或编辑连接配置。 */
+  managed?: 'trailblazer'
+  /** 只有完成 Trailblazer 登录后才可发起模型请求。 */
+  active?: boolean
 }
 
-export interface PublicAppSettings extends Omit<AppSettings, 'providers'> {
+export interface PublicAppSettings extends Omit<AppSettings, 'providers' | 'trailblazerProvider'> {
   providers: ProviderPublic[]
 }
 
@@ -317,6 +330,13 @@ export interface ProviderInput {
   apiKey?: string
   models: string[]
   modelSettings?: Record<string, ModelSettings>
+}
+
+export interface ManagedProviderPreferences {
+  models: string[]
+  modelSettings: Record<string, ModelSettings>
+  /** Hash of the issuer, resource, subject and group that own this model list. */
+  modelScope?: string
 }
 
 /* ---------------- 智能体会话 ---------------- */
@@ -501,6 +521,9 @@ export interface PendingChange {
   title: string
   beforeText: string
   afterText: string
+  /** Requires an explicit human choice whether to retain a long-term version. */
+  historyEligible?: boolean
+  historyRequired?: boolean
   /** 目标运行所属身份；普通对话缺省。 */
   goalId?: string
   goalTaskId?: string

@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import type { FileStore } from '../storage/fileStore'
 import { validateContentPackage } from './packageValidator'
 import type { ContentPackage, InstalledContentPackage } from './types'
@@ -49,7 +50,7 @@ export class GlobalSkillLibrary {
       else await this.store.remove(indexPath).catch(() => {})
       throw error
     }
-    return structuredClone(installed)
+    return cloneValue(installed)
   }
 
   async ensure(input: ContentPackage, enabled = true): Promise<GlobalSkillPackage> {

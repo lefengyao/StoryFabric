@@ -1,6 +1,15 @@
 /** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
 
 export const IPC = {
+  CloudState: 'cloud:state', CloudLogin: 'cloud:login', CloudCancel: 'cloud:cancel', CloudLogout: 'cloud:logout',
+  CloudOnboard: 'cloud:onboard', CloudAccount: 'cloud:account', CloudUsage: 'cloud:usage', CloudChannels: 'cloud:channels',
+  CloudGroups: 'cloud:groups', CloudSupplierLobby: 'cloud:supplier-lobby', CloudRedeem: 'cloud:redeem', CloudRedeemHistory: 'cloud:redeem-history', CloudGroup: 'cloud:group', CloudRotate: 'cloud:rotate',
+  CloudConfig: 'cloud:config', CloudConfigUpdate: 'cloud:config:update',
+  CheckAppUpdate: 'app:update:check',
+  GetUpdateDownloadState: 'app:update:state',
+  DownloadAppUpdate: 'app:update:download',
+  CancelAppUpdateDownload: 'app:update:cancel',
+  InstallAppUpdate: 'app:update:install',
   /* 工作区 */
   PickFolder: 'workspace:pick-folder',
   ListWorkspaces: 'workspace:list',
@@ -18,9 +27,19 @@ export const IPC = {
   ExportWorkspace: 'workspace:export',
   ImportWorkspace: 'workspace:import',
   GetChapterBody: 'workspace:chapter-body',
+  GetDocumentSnapshot: 'document:snapshot',
+  SaveHistoryVersion: 'history:save',
+  ListHistoryVersions: 'history:list',
+  GetHistoryVersion: 'history:get',
+  UpdateHistoryVersion: 'history:update',
+  DeleteHistoryVersion: 'history:delete',
+  RestoreHistoryVersion: 'history:restore',
+  SaveImageFile: 'export:save-image',
   SearchProject: 'workspace:search',
   GetGraphLayout: 'workspace:graph-layout:get',
   SaveGraphLayout: 'workspace:graph-layout:save',
+  GetWritingTools: 'workspace:writing-tools:get',
+  SaveWritingTools: 'workspace:writing-tools:save',
 
   /* 实体保存 */
   SaveCharacter: 'entity:save-character',

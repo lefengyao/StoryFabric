@@ -27,7 +27,7 @@ export function createCapacitorWebFetch(request: NativeRequest = CapacitorHttp.r
     try {
       const result = signal ? await Promise.race([call, cancelled]) : await call
       const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? '')
-      return new Response(body, { status: result.status, headers: result.headers })
+      return new Response(init?.method === 'HEAD' || [204, 205, 304].includes(result.status) ? null : body, { status: result.status, headers: result.headers })
     } finally {
       if (onAbort) signal?.removeEventListener('abort', onAbort)
     }

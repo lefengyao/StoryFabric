@@ -1,18 +1,26 @@
 import { Preferences } from '@capacitor/preferences'
+import { readWritingTools, writeWritingTools } from '../../../core/workspace/writingTools'
+import type { WritingToolsPreferences } from '../../../shared/writingTools'
+import { checkForUpdates, normalizeUpdatePreferences } from '../../../shared/updates'
+import { APP_VERSION } from '../lib/appVersion'
 import { Clipboard } from '@capacitor/clipboard'
 import { createCapacitorWebFetch } from './capacitorWebFetch'
+import { createCapacitorCloudModelFetch } from './capacitorCloudModelFetch'
+import { androidCloudAccount } from './capacitorCloudAccount'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { Share } from '@capacitor/share'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { throwIfWorkspaceRequestAborted } from '../../../shared/api'
 import type { AgentEventEnvelope, RuntimeAgentEventEnvelope, StoryFabricApi, WorkspaceImportTarget, WorkspaceRequestOptions } from '../../../shared/api'
 import type { FetchModelsInput, SettingsPatch } from '../../../shared/api'
+import { TRAILBLAZER_PROVIDER_ID } from '../../../shared/cloudAccount'
 import type { AgentQuestionAnswer, SkillCandidateAction } from '../../../shared/agentQuestions'
 import type { WorkspaceArchive } from '../../../core/workspace/archive'
-import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, GoalRun, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
+import type { ChapterBox, ChapterDoc, CharacterDoc, ChatSession, GoalRun, ManagedProviderPreferences, NoteDoc, NoteMeta, OutlineDoc, ProviderInput, ProviderPublic, PublicAppSettings, Relationship, RunAgentRequest, SessionMeta, SettingDoc, SettingMeta, StoryEvent, TrashEntry, UsageRecord, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../../shared/types'
 import { CapacitorFileStore } from './capacitorFileStore'
 import { SafFileStore, documentTree, makeSafPath, parseSafPath } from './safFileStore'
 import type { FileStore } from '../../../core/storage/fileStore'
+import { getDocumentSnapshot, saveDocument, saveHistoryVersion, listHistoryVersions, getHistoryVersion, updateHistoryVersion, deleteHistoryVersion, restoreHistoryVersion } from '../../../core/workspace/documentWrites'
 import { bytesToBase64 } from './archiveTransfer'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject } from '../../../core/workspace/entityStore'
 import { deleteVolume, initializeWorkspace, listVolumes, loadSummary, loadWorkspaceListItem, moveChapter, readGraphLayout, saveVolume, setWorkspaceName, validateWorkspace, writeGraphLayout } from '../../../core/workspace/workspaceService'
@@ -44,8 +52,10 @@ import { GoalStore } from '../../../core/goal/goalStore'
 import { RuleStore } from '../../../core/rules/ruleStore'
 
 const SETTINGS_KEY = 'storyfabric.settings'
+const TRAILBLAZER_PROVIDER_KEY = 'storyfabric.trailblazer-provider'
 const EXTERNAL_WORKSPACES_KEY = 'storyfabric.external-workspaces'
 const WORKSPACE_PREFIX = 'workspaces'
+const TRAILBLAZER_BASE_URL = 'https://trasub2api.fengyao.xin:10048/api/v1/integration/storyfabric/gateway/v1'
 const ANDROID_WORKSPACE_PATH_ERROR = 'Android 工作区路径必须位于应用内部 workspaces 目录下'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -116,6 +126,7 @@ function withAndroidSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 const DEFAULT_PUBLIC: PublicAppSettings = {
+  updatePreferences: normalizeUpdatePreferences(undefined),
   providers: [],
   orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
   agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
@@ -142,11 +153,13 @@ function defaultPublicSettings(): PublicAppSettings {
 
 /** Android 平台 API：应用私有目录工作区，密钥使用 Android Keystore-backed secure storage。 */
 export class AndroidPlatformApi implements StoryFabricApi {
+  readonly cloudAccount = androidCloudAccount
   private currentPath: string | null = null
   private currentStore: FileStore | null = null
   private settings: PublicAppSettings = defaultPublicSettings()
   private agent: CoreAgentService | null = null
   private usage: PortableUsageStore | null = null
+  private managedModelsCache?: { scope: string; models: string[] }
 
   getUiSource(): string { return 'android-local' }
   async clipboardReadText(): Promise<string> {
@@ -217,6 +230,61 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return withAndroidSettingsLock(() => this.loadSettingsFromPreferences())
   }
 
+  private async loadManagedPreferences(): Promise<ManagedProviderPreferences> {
+    const raw = await Preferences.get({ key: TRAILBLAZER_PROVIDER_KEY })
+    if (!raw.value) return { models: [], modelSettings: {} }
+    try {
+      const value: unknown = JSON.parse(raw.value)
+      if (!isRecord(value)) return { models: [], modelSettings: {} }
+      const models = Array.isArray(value.models) ? value.models.filter((model): model is string => typeof model === 'string') : []
+      const modelSettings = isRecord(value.modelSettings) ? value.modelSettings as ManagedProviderPreferences['modelSettings'] : {}
+      return { models, modelSettings, ...(typeof value.modelScope === 'string' ? { modelScope: value.modelScope } : {}) }
+    } catch { return { models: [], modelSettings: {} } }
+  }
+
+  private async saveManagedPreferences(preferences: ManagedProviderPreferences): Promise<void> {
+    await Preferences.set({ key: TRAILBLAZER_PROVIDER_KEY, value: JSON.stringify(preferences) })
+  }
+
+  private async managedPublicProvider(): Promise<ProviderPublic> {
+    const [state, preferences, scope] = await Promise.all([
+      androidCloudAccount.getState(),
+      this.loadManagedPreferences(),
+      androidCloudAccount.getPreferenceScope().catch(() => undefined)
+    ])
+    const active = state.phase === 'signed-in'
+    const ownsPreferences = active && Boolean(scope) && preferences.modelScope === scope
+    let models = active ? (ownsPreferences ? [...preferences.models] : []) : [...preferences.models]
+    const modelSettings = active && !ownsPreferences ? {} : preferences.modelSettings
+    if (active && !ownsPreferences && !models.length && scope) {
+      if (this.managedModelsCache?.scope === scope) models = [...this.managedModelsCache.models]
+      else {
+        try {
+          models = await androidCloudAccount.getModels('openai')
+          this.managedModelsCache = { scope, models: [...models] }
+        } catch { /* Account details remain available when model listing is temporarily offline. */ }
+      }
+    }
+    return {
+      id: TRAILBLAZER_PROVIDER_ID,
+      name: 'Trailblazer 云端',
+      protocol: 'openai',
+      baseUrl: TRAILBLAZER_BASE_URL,
+      models,
+      hasKey: false,
+      authentication: 'trailblazer-session',
+      keyStorage: 'none',
+      modelSettings,
+      managed: 'trailblazer',
+      active
+    }
+  }
+
+  private async withManagedProvider(settings: PublicAppSettings): Promise<PublicAppSettings> {
+    const provider = await this.managedPublicProvider()
+    return { ...settings, providers: [...settings.providers.filter((item) => item.id !== TRAILBLAZER_PROVIDER_ID), provider] }
+  }
+
   private normalizeSettings(value: unknown): PublicAppSettings {
     const parsed = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Partial<PublicAppSettings>
@@ -239,6 +307,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       recentWorkspaces,
       recentWorkspaceOpenedAt,
       lastWorkspacePath,
+      updatePreferences: normalizeUpdatePreferences(parsed.updatePreferences),
       orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
       agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration)
     }
@@ -253,28 +322,42 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return this.currentStore
   }
 
-  private async installWorkspace(path: string, store: FileStore): Promise<void> {
-    if (this.currentPath && this.currentPath !== path) {
-      this.runtimeBuffers.clear()
-      this.runtimeSequences.clear()
-      this.runtimeTouched.clear()
-    }
-    this.currentPath = path
-    this.currentStore = store
+  private installWorkspace(path: string, store: FileStore): void {
     const workspaceUsage = new PortableUsageStore(store)
-    this.usage = workspaceUsage
-    this.agent = new CoreAgentService({
+    const nativeFetch = createCapacitorWebFetch()
+    const longNativeFetch = createCapacitorWebFetch(undefined, 180000)
+    const cloudFetch = createCapacitorCloudModelFetch(nativeFetch)
+    const cloudGeminiFetch = createCapacitorCloudModelFetch(longNativeFetch)
+    const agent = new CoreAgentService({
       store,
-      webFetch: createCapacitorWebFetch(),
+      webFetch: nativeFetch,
       workspaceId: path,
       sessions: new CoreSessionStore(store),
       getAdapter: (protocol, baseUrl, options) => getAdapter(protocol, baseUrl, {
         ...options,
-        ...(protocol === 'gemini' ? { fallbackFetcher: createCapacitorWebFetch(undefined, 180000) } : {})
+        fetcher: cloudFetch,
+        ...(protocol === 'gemini' ? { fallbackFetcher: cloudGeminiFetch } : {})
       }),
       settings: async () => {
         const s = await this.loadSettings()
-        return { customPrompt: s.customPrompt, agentGeneration: s.agentGeneration, providers: await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings }))) }
+        const providers: import('../../../core/agent/agentLoop').AgentSettings['providers'] = await Promise.all(s.providers.map(async (p) => ({ id: p.id, name: p.name, protocol: p.protocol, baseUrl: p.baseUrl, apiKey: await this.keyOf(p.id), modelSettings: p.modelSettings })))
+        const state = await androidCloudAccount.getState()
+        if (state.phase === 'signed-in') {
+          const preferences = await this.loadManagedPreferences()
+          const scope = await androidCloudAccount.getPreferenceScope().catch(() => undefined)
+          providers.push({
+            id: TRAILBLAZER_PROVIDER_ID,
+            name: 'Trailblazer 云端',
+            protocol: 'openai',
+            baseUrl: TRAILBLAZER_BASE_URL,
+            apiKey: '',
+            modelSettings: scope && preferences.modelScope === scope ? preferences.modelSettings : {},
+            authentication: 'trailblazer-session',
+            adapter: getAdapter('openai', TRAILBLAZER_BASE_URL, { fetcher: cloudFetch }),
+            fetcher: cloudFetch
+          })
+        }
+        return { customPrompt: s.customPrompt, agentGeneration: s.agentGeneration, providers }
       },
       consumeLegacyCustomPrompt: (migrate) => withAndroidSettingsLock(async () => {
         await this.loadSettingsFromPreferences()
@@ -290,6 +373,15 @@ export class AndroidPlatformApi implements StoryFabricApi {
       globalSkillLibrary: new GlobalSkillLibrary(new CapacitorFileStore())
       ,memoryStore: new MemoryStore(new CapacitorFileStore(), store)
     })
+    if (this.currentPath && this.currentPath !== path) {
+      this.runtimeBuffers.clear()
+      this.runtimeSequences.clear()
+      this.runtimeTouched.clear()
+    }
+    this.currentPath = path
+    this.currentStore = store
+    this.usage = workspaceUsage
+    this.agent = agent
   }
 
   async pickFolder(): Promise<string | null> {
@@ -393,24 +485,16 @@ export class AndroidPlatformApi implements StoryFabricApi {
   async openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const normalizedPath = normalizeAnyWorkspacePath(path)
     const store = workspaceStoreForPath(normalizedPath)
-    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent, usage: this.usage }
     throwIfWorkspaceRequestAborted(options?.signal)
     const valid = await validateWorkspace(store)
     if (!valid.ok) throw new Error(valid.reason)
-    try {
-      throwIfWorkspaceRequestAborted(options?.signal)
-      await this.installWorkspace(normalizedPath, store)
-      throwIfWorkspaceRequestAborted(options?.signal)
-      await this.recordRecentWorkspace(normalizedPath, options?.signal)
-      throwIfWorkspaceRequestAborted(options?.signal)
-      return loadSummary(store, workspaceFallbackName(normalizedPath), normalizedPath)
-    } catch (error) {
-      this.currentPath = previous.path
-      this.currentStore = previous.store
-      this.agent = previous.agent
-      this.usage = previous.usage
-      throw error
-    }
+    throwIfWorkspaceRequestAborted(options?.signal)
+    const summary = await loadSummary(store, workspaceFallbackName(normalizedPath), normalizedPath, { upgradeLegacy: options?.upgradeLegacy === true })
+    throwIfWorkspaceRequestAborted(options?.signal)
+    await this.recordRecentWorkspace(normalizedPath, options?.signal)
+    throwIfWorkspaceRequestAborted(options?.signal)
+    this.installWorkspace(normalizedPath, store)
+    return summary
   }
 
   private async recordRecentWorkspace(path: string, signal?: AbortSignal): Promise<void> {
@@ -460,7 +544,11 @@ export class AndroidPlatformApi implements StoryFabricApi {
         const normalizedPath = normalizeAnyWorkspacePath(path)
         try {
           const store = workspaceStoreForPath(normalizedPath)
-          if ((await validateWorkspace(store)).ok) await this.installWorkspace(normalizedPath, store)
+          if ((await validateWorkspace(store)).ok) {
+            const summary = await loadSummary(store, workspaceFallbackName(normalizedPath), normalizedPath)
+            await this.installWorkspace(normalizedPath, store)
+            return summary
+          }
         } catch { /* An external directory can be removed or lose its grant. */ }
       }
     }
@@ -507,6 +595,8 @@ export class AndroidPlatformApi implements StoryFabricApi {
   searchProject(query: string) { return searchProject(this.requireStore(), query) }
   getGraphLayout() { return readGraphLayout(this.requireStore()) }
   saveGraphLayout(layout: Record<string, { x: number; y: number }>) { return writeGraphLayout(this.requireStore(), layout) }
+  getWritingTools() { return readWritingTools(this.requireStore()) }
+  saveWritingTools(preferences: WritingToolsPreferences) { return writeWritingTools(this.requireStore(), preferences) }
   refreshWorkspace() { return this.getCurrentWorkspace() }
   async exportWorkspace(): Promise<WorkspaceArchive> {
     return exportWorkspaceArchive(this.requireStore(), this.currentPath?.split('/').pop() ?? 'storyfabric')
@@ -545,7 +635,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     const root: FileStore = external ? new SafFileStore(makeSafPath(external.treeUri)) : new CapacitorFileStore(WORKSPACE_PREFIX)
     const baseName = (target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')).replace(/[\\/:*?"<>|]/g, '').trim() || '导入工作区'
     throwIfWorkspaceRequestAborted(options?.signal)
-    const previous = { path: this.currentPath, store: this.currentStore, agent: this.agent, usage: this.usage }
+    const previousPath = this.currentPath
     let path: string | null = null
     try {
       path = await withAndroidImportLock(async () => {
@@ -564,7 +654,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
         }
         targetReserved = true
         const targetStore = workspaceStoreForPath(targetPath)
-        await importWorkspaceArchive(targetStore, bytes)
+        await importWorkspaceArchive(targetStore, bytes, { upgradeLegacy: options?.upgradeLegacy === true })
         throwIfWorkspaceRequestAborted(options?.signal)
         await setWorkspaceName(targetStore, baseName)
         throwIfWorkspaceRequestAborted(options?.signal)
@@ -576,30 +666,35 @@ export class AndroidPlatformApi implements StoryFabricApi {
       })
       throwIfWorkspaceRequestAborted(options?.signal)
       const store = workspaceStoreForPath(path)
-      await this.installWorkspace(path, store)
+      const summary = await loadSummary(store, workspaceFallbackName(path), path)
       throwIfWorkspaceRequestAborted(options?.signal)
       await this.recordRecentWorkspace(path, options?.signal)
       throwIfWorkspaceRequestAborted(options?.signal)
-      return loadSummary(store, workspaceFallbackName(path), path)
+      this.installWorkspace(path, store)
+      return summary
     } catch (error) {
-      this.currentPath = previous.path
-      this.currentStore = previous.store
-      this.agent = previous.agent
-      this.usage = previous.usage
-      if (path && path !== previous.path) await root.remove(external ? parseSafPath(path)!.root : path.slice(`${WORKSPACE_PREFIX}/`.length))
+      if (path && path !== previousPath) await root.remove(external ? parseSafPath(path)!.root : path.slice(`${WORKSPACE_PREFIX}/`.length))
       throw error
     }
   }
 
+  getDocumentSnapshot(...args: Parameters<StoryFabricApi['getDocumentSnapshot']>): ReturnType<StoryFabricApi['getDocumentSnapshot']> { return getDocumentSnapshot(this.requireStore(), ...args) }
+  saveHistoryVersion(...args: Parameters<StoryFabricApi['saveHistoryVersion']>): ReturnType<StoryFabricApi['saveHistoryVersion']> { return saveHistoryVersion(this.requireStore(), ...args) }
+  listHistoryVersions(...args: Parameters<StoryFabricApi['listHistoryVersions']>): ReturnType<StoryFabricApi['listHistoryVersions']> { return listHistoryVersions(this.requireStore(), ...args) }
+  getHistoryVersion(...args: Parameters<StoryFabricApi['getHistoryVersion']>): ReturnType<StoryFabricApi['getHistoryVersion']> { return getHistoryVersion(this.requireStore(), ...args) }
+  updateHistoryVersion(...args: Parameters<StoryFabricApi['updateHistoryVersion']>): ReturnType<StoryFabricApi['updateHistoryVersion']> { return updateHistoryVersion(this.requireStore(), ...args) }
+  deleteHistoryVersion(...args: Parameters<StoryFabricApi['deleteHistoryVersion']>): ReturnType<StoryFabricApi['deleteHistoryVersion']> { return deleteHistoryVersion(this.requireStore(), ...args) }
+  restoreHistoryVersion(...args: Parameters<StoryFabricApi['restoreHistoryVersion']>): ReturnType<StoryFabricApi['restoreHistoryVersion']> { return restoreHistoryVersion(this.requireStore(), ...args) }
+
   async saveCharacter(doc: Partial<CharacterDoc>): Promise<CharacterDoc> { return saveCharacter(this.requireStore(), doc) }
   async deleteCharacter(id: string): Promise<void> { return deleteCharacter(this.requireStore(), id) }
   async saveRelationships(list: Relationship[]): Promise<void> { return saveRelationships(this.requireStore(), list) }
-  async saveOutlineDoc(doc: Partial<OutlineDoc>): Promise<OutlineDoc> { return saveOutlineDoc(this.requireStore(), doc) }
+  async saveOutlineDoc(doc: Partial<OutlineDoc>, options?: Parameters<StoryFabricApi['saveOutlineDoc']>[1]): Promise<OutlineDoc> { return saveDocument(this.requireStore(), 'outline', doc, options) }
   async deleteOutlineDoc(id: string): Promise<void> { return deleteOutlineDoc(this.requireStore(), id) }
   async saveEvent(doc: Partial<StoryEvent>): Promise<StoryEvent> { return saveEvent(this.requireStore(), doc) }
   async deleteEvent(id: string): Promise<void> { return deleteEvent(this.requireStore(), id) }
-  async saveChapter(doc: Partial<ChapterDoc>): Promise<import('../../../shared/types').ChapterMeta> {
-    const saved = await saveChapter(this.requireStore(), doc)
+  async saveChapter(doc: Partial<ChapterDoc>, options?: Parameters<StoryFabricApi['saveChapter']>[1]): Promise<import('../../../shared/types').ChapterMeta> {
+    const saved = await saveDocument(this.requireStore(), 'chapter', doc, options)
     const { content: _content, ...meta } = saved
     void _content
     return meta
@@ -621,7 +716,11 @@ export class AndroidPlatformApi implements StoryFabricApi {
   saveNote(doc: Partial<NoteDoc>): Promise<NoteDoc> { return saveNote(this.requireStore(), doc) }
   deleteNote(id: string): Promise<void> { return deleteNote(this.requireStore(), id) }
 
-  async getSettings(): Promise<PublicAppSettings> { return this.loadSettings() }
+  async getSettings(): Promise<PublicAppSettings> { return this.withManagedProvider(await this.loadSettings()) }
+  async checkAppUpdate(): Promise<import('../../../shared/updates').UpdateCheckResult> {
+    const settings = await this.loadSettings()
+    return checkForUpdates({ currentVersion: APP_VERSION, platform: 'android', preferences: settings.updatePreferences, fetchImpl: createCapacitorWebFetch(undefined, 10_000) })
+  }
 
   getMemory(scope: MemoryScope): ReturnType<StoryFabricApi['getMemory']> {
     return new MemoryStore(new CapacitorFileStore(), this.requireStore()).read(scope)
@@ -660,7 +759,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       await this.loadSettingsFromPreferences()
       this.settings = this.normalizeSettings({ ...this.settings, ...patch })
       await this.saveSettings()
-      return this.settings
+      return this.withManagedProvider(this.settings)
     })
   }
 
@@ -668,6 +767,17 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return withAndroidSettingsLock(async () => {
       await this.loadSettingsFromPreferences()
       const id = input.id ?? `prov_${Date.now().toString(36)}`
+      if (id === TRAILBLAZER_PROVIDER_ID) {
+        const scope = await androidCloudAccount.getPreferenceScope().catch(() => undefined)
+        const modelSettings = pruneModelSettings(input.models, input.modelSettings ?? {})
+        const preferences: ManagedProviderPreferences = {
+          models: [...input.models], modelSettings,
+          ...(scope ? { modelScope: scope } : {})
+        }
+        await this.saveManagedPreferences(preferences)
+        this.managedModelsCache = scope ? { scope, models: [...input.models] } : undefined
+        return this.withManagedProvider(this.settings)
+      }
       const previous = this.settings.providers.find((p) => p.id === id)
       this.settings = {
         ...this.settings,
@@ -675,13 +785,14 @@ export class AndroidPlatformApi implements StoryFabricApi {
       }
       if (input.apiKey) await SecureStorage.setItem(this.keyName(id), input.apiKey)
       await this.saveSettings()
-      return this.settings
+      return this.withManagedProvider(this.settings)
     })
   }
 
   async deleteProvider(id: string): Promise<PublicAppSettings> {
     return withAndroidSettingsLock(async () => {
       await this.loadSettingsFromPreferences()
+      if (id === TRAILBLAZER_PROVIDER_ID) return this.withManagedProvider(this.settings)
       this.settings = {
         ...this.settings,
         providers: this.settings.providers.filter((p) => p.id !== id),
@@ -689,7 +800,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
       }
       try { await SecureStorage.removeItem(this.keyName(id)) } catch { /* no-op */ }
       await this.saveSettings()
-      return this.settings
+      return this.withManagedProvider(this.settings)
     })
   }
 
@@ -706,6 +817,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
   }
 
   async fetchModels(input: FetchModelsInput): Promise<string[]> {
+    if (input.providerId === TRAILBLAZER_PROVIDER_ID) return androidCloudAccount.getModels(input.protocol)
     const provider = await this.providerInput(input)
     return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey, { fetcher: createCapacitorWebFetch() })
   }
@@ -717,7 +829,7 @@ export class AndroidPlatformApi implements StoryFabricApi {
     if (!this.agent) throw new Error('尚未打开工作区')
     return this.agent.compressSessionContext(sessionId, providerId, model)
   }
-  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void> { this.agent?.confirmChange(changeId, approved, sessionId); return Promise.resolve() }
+  agentConfirm(sessionId: string, changeId: string, approved: boolean, decision?: Parameters<StoryFabricApi['agentConfirm']>[3]): Promise<void> { this.agent?.confirmChange(changeId, approved, sessionId, decision); return Promise.resolve() }
   agentAbort(sessionId: string): Promise<void> { this.agent?.abort(sessionId); return Promise.resolve() }
   async agentAnswerQuestion(answer: AgentQuestionAnswer): Promise<void> {
     if (!this.agent) throw new Error('尚未打开工作区')
@@ -736,10 +848,10 @@ export class AndroidPlatformApi implements StoryFabricApi {
     return goal
   }
   private async goalModel(): Promise<{ providerId: string; model: string }> {
-    const settings = await this.loadSettings()
+    const settings = await this.getSettings()
     const preferred = settings.defaultChatModel
-    if (preferred && settings.providers.some((provider) => provider.id === preferred.providerId && provider.models.includes(preferred.model) && provider.hasKey)) return preferred
-    const provider = settings.providers.find((item) => item.models.length > 0 && item.hasKey)
+    if (preferred && settings.providers.some((provider) => provider.id === preferred.providerId && provider.models.includes(preferred.model) && (provider.hasKey || provider.managed === 'trailblazer' && provider.active))) return preferred
+    const provider = settings.providers.find((item) => item.models.length > 0 && (item.hasKey || item.managed === 'trailblazer' && item.active))
     if (!provider) throw new Error('请先配置可用的供应商和模型')
     return { providerId: provider.id, model: provider.models[0] }
   }

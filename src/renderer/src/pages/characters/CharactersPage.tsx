@@ -10,6 +10,7 @@ import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { factionColor } from '../../lib/utils'
 import type { CharacterDoc } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { DocumentImageExport } from '../../features/imageExport/DocumentImageExport'
 
 function emptyCharacter(): CharacterDoc {
   return { id: '', name: '', aliases: [], role: '', faction: '', gender: '', age: '', tags: [], summary: '', content: '' }
@@ -214,7 +215,7 @@ export function CharactersPage(): React.ReactElement {
       {!draft ? (
         <div className="flex-1">
           {selected ? (
-            <ReadOnlyCard c={selected} onEdit={() => openEditor(selected)} scrollRef={characterReadOnlyRef} />
+            <ReadOnlyCard c={selected} workspaceName={summary?.name ?? ''} onEdit={() => openEditor(selected)} scrollRef={characterReadOnlyRef} />
           ) : (
             <EmptyState icon={<UserRound size={32} />} title="选择左侧人物查看" hint="或创建新的人物卡" />
           )}
@@ -224,6 +225,12 @@ export function CharactersPage(): React.ReactElement {
           draft={draft}
           dirty={dirty}
           saving={saving}
+          workspaceName={summary?.name ?? ''}
+          beforeExport={async () => {
+            if (dirty && !window.confirm('当前人物有未保存修改。保存后导出图片？取消将保留编辑内容。')) return false
+            if (dirty || !draft.id) await save()
+            return true
+          }}
           factionPresets={factionPresets}
           aliasesText={aliasesText}
           tagsText={tagsText}
@@ -258,7 +265,7 @@ export function CharactersPage(): React.ReactElement {
   )
 }
 
-function ReadOnlyCard({ c, onEdit, scrollRef }: { c: CharacterDoc; onEdit: () => void; scrollRef?: React.MutableRefObject<HTMLDivElement | null> }): React.ReactElement {
+function ReadOnlyCard({ c, workspaceName, onEdit, scrollRef }: { c: CharacterDoc; workspaceName: string; onEdit: () => void; scrollRef?: React.MutableRefObject<HTMLDivElement | null> }): React.ReactElement {
   return (
     <div ref={scrollRef} className="mx-auto max-w-3xl p-6 overflow-y-auto h-full">
       <div className="mb-4 flex items-center justify-between">
@@ -279,9 +286,7 @@ function ReadOnlyCard({ c, onEdit, scrollRef }: { c: CharacterDoc; onEdit: () =>
             ))}
           </div>
         </div>
-        <Button size="sm" onClick={onEdit}>
-          编辑
-        </Button>
+        <div className="flex flex-wrap gap-1"><DocumentImageExport kind="character" document={c} workspaceName={workspaceName} /><Button size="sm" onClick={onEdit}>编辑</Button></div>
       </div>
       {c.summary && <p className="mb-4 text-sm text-muted">{c.summary}</p>}
       <Markdown text={c.content} />
@@ -293,6 +298,8 @@ function CharacterForm({
   draft,
   dirty,
   saving,
+  workspaceName,
+  beforeExport,
   factionPresets,
   aliasesText,
   tagsText,
@@ -307,6 +314,8 @@ function CharacterForm({
   draft: CharacterDoc
   dirty: boolean
   saving: boolean
+  workspaceName: string
+  beforeExport: () => Promise<boolean>
   factionPresets: string[]
   aliasesText: string
   tagsText: string
@@ -320,10 +329,11 @@ function CharacterForm({
 }): React.ReactElement {
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-3">
         <span className="text-sm font-medium">{draft.id ? '编辑人物' : '新建人物'}</span>
         {dirty && <span className="text-xs text-accent">未保存</span>}
         <div className="flex-1" />
+        <DocumentImageExport kind="character" document={{ ...draft, aliases: splitDelimitedText(aliasesText), tags: splitDelimitedText(tagsText) }} workspaceName={workspaceName} beforeExport={beforeExport} disabled={saving || !draft.name.trim()} />
         <Button variant="ghost" size="sm" onClick={onCancel}>
           取消
         </Button>

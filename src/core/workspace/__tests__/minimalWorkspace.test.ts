@@ -41,7 +41,7 @@ describe('minimal workspace example', () => {
 
     const summary = await loadSummary(store, '示例', 'fixture://minimal-workspace')
     expect(summary.name).toBe('星港回声·最小示例')
-    expect(summary.version).toBe(4)
+    expect(summary.version).toBe(5)
     expect(summary.volumes).toEqual([{ id: 'vol_default', title: '第一卷：潮汐', order: 1 }])
     expect(summary.characters.map((item) => item.tier).sort()).toEqual(['primary', 'secondary'])
     expect(summary.outline.map((item) => item.kind).sort()).toEqual(['chapter', 'total'])

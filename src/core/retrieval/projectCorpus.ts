@@ -3,6 +3,9 @@ import type { FileStore } from '../storage/fileStore'
 import { contentRevision, resourceRevision } from '../workspace/resourceRevision'
 import { extractTextFromBytes, supportsTextExtraction, TextExtractionError } from '../inspiration/textExtractors'
 import { PROJECT_DOC_MAX_BYTES } from '../workspace/projectDocs'
+import { readCurrentDocument } from '../workspace/documentWrites'
+import { coordinatorFor } from '../workspace/mutationCoordinator'
+import { documentRawReadRevision } from './documentReadRevision'
 import {
   loadChapterDocuments,
   loadCharacterDocuments,
@@ -11,11 +14,9 @@ import {
   loadOutlineDocuments,
   loadRelationshipDocuments,
   loadSettingDocuments,
-  serializeChapter,
   serializeCharacter,
   serializeEvent,
   serializeNote,
-  serializeOutlineDoc,
   serializeRelationships
 } from '../workspace/entityStore'
 
@@ -33,6 +34,7 @@ export interface CorpusEntry {
   sourcePath: string
   sourceRevision: string
   writeRevision: string
+  readRevision?: string
   fields: CorpusField[]
 }
 
@@ -62,6 +64,16 @@ async function sourceRevision(store: FileStore, sourcePath: string, failures: Co
     return null
   }
   return contentRevision(result.text)
+}
+
+async function readCorpusDocument<K extends 'chapter' | 'outline'>(store: FileStore, kind: K, id: string, sourcePath: string, failures: CorpusFailure[]) {
+  return coordinatorFor(store).run(`${kind}:${id}`, async () => {
+    const strict = await store.readTextStrict(sourcePath)
+    if (!strict.ok) { failures.push({ sourcePath, code: strict.code }); return null }
+    const snapshot = await readCurrentDocument(store, kind, id, sourcePath)
+    if (snapshot.sourceText !== strict.text) { failures.push({ sourcePath, code: 'SOURCE_CHANGED' }); return null }
+    return { ...snapshot, readRevision: documentRawReadRevision(store, kind, id, snapshot.sourceText) }
+  })
 }
 
 async function listProjectDocPaths(store: FileStore, dir = 'docs'): Promise<string[]> {
@@ -132,13 +144,16 @@ export async function loadProjectCorpus(store: FileStore, options: CorpusOptions
     }
   }
 
-  for (const { doc, fileName } of outlines) {
+  for (const { doc: listed, fileName } of outlines) {
     const sourcePath = `outline/${fileName}`
-    const revision = await sourceRevision(store, sourcePath, failures)
-    add(entry('outline', doc.id, doc.title, sourcePath, revision, contentRevision(serializeOutlineDoc(doc)), [
+    const snapshot = await readCorpusDocument(store, 'outline', listed.id, sourcePath, failures)
+    if (!snapshot) continue
+    const doc = snapshot.document
+    const value = entry('outline', doc.id, doc.title, sourcePath, resourceRevision(snapshot.sourceText), snapshot.writeRevision, [
       { name: 'title', text: doc.title },
       { name: 'content', text: doc.content }
-    ]))
+    ])
+    add(value ? { ...value, readRevision: snapshot.readRevision } : null)
   }
 
   const eventCharacters = new Map(characters.map(({ doc }) => [doc.id, doc]))
@@ -155,16 +170,19 @@ export async function loadProjectCorpus(store: FileStore, options: CorpusOptions
     ]))
   }
 
-  for (const { doc, fileName } of chapters) {
+  for (const { doc: listed, fileName } of chapters) {
     const sourcePath = `chapters/${fileName}`
-    const revision = await sourceRevision(store, sourcePath, failures)
-    add(entry('chapter', doc.id, doc.title, sourcePath, revision, contentRevision(serializeChapter(doc)), [
+    const snapshot = await readCorpusDocument(store, 'chapter', listed.id, sourcePath, failures)
+    if (!snapshot) continue
+    const doc = snapshot.document
+    const value = entry('chapter', doc.id, doc.title, sourcePath, resourceRevision(snapshot.sourceText), snapshot.writeRevision, [
       { name: 'title', text: doc.title },
       { name: 'volume', text: doc.volume },
       { name: 'terms.term', text: (doc.terms ?? []).map((term) => term.term).join('\n') },
       { name: 'terms.note', text: (doc.terms ?? []).map((term) => term.note ?? '').filter(Boolean).join('\n') },
       { name: 'content', text: doc.content }
-    ]))
+    ])
+    add(value ? { ...value, readRevision: snapshot.readRevision } : null)
   }
 
   for (const { doc, fileName } of settings) {

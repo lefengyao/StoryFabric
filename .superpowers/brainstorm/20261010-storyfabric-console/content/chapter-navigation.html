@@ -1,0 +1,170 @@
+<style>
+  :root { --sf-paper:#f6f2e8; --sf-paper2:#fffdf7; --sf-ink:#20283a; --sf-ink2:#445068; --sf-muted:#8790a0; --sf-line:#e6dfd1; --sf-coral:#d85d49; --sf-green:#2f7e68; --sf-gold:#d5a94d; }
+  #claude-content { padding: 28px clamp(16px, 3vw, 42px) 40px; background:var(--sf-paper); }
+  .sf-review { max-width: 1450px; margin: 0 auto; color: var(--sf-ink); font-family: 'Microsoft YaHei','PingFang SC',sans-serif; }
+  .sf-kicker { display:flex; align-items:center; gap:10px; color:var(--sf-coral); font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+  .sf-kicker:before { content:''; width:22px; height:2px; background:var(--sf-coral); }
+  .sf-title { margin:9px 0 8px; font-family:Georgia,'Songti SC',serif; font-size:clamp(25px,3.2vw,38px); letter-spacing:-.04em; font-weight:600; }
+  .sf-subtitle { max-width:790px; margin:0; color:#6a7281; font-size:14px; line-height:1.8; }
+  .sf-data { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:22px 0 27px; }
+  .sf-metric { min-height:84px; padding:13px 16px; border:1px solid var(--sf-line); border-radius:13px; background:linear-gradient(135deg,#fffdf8,#f2ecdd); box-shadow:0 5px 15px #2931480b; }
+  .sf-metric span { display:block; color:#788193; font-size:10px; font-weight:650; }
+  .sf-metric strong { display:inline-block; margin-top:5px; color:#20283a; font-family:Georgia,'Songti SC',serif; font-size:23px; font-weight:700; letter-spacing:-.035em; }
+  .sf-metric em { padding-left:5px; color:#8c93a1; font-size:10px; font-style:normal; }
+  .sf-metric .trend { float:right; margin-top:12px; color:var(--sf-green); font-size:10px; }
+  .sf-question { margin:0 0 13px; color:#3f495d; font-size:12px; font-weight:700; }
+  .sf-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+  .sf-option { display:block; padding:0; overflow:hidden; border:1.5px solid #ded8cb; border-radius:17px; background:#fffdf8; cursor:pointer; transition:border-color .18s, box-shadow .18s, transform .18s; }
+  .sf-option:hover { border-color:#d59c86; transform:translateY(-2px); box-shadow:0 18px 38px #29314816; }
+  .sf-option.selected { border-color:var(--sf-coral); box-shadow:0 0 0 3px #d85d4920,0 18px 38px #29314814; }
+  .sf-option-head { display:flex; align-items:flex-start; gap:11px; padding:16px 18px 12px; }
+  .sf-letter { display:grid; width:27px; height:27px; flex:none; place-items:center; border-radius:8px; background:#f1e8d7; color:#735c3b; font-size:12px; font-weight:800; }
+  .sf-option.selected .sf-letter { background:var(--sf-coral); color:white; }
+  .sf-option h3 { margin:0 0 4px; color:#20283a; font-family:'Microsoft YaHei','PingFang SC',sans-serif; font-size:15px; font-weight:750; }
+  .sf-option-head p { margin:0; color:#777f8e; font-size:11px; line-height:1.55; }
+  .sf-canvas { display:grid; grid-template-columns:minmax(128px,.72fr) minmax(210px,1.28fr); gap:10px; padding:0 14px 14px; }
+  .sf-device-label { padding:0 0 5px 3px; color:#9b9da3; font-size:8px; font-weight:750; letter-spacing:.11em; }
+  .sf-phone { position:relative; height:324px; overflow:hidden; border:5px solid #232a39; border-radius:19px; background:var(--sf-paper); box-shadow:0 8px 18px #1d253720; }
+  .sf-phone:before { content:''; position:absolute; z-index:2; top:3px; left:50%; width:38px; height:6px; transform:translateX(-50%); border-radius:0 0 7px 7px; background:#232a39; }
+  .sf-mobile-ui { height:100%; display:flex; flex-direction:column; padding-top:10px; }
+  .sf-mobile-top { display:flex; align-items:center; justify-content:space-between; height:32px; padding:0 8px; border-bottom:1px solid #e7e0d3; background:#faf7ef; color:#586175; font-size:8px; }
+  .sf-mobile-top strong { color:#20283a; font-size:9px; }
+  .sf-project-row { display:flex; justify-content:space-between; align-items:center; padding:10px 9px 7px; }
+  .sf-project-row strong { display:block; font-family:Georgia,'Songti SC',serif; font-size:12px; }
+  .sf-project-row small { display:block; margin-top:2px; color:#8a909a; font-size:7px; }
+  .sf-project-row button { border:0; border-radius:7px; padding:6px 7px; background:var(--sf-coral); color:white; font-size:7px; }
+  .sf-mobile-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; padding:0 8px 8px; }
+  .sf-mobile-metric { padding:6px 5px; border:1px solid #e8e0d1; border-radius:7px; background:#fffdf7; }
+  .sf-mobile-metric span { display:block; color:#9499a3; font-size:6px; }
+  .sf-mobile-metric b { display:block; margin-top:2px; color:#273147; font-family:Georgia,serif; font-size:10px; }
+  .sf-list { flex:1; min-height:0; overflow:hidden; padding:0 7px; }
+  .sf-list-title { display:flex; justify-content:space-between; align-items:center; padding:5px 2px; color:#526075; font-size:7px; font-weight:750; }
+  .sf-chapter { display:flex; align-items:center; gap:6px; min-height:31px; margin-bottom:3px; padding:4px 6px; border:1px solid #ece5d8; border-radius:7px; background:#fffdf8; }
+  .sf-num { display:grid; width:17px; height:17px; flex:none; place-items:center; border-radius:5px; background:#f0eadf; color:#777e89; font-size:7px; }
+  .sf-chapter.active { border-color:#df9d8c; background:#fff4ee; }
+  .sf-chapter.active .sf-num { background:var(--sf-coral); color:#fff; }
+  .sf-chapter-copy { min-width:0; flex:1; }
+  .sf-chapter-copy b { display:block; overflow:hidden; color:#343d50; font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+  .sf-chapter-copy small { display:block; margin-top:2px; color:#999da6; font-size:6px; }
+  .sf-status { color:var(--sf-green); font-size:6px; }
+  .sf-scroll-note { display:flex; align-items:center; justify-content:center; gap:5px; padding:5px 0 4px; color:#999da6; font-size:6px; }
+  .sf-scroll-note:before { content:''; width:22px; height:2px; border-radius:2px; background:#c8bda9; }
+  .sf-bottom-nav { display:flex; justify-content:space-around; height:38px; padding-top:5px; border-top:1px solid #e5ded1; background:#fffdf8; }
+  .sf-nav-item { color:#979ca7; text-align:center; font-size:6px; }
+  .sf-nav-item b { display:block; margin-bottom:2px; color:inherit; font-size:11px; }
+  .sf-nav-item.on { color:var(--sf-coral); }
+  .sf-desktop { height:324px; overflow:hidden; border:1px solid #d7d2c8; border-radius:11px; background:var(--sf-paper); box-shadow:0 8px 18px #1d253715; }
+  .sf-windowbar { display:flex; align-items:center; gap:4px; height:17px; padding:0 7px; border-bottom:1px solid #e2ddcf; background:#f0ece2; }
+  .sf-dot { width:4px;height:4px;border-radius:50%;background:#c8c2b6; }
+  .sf-desktop-body { display:flex; height:calc(100% - 17px); }
+  .sf-rail { display:flex; flex-direction:column; align-items:center; gap:7px; width:35px; padding:9px 3px; border-right:1px solid #e6dfd2; background:#faf7ef; color:#8991a0; font-size:8px; }
+  .sf-rail .on { color:var(--sf-coral); }
+  .sf-dir { width:92px; padding:9px 6px; border-right:1px solid #e6dfd2; background:#f6f2e8; }
+  .sf-dir-head { margin-bottom:7px; color:#424d60; font-size:8px; font-weight:750; }
+  .sf-dir-item { overflow:hidden; margin:2px 0; padding:5px 4px; border-radius:5px; color:#70798a; font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+  .sf-dir-item.on { background:#ffede5; color:#bb4f3f; font-weight:750; }
+  .sf-writing { display:flex; min-width:0; flex:1; flex-direction:column; }
+  .sf-writing-head { display:flex; justify-content:space-between; align-items:center; min-height:32px; padding:4px 8px; border-bottom:1px solid #e6dfd2; background:#fffdf8; }
+  .sf-writing-head strong { font-family:Georgia,'Songti SC',serif; font-size:9px; }
+  .sf-writing-head span { color:#8d94a1; font-size:6px; }
+  .sf-writing-metrics { display:flex; gap:5px; padding:6px 8px 0; }
+  .sf-writing-metrics span { padding:4px 6px; border-radius:5px; background:#ebe8df; color:#6d7687; font-size:6px; }
+  .sf-writing-metrics b { color:#26334b; }
+  .sf-page { width:min(88%,225px); margin:8px auto; padding:9px 12px; border:1px solid #e8e0d2; border-radius:5px; background:#fffdf8; box-shadow:0 3px 9px #2931480b; color:#56596a; font-family:Georgia,'Songti SC',serif; font-size:7px; line-height:1.8; }
+  .sf-page h4 { margin:0 0 5px; color:#30384b; font-size:9px; text-align:center; }
+  .sf-page p { margin:4px 0; text-indent:1em; }
+  .sf-agent { display:flex; flex-direction:column; width:78px; border-left:1px solid #e6dfd2; background:#faf7ef; }
+  .sf-agent-head { padding:9px 6px 6px; color:#485269; font-size:7px; font-weight:750; }
+  .sf-agent-card { margin:3px 5px; padding:6px 5px; border:1px solid #e9e2d6; border-radius:6px; background:#fffdf8; color:#778091; font-size:6px; line-height:1.5; }
+  .sf-agent-card b { display:block; margin-bottom:2px; color:#d05c48; font-size:7px; }
+  .sf-agent-input { margin:auto 5px 6px; padding:6px; border:1px solid #e7dfd3; border-radius:6px; background:#fffdf8; color:#aaa; font-size:6px; }
+  .sf-badge { display:inline-block; margin-left:5px; padding:2px 5px; border-radius:99px; background:#e7f2ed; color:#2f7e68; font-size:7px; vertical-align:1px; }
+  .sf-note { margin:0 18px 16px; color:#8d929c; font-size:9px; }
+  @media (max-width: 820px) { .sf-options { grid-template-columns:1fr; } .sf-data { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (max-width: 460px) { .sf-canvas { grid-template-columns:minmax(112px,.76fr) minmax(175px,1.24fr); gap:6px; padding-right:8px; padding-left:8px; } .sf-option-head { padding-right:12px; padding-left:12px; } .sf-phone,.sf-desktop { height:290px; } .sf-rail { width:26px; } .sf-dir { width:74px; } .sf-agent { display:none; } }
+</style>
+
+<main class="sf-review">
+  <div class="sf-kicker">STORYFABRIC · 交互方向评审</div>
+  <h2 class="sf-title">先把浏览、阅读和数据看清楚</h2>
+  <p class="sf-subtitle">这两种方向都把 Android 触控目标、页面滚动和章节切换放在首位。桌面端保留更宽的创作空间；章节数、字数进度、账户余额和用量放到一眼能看到的位置。</p>
+
+  <div class="sf-data" aria-label="数据展示示例">
+    <div class="sf-metric"><span>正文进度</span><strong>24 / 42</strong><em>章</em><b class="trend">57%</b></div>
+    <div class="sf-metric"><span>累计字数</span><strong>86,420</strong><em>字</em><b class="trend">今日 +1,240</b></div>
+    <div class="sf-metric"><span>今日创作</span><strong>1,240</strong><em>字</em><b class="trend">连续 6 天</b></div>
+    <div class="sf-metric"><span>云端余额 · Sub2API (USD)</span><strong>US$168.00</strong><em>可用</em><b class="trend">用量 US$26.40</b></div>
+  </div>
+
+  <p class="sf-question">你更愿意按哪种方式在手机上浏览章节？点击卡片选择，也可以直接告诉我想混合哪些部分。</p>
+
+  <div class="sf-options" data-multiselect>
+    <article class="sf-option" data-choice="focus" onclick="toggleSelect(this)">
+      <div class="sf-option-head">
+        <div class="sf-letter">A</div>
+        <div><h3>聚焦式：一个页面，一件事</h3><p>手机上先看章节目录；点开后进入完整正文页。底部导航固定，页面内容纵向顺滑浏览，统计摘要一直可见。桌面保留导航、章节目录、正文和可收起的智能体栏。</p></div>
+      </div>
+      <div class="sf-canvas">
+        <div>
+          <div class="sf-device-label">ANDROID · 章节列表</div>
+          <div class="sf-phone"><div class="sf-mobile-ui">
+            <div class="sf-mobile-top"><span>☰　织章</span><strong>深海来信</strong><span>⋯</span></div>
+            <div class="sf-project-row"><div><strong>章节正文</strong><small>海雾卷　·　共 42 章</small></div><button>＋ 新建章节</button></div>
+            <div class="sf-mobile-metrics"><div class="sf-mobile-metric"><span>已完成</span><b>24 / 42</b></div><div class="sf-mobile-metric"><span>正文总字数</span><b>86,420</b></div><div class="sf-mobile-metric"><span>今日新增</span><b>+1,240</b></div></div>
+            <div class="sf-list"><div class="sf-list-title"><span>第三卷 · 海雾</span><span>筛选　⌄</span></div>
+              <div class="sf-chapter"><span class="sf-num">21</span><div class="sf-chapter-copy"><b>回声从水下传来</b><small>3,180 字 · 昨天</small></div><span class="sf-status">已完成</span></div>
+              <div class="sf-chapter"><span class="sf-num">22</span><div class="sf-chapter-copy"><b>没有潮汐的夜晚</b><small>2,740 字 · 10月8日</small></div><span class="sf-status">已完成</span></div>
+              <div class="sf-chapter active"><span class="sf-num">23</span><div class="sf-chapter-copy"><b>雾里灯塔</b><small>4,280 字 · 正在编辑</small></div><span class="sf-status">当前</span></div>
+              <div class="sf-chapter"><span class="sf-num">24</span><div class="sf-chapter-copy"><b>船长的旧信</b><small>未开始</small></div><span class="sf-status">草稿</span></div>
+              <div class="sf-chapter"><span class="sf-num">25</span><div class="sf-chapter-copy"><b>抵达北岸</b><small>未开始</small></div><span class="sf-status">草稿</span></div>
+              <div class="sf-scroll-note">向上滑动查看更多章节</div>
+            </div>
+            <div class="sf-bottom-nav"><div class="sf-nav-item"><b>⌂</b>项目</div><div class="sf-nav-item on"><b>▤</b>章节</div><div class="sf-nav-item"><b>◉</b>人物</div><div class="sf-nav-item"><b>✦</b>智能体</div><div class="sf-nav-item"><b>•••</b>更多</div></div>
+          </div></div>
+        </div>
+        <div>
+          <div class="sf-device-label">WINDOWS · 正文编辑</div>
+          <div class="sf-desktop"><div class="sf-windowbar"><i class="sf-dot"></i><i class="sf-dot"></i><i class="sf-dot"></i></div><div class="sf-desktop-body">
+            <div class="sf-rail"><b class="on">织</b><span>⌂</span><span>▤</span><span>♙</span><span>◇</span><span>⚙</span></div>
+            <div class="sf-dir"><div class="sf-dir-head">第三卷　⌄</div><div class="sf-dir-item">21　回声从水下传来</div><div class="sf-dir-item">22　没有潮汐的夜晚</div><div class="sf-dir-item on">23　雾里灯塔</div><div class="sf-dir-item">24　船长的旧信</div><div class="sf-dir-item">25　抵达北岸</div></div>
+            <div class="sf-writing"><div class="sf-writing-head"><strong>雾里灯塔 <i class="sf-badge">已保存</i></strong><span>上次保存 14:32　　•••</span></div><div class="sf-writing-metrics"><span>章节 <b>23 / 42</b></span><span>本章 <b>4,280 字</b></span><span>今日 <b>+1,240</b></span></div><div class="sf-page"><h4>第二十三章　雾里灯塔</h4><p>海雾在凌晨三点漫过防波堤。灯塔的光迟了半拍，像是海面下有什么东西，正试着模仿它的节奏。</p><p>林澈把那封信翻到背面。纸上多了一行字，墨迹还没有干。</p><p>她回头望向港口，听见有人在她身后轻轻敲了三下。</p></div></div>
+            <div class="sf-agent"><div class="sf-agent-head">智能体</div><div class="sf-agent-card"><b>上下文就绪</b>已引用本章、人物资料和前两章</div><div class="sf-agent-card">这段悬念的时间线与第 18 章一致。</div><div class="sf-agent-input">继续讨论…　↗</div></div>
+          </div></div>
+        </div>
+      </div>
+    </article>
+
+    <article class="sf-option" data-choice="workbench" onclick="toggleSelect(this)">
+      <div class="sf-option-head">
+        <div class="sf-letter">B</div>
+        <div><h3>工作台式：目录和正文同时在场</h3><p>手机上用可调节的上下区域浏览：目录占短条，可展开更多章节；正文始终留在当前页。桌面同样可收放章节栏，指标集中在页面顶部，切章更直接。</p></div>
+      </div>
+      <div class="sf-canvas">
+        <div>
+          <div class="sf-device-label">ANDROID · 目录 + 正文</div>
+          <div class="sf-phone"><div class="sf-mobile-ui">
+            <div class="sf-mobile-top"><span>☰　织章</span><strong>深海来信</strong><span>•••</span></div>
+            <div class="sf-project-row"><div><strong>雾里灯塔</strong><small>第 23 章　·　已保存</small></div><button>完成　✓</button></div>
+            <div class="sf-mobile-metrics"><div class="sf-mobile-metric"><span>进度</span><b>24 / 42</b></div><div class="sf-mobile-metric"><span>本章字数</span><b>4,280</b></div><div class="sf-mobile-metric"><span>今日新增</span><b>+1,240</b></div></div>
+            <div class="sf-list" style="flex:none;max-height:106px;border-top:1px solid #e8e0d3;border-bottom:1px solid #e8e0d3;background:#f3efe6;overflow:hidden"><div class="sf-list-title"><span>目录　⌃</span><span>第三卷 · 海雾</span><span>全部</span></div>
+              <div class="sf-chapter"><span class="sf-num">22</span><div class="sf-chapter-copy"><b>没有潮汐的夜晚</b><small>2,740 字</small></div></div>
+              <div class="sf-chapter active"><span class="sf-num">23</span><div class="sf-chapter-copy"><b>雾里灯塔</b><small>当前章节</small></div><span class="sf-status">编辑中</span></div>
+              <div class="sf-chapter"><span class="sf-num">24</span><div class="sf-chapter-copy"><b>船长的旧信</b><small>未开始</small></div></div>
+            </div>
+            <div class="sf-list" style="padding:7px 10px;color:#596174"><div class="sf-list-title"><span>正文　·　可纵向滑动</span><span>Aa</span></div><div style="padding:7px 3px;font-family:Georgia,'Songti SC',serif;font-size:9px;line-height:1.8"><p style="margin:2px 0 8px;text-align:center;font-weight:bold;font-size:10px">第二十三章　雾里灯塔</p><p style="margin:5px 0;text-indent:1em">海雾在凌晨三点漫过防波堤。灯塔的光迟了半拍，像是海面下有什么东西，正试着模仿它的节奏。</p><p style="margin:5px 0;text-indent:1em">林澈把那封信翻到背面。纸上多了一行字，墨迹还没有干。</p><p style="margin:5px 0;text-indent:1em">她回头望向港口，听见有人在她身后轻轻敲了三下。</p></div></div>
+            <div class="sf-bottom-nav"><div class="sf-nav-item"><b>⌂</b>项目</div><div class="sf-nav-item on"><b>▤</b>章节</div><div class="sf-nav-item"><b>◉</b>人物</div><div class="sf-nav-item"><b>✦</b>智能体</div><div class="sf-nav-item"><b>•••</b>更多</div></div>
+          </div></div>
+        </div>
+        <div>
+          <div class="sf-device-label">WINDOWS · 指标和章节常驻</div>
+          <div class="sf-desktop"><div class="sf-windowbar"><i class="sf-dot"></i><i class="sf-dot"></i><i class="sf-dot"></i></div><div class="sf-desktop-body">
+            <div class="sf-rail"><b class="on">织</b><span>⌂</span><span>▤</span><span>♙</span><span>◇</span><span>⚙</span></div>
+            <div class="sf-writing"><div class="sf-writing-head"><strong>深海来信　/　章节</strong><span>数据概览　　＋ 新建</span></div><div class="sf-writing-metrics"><span>已完成 <b>24 / 42</b></span><span>正文 <b>86,420 字</b></span><span>今日 <b>+1,240</b></span><span>云端余额 USD <b>168.00</b></span></div><div style="display:flex;min-height:0;flex:1"><div class="sf-dir" style="width:102px"><div class="sf-dir-head">章节　⌄</div><div class="sf-dir-item">21　回声从水下传来</div><div class="sf-dir-item">22　没有潮汐的夜晚</div><div class="sf-dir-item on">23　雾里灯塔</div><div class="sf-dir-item">24　船长的旧信</div><div class="sf-dir-item">25　抵达北岸</div></div><div class="sf-writing" style="background:#f9f6ef"><div class="sf-writing-head"><strong>第 23 章　·　雾里灯塔</strong><span>保存状态 ✓</span></div><div class="sf-page"><h4>第二十三章　雾里灯塔</h4><p>海雾在凌晨三点漫过防波堤。灯塔的光迟了半拍，像是海面下有什么东西，正试着模仿它的节奏。</p><p>林澈把那封信翻到背面。纸上多了一行字，墨迹还没有干。</p><p>她回头望向港口，听见有人在她身后轻轻敲了三下。</p></div></div></div></div>
+          </div></div>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <p class="sf-note">原型数字仅用于展示层级。账户余额与消费按 Sub2API 返回的 USD 标注；模型大厅参考价单独显示币种和计费单位；数据加载失败应显示错误，不显示成 0。确认方向后，我会继续排查滚动/触摸命中、页面数据和桌面性能。</p>
+</main>

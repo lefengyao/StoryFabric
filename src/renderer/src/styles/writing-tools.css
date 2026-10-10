@@ -1,0 +1,179 @@
+.quick-word-rail {
+  display: flex;
+  flex: 0 0 124px;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+  padding: 4px 8px 4px 0;
+  border-right: 1px solid var(--line);
+}
+.quick-word-rail[data-collapsed="true"] { flex-basis: 36px; padding-right: 4px; }
+.quick-word-item {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 7px 8px;
+  text-align: left;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.quick-word-item:hover, .quick-word-icon:hover, .quick-word-edit:hover { background: var(--elevated); }
+.quick-word-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.quick-word-icon:disabled { opacity: .35; cursor: default; }
+.quick-word-edit {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 36px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.punctuation-bar {
+  display: flex;
+  flex-shrink: 0;
+  overflow-x: auto;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  scrollbar-width: none;
+}
+.punctuation-bar button {
+  display: flex;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--elevated);
+  font-size: 21px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.punctuation-bar button:active { background: var(--accent-soft); color: var(--accent); }
+.android-native.android-keyboard-open { height: var(--android-visible-height, 100%); }
+.android-native.android-keyboard-open body { padding-bottom: 0; }
+.android-native.android-keyboard-open .storyfabric-modal {
+  top: calc(var(--android-visible-height, 100dvh) / 2);
+  max-height: calc(var(--android-visible-height, 100dvh) - 1rem);
+}
+.android-native.android-keyboard-open .action-panel {
+  bottom: max(0px, calc(100vh - var(--android-visible-height, 100vh)));
+  bottom: max(0px, calc(100dvh - var(--android-visible-height, 100dvh)));
+  max-height: calc(var(--android-visible-height, 100dvh) - 1rem);
+}
+.android-writing-keyboard [data-android-app-header],
+.android-writing-keyboard [data-chapter-directory-toggle],
+.android-writing-keyboard [data-chapter-action-message],
+.android-writing-keyboard [data-chapter-status] { display: none !important; }
+.android-writing-keyboard [data-chapter-editor] { padding-bottom: 4px; }
+
+@media (max-width: 639px) {
+  .quick-word-rail { flex-basis: 76px; gap: 4px; padding-right: 4px; }
+  .quick-word-item { min-height: 40px; padding: 7px 4px; font-size: 12px; }
+  .quick-word-icon { width: 30px; height: 36px; }
+}
+.android-native .quick-word-rail { flex-basis: 76px; gap: 4px; padding-right: 4px; }
+.android-native .quick-word-rail[data-collapsed="true"] { flex-basis: 34px; }
+.android-native .quick-word-item { min-height: 40px; padding: 7px 4px; font-size: 12px; }
+.android-native .quick-word-icon { min-height: 36px; }
+
+
+[data-chapter-pane-collapse="true"],
+[data-chapter-pane-rail-toggle="true"] {
+  display: none;
+}
+
+/* Desktop chapter directory: keep a compact rail available while writing. */
+@media (min-width: 1024px) {
+  :root:not(.android-native) [data-chapter-pane-collapsed="false"] [data-android-list-pane],
+  :root:not(.android-native) [data-chapter-pane-collapsed="true"] [data-android-list-pane] {
+    flex-basis: auto;
+    overflow: hidden;
+    transition: width 180ms ease;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapsed="false"] [data-android-list-pane] {
+    width: 18rem;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapsed="true"] [data-android-list-pane] {
+    width: 3rem;
+    min-width: 3rem;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapse="true"] {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0 0.75rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapse="true"]:hover {
+    background: var(--elevated);
+    color: var(--fg);
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapse="true"]:focus-visible,
+  :root:not(.android-native) [data-chapter-pane-rail-toggle="true"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-rail-toggle="true"] {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 3rem;
+    min-width: 3rem;
+    min-height: 100%;
+    padding: 0.75rem 0;
+    border: 0;
+    background: var(--panel);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-rail-toggle="true"]:hover {
+    background: var(--elevated);
+    color: var(--fg);
+  }
+
+  :root:not(.android-native) [data-chapter-pane-rail-toggle="true"] span {
+    writing-mode: vertical-rl;
+    letter-spacing: 0.08em;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapsed="false"] [data-chapter-pane-rail-toggle="true"] {
+    display: none;
+  }
+
+  :root:not(.android-native) [data-chapter-pane-collapsed="true"] [data-android-list-pane] > :not([data-chapter-pane-rail-toggle="true"]) {
+    display: none;
+  }
+}

@@ -13,7 +13,7 @@ import {
 } from '@xyflow/react'
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force'
 import { seedPosition } from '../../lib/graphSeed'
-import { Network, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Network, Plus, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, EmptyState, Field, Input } from '../../components/ui/primitives'
 import { useAndroidOverlayFocus } from '../../components/layout/useAndroidOverlayFocus'
@@ -21,6 +21,9 @@ import { api } from '../../lib/api'
 import { cn, factionColor } from '../../lib/utils'
 import type { CharacterDoc, Relationship } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { RelationshipImageExport } from '../../features/imageExport/GraphImageExport'
+import { newRelationshipForCharacter, relationshipsForCharacter } from './relationshipInspector'
+import { CharacterRelationsPanel } from './CharacterRelationsPanel'
 
 const REL_TYPE_PRESETS = ['亲属', '恋人', '朋友', '敌对', '师徒', '同僚', '陌生人']
 
@@ -105,7 +108,7 @@ function buildGraph(
       draggable: true
     }
   })
-  const edges: Edge[] = rels.map((r) => ({
+  const edges: Edge[] = rels.filter((r) => charById.has(r.fromId) && charById.has(r.toId)).map((r) => ({
     id: r.id,
     source: r.fromId,
     target: r.toId,
@@ -126,8 +129,11 @@ export function RelationsPage(): React.ReactElement {
   const refresh = useWorkspace((s) => s.refresh)
   const [view, setView] = useState<'graph' | 'list'>('graph')
   const [editing, setEditing] = useState<Relationship | null>(null)
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const editingBaselineRef = useRef<Relationship | null>(null)
   const backgroundRef = useRef<HTMLDivElement | null>(null)
-  const inspectorRef = useAndroidOverlayFocus(Boolean(editing), '[data-android-inspector-return="relations"]', backgroundRef)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
   const [isNew, setIsNew] = useState(false)
 
@@ -137,6 +143,38 @@ export function RelationsPage(): React.ReactElement {
   const chars = summary?.characters ?? []
   const rels = useMemo(() => [...(summary?.relationships ?? [])].sort((a, b) => a.id.localeCompare(b.id)), [summary?.relationships])
   const nameOf = (id: string): string => chars.find((c) => c.id === id)?.name ?? '？'
+  const selectedCharacter = chars.find((character) => character.id === selectedCharacterId) ?? null
+  const inspectorOpen = Boolean(editing || selectedCharacter)
+  const inspectorRef = useAndroidOverlayFocus(inspectorOpen, '[data-android-inspector-return="relations"]', backgroundRef)
+  const characterRelationships = selectedCharacter ? relationshipsForCharacter(selectedCharacter, chars, rels) : []
+  const mutationPendingRef = useRef(false)
+  const workspacePathRef = useRef(summary?.path)
+  workspacePathRef.current = summary?.path
+
+  useEffect(() => {
+    if (isAndroid && inspectorOpen) inspectorRef.current?.focus()
+  }, [isAndroid, inspectorOpen, Boolean(editing), selectedCharacterId, inspectorRef])
+
+  useEffect(() => {
+    setSelectedCharacterId(null)
+    setEditing(null)
+    editingBaselineRef.current = null
+    setIsNew(false)
+    setSaveError(null)
+    savedLayoutRef.current = {}
+    nodesRef.current = []
+  }, [summary?.path])
+
+  useEffect(() => {
+    if (!editing || isNew) return
+    const validIds = new Set(chars.map((character) => character.id))
+    if (!validIds.has(editing.fromId) || !validIds.has(editing.toId)) {
+      setEditing(null)
+      setIsNew(false)
+      editingBaselineRef.current = null
+      setSaveError('关系中的人物已不存在，请重新选择关系。')
+    }
+  }, [chars, editing, isNew])
 
   /* 已记忆的坐标：磁盘布局 + 当前画布位置（后者优先） */
   const savedLayoutRef = useRef<Record<string, Position2D>>({})
@@ -163,7 +201,7 @@ export function RelationsPage(): React.ReactElement {
           rebuild()
         }
       })
-      .catch(() => rebuild())
+      .catch(() => { if (!cancelled) rebuild() })
     return () => {
       cancelled = true
     }
@@ -182,35 +220,114 @@ export function RelationsPage(): React.ReactElement {
     void api.saveGraphLayout(merged)
   }
 
-  const startNew = (): void => {
-    setEditing({ id: '', fromId: chars[0]?.id ?? '', toId: chars[1]?.id ?? '', type: '', label: '', description: '', directed: false })
-    setIsNew(true)
-    setView('list')
+  const confirmDiscardEditing = (): boolean => {
+    if (mutationPendingRef.current) return false
+    if (!editing || JSON.stringify(editing) === JSON.stringify(editingBaselineRef.current)) return true
+    return window.confirm('当前关系有未保存修改。切换后将放弃这些修改，是否继续？')
   }
 
-  const saveEditing = async (): Promise<void> => {
-    if (!editing) return
-    const next = isNew ? [...rels, { ...editing, id: `rel_${Date.now().toString(36)}` }] : rels.map((r) => (r.id === editing.id ? editing : r))
-    await api.saveRelationships(next.filter((r) => r.fromId && r.toId && r.fromId !== r.toId))
-    setEditing(null)
-    await refresh()
+  const openEditing = (relationship: Relationship, newRelationship = false): boolean => {
+    if (!confirmDiscardEditing()) return false
+    editingBaselineRef.current = { ...relationship }
+    setEditing({ ...relationship })
+    setIsNew(newRelationship)
+    setSaveError(null)
+    return true
+  }
+
+  const startNew = (characterId?: string): void => {
+    if (chars.length < 2) return
+    const draft = newRelationshipForCharacter(chars, characterId)
+    if (!openEditing(draft, true)) return
+    setSelectedCharacterId(characterId ?? null)
+    if (!characterId) setView('list')
+  }
+
+  const saveEditing = async (): Promise<boolean> => {
+    if (!editing || mutationPendingRef.current) return false
+    if (!isNew && !rels.some((relationship) => relationship.id === editing.id)) {
+      setSaveError('这条关系已被删除，请重新选择关系。')
+      return false
+    }
+    if (!editing.type.trim() || !chars.some((character) => character.id === editing.fromId) || !chars.some((character) => character.id === editing.toId) || editing.fromId === editing.toId) {
+      setSaveError('请选择两位不同人物，并填写关系类别。')
+      return false
+    }
+    const scope = summary?.path
+    mutationPendingRef.current = true
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const validIds = new Set(chars.map((character) => character.id))
+      const candidate = isNew ? [...rels, { ...editing, id: `rel_${Date.now().toString(36)}` }] : rels.map((r) => (r.id === editing.id ? editing : r))
+      const next = candidate.filter((relationship) => validIds.has(relationship.fromId) && validIds.has(relationship.toId) && relationship.fromId !== relationship.toId)
+      await api.saveRelationships(next)
+      if (workspacePathRef.current !== scope) return false
+      useWorkspace.setState((state) => state.summary && state.summary.path === scope ? { summary: { ...state.summary, relationships: next } } : {})
+      setEditing(null)
+      setIsNew(false)
+      editingBaselineRef.current = null
+      try { await refresh() } catch (error) {
+        if (workspacePathRef.current === scope) setSaveError(`关系已保存，刷新失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+      return true
+    } catch (error) {
+      if (workspacePathRef.current === scope) setSaveError(error instanceof Error ? error.message : String(error))
+      return false
+    } finally {
+      mutationPendingRef.current = false
+      setSaving(false)
+    }
   }
 
   const removeRel = async (id: string): Promise<void> => {
-    await api.saveRelationships(rels.filter((r) => r.id !== id))
-    if (editing?.id === id) setEditing(null)
-    await refresh()
+    if (mutationPendingRef.current) return
+    if (editing?.id === id && !confirmDiscardEditing()) return
+    if (!window.confirm('确定删除这条人物关系？')) return
+    const scope = summary?.path
+    mutationPendingRef.current = true
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const validIds = new Set(chars.map((character) => character.id))
+      const next = rels.filter((r) => r.id !== id && validIds.has(r.fromId) && validIds.has(r.toId) && r.fromId !== r.toId)
+      await api.saveRelationships(next)
+      if (workspacePathRef.current !== scope) return
+      useWorkspace.setState((state) => state.summary && state.summary.path === scope ? { summary: { ...state.summary, relationships: next } } : {})
+      if (editing?.id === id) {
+        setEditing(null)
+        setIsNew(false)
+        editingBaselineRef.current = null
+      }
+      try { await refresh() } catch (error) {
+        if (workspacePathRef.current === scope) setSaveError(`关系已删除，刷新失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    } catch (error) {
+      if (workspacePathRef.current === scope) setSaveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      mutationPendingRef.current = false
+      setSaving(false)
+    }
+  }
+
+  const cancelEditing = (confirmDiscard = false): void => {
+    if (mutationPendingRef.current || (confirmDiscard && !confirmDiscardEditing())) return
+    setEditing(null)
+    setIsNew(false)
+    editingBaselineRef.current = null
+    setSaveError(null)
   }
 
   return (
     <div className="relative flex h-full min-h-0">
       <div ref={backgroundRef} className="flex min-w-0 flex-1 flex-col">
-        <div data-android-page-toolbar className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+        <div data-android-page-toolbar className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
           <div className="flex rounded-lg border border-line p-0.5">
             {(['graph', 'list'] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
+                disabled={saving}
                 className={cn(
                   'cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition',
                   view === v ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg'
@@ -231,20 +348,28 @@ export function RelationsPage(): React.ReactElement {
             </span>
           ))}
           <div className="flex-1" />
-          <Button data-android-inspector-return="relations" size="sm" variant="primary" onClick={startNew} disabled={chars.length < 2}>
+          <RelationshipImageExport characters={chars} relationships={rels} workspaceName={summary?.name ?? ''} beforeExport={async () => {
+            if (mutationPendingRef.current) return false
+            if (editing && (isNew || JSON.stringify(editing) !== JSON.stringify(rels.find((relationship) => relationship.id === editing.id)))) {
+              if (!window.confirm('当前关系有未保存修改。保存后选择导出范围？取消将保留编辑内容。')) return false
+              if (!editing.type.trim() || !editing.fromId || !editing.toId || editing.fromId === editing.toId) throw new Error('请先填写有效的关系类别和两位不同人物')
+              if (!await saveEditing()) return false
+            }
+            return true
+          }} />
+          <Button data-android-inspector-return="relations" size="sm" variant="primary" onClick={() => startNew()} disabled={chars.length < 2 || saving}>
             <Plus size={13} /> 新增关系
           </Button>
         </div>
+
+        {saveError && !inspectorOpen && <p role="alert" className="border-b border-line px-4 py-2 text-xs text-danger">{saveError}</p>}
 
         <div className="min-h-0 flex-1">
           {chars.length === 0 ? (
             <EmptyState icon={<Network size={32} />} title="先在「人物」页创建人物" hint="至少两位人物才能建立关系" />
           ) : view === 'graph' ? (
-            rels.length === 0 ? (
-              <EmptyState icon={<Network size={32} />} title="还没有关系连线" hint="点击右上角「新增关系」开始编织关系网" />
-            ) : (
               <ReactFlow
-                nodes={nodes}
+                nodes={nodes.map((node) => ({ ...node, selected: node.id === selectedCharacterId }))}
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
@@ -253,11 +378,23 @@ export function RelationsPage(): React.ReactElement {
                 minZoom={0.3}
                 proOptions={{ hideAttribution: true }}
                 onNodeDragStop={(_, __, dragged) => persistPositions(dragged)}
+                onNodeClick={(_, node) => {
+                  if (!confirmDiscardEditing()) return
+                  setSelectedCharacterId(node.id)
+                  setEditing(null)
+                  setIsNew(false)
+                  editingBaselineRef.current = null
+                  setSaveError(null)
+                }}
                 onEdgeClick={(_, edge) => {
                   const hit = rels.find((r) => r.id === edge.id)
                   if (hit) {
+                    if (!confirmDiscardEditing()) return
+                    setSelectedCharacterId(null)
+                    editingBaselineRef.current = { ...hit }
                     setEditing({ ...hit })
                     setIsNew(false)
+                    setSaveError(null)
                     setView('list')
                   }
                 }}
@@ -265,7 +402,6 @@ export function RelationsPage(): React.ReactElement {
                 <Background gap={24} color="var(--line)" />
                 <Controls showInteractive={false} />
               </ReactFlow>
-            )
           ) : (
             <div className="h-full space-y-2 overflow-y-auto p-4">
               {rels.length === 0 && <EmptyState title="暂无关系" />}
@@ -280,10 +416,10 @@ export function RelationsPage(): React.ReactElement {
                   {r.label && <Badge>{r.label}</Badge>}
                   {r.description && <span className="truncate text-xs text-muted">{r.description}</span>}
                   <div className="ml-auto flex gap-1 opacity-0 transition group-hover:opacity-100">
-                    <Button size="sm" variant="ghost" onClick={() => { setEditing({ ...r }); setIsNew(false); }}>
+                    <Button size="sm" variant="ghost" disabled={saving} onClick={() => { if (!openEditing(r)) return; setSelectedCharacterId(null); }}>
                       编辑
                     </Button>
-                    <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeRel(r.id)}>
+                    <Button size="sm" variant="ghost" disabled={saving} aria-label={`删除${nameOf(r.fromId)}与${nameOf(r.toId)}的关系`} className="text-danger hover:text-danger" onClick={() => void removeRel(r.id)}>
                       <Trash2 size={13} />
                     </Button>
                   </div>
@@ -295,9 +431,15 @@ export function RelationsPage(): React.ReactElement {
       </div>
 
       {/* 编辑侧栏 */}
-      {editing && (
-        <aside ref={inspectorRef} tabIndex={isAndroid ? -1 : undefined} role={isAndroid ? 'dialog' : undefined} aria-label="编辑关系" data-android-inspector className="w-80 shrink-0 space-y-3.5 overflow-y-auto border-l border-line p-4">
-          <div className="text-sm font-medium">{isNew ? '新增关系' : '编辑关系'}</div>
+      {inspectorOpen && (
+        <aside ref={inspectorRef} tabIndex={isAndroid ? -1 : undefined} role={isAndroid ? 'dialog' : undefined} aria-label={editing ? '编辑关系' : `${selectedCharacter?.name ?? '人物'}的关系`} data-android-inspector className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel p-4 max-sm:absolute max-sm:inset-y-0 max-sm:right-0 max-sm:z-20 max-sm:max-w-full max-sm:shadow-lg">
+          {editing ? <>
+          <div className="mb-4 flex items-center gap-2">
+            {selectedCharacter && <Button size="icon" variant="ghost" disabled={saving} aria-label="返回人物关系" onClick={() => cancelEditing(true)}><ArrowLeft size={15} /></Button>}
+            <div className="min-w-0 flex-1 text-sm font-medium">{isNew ? '新增关系' : '编辑关系'}</div>
+            {!selectedCharacter && <Button size="icon" variant="ghost" disabled={saving} aria-label="关闭关系编辑" onClick={() => cancelEditing(true)}><X size={15} /></Button>}
+          </div>
+          <fieldset disabled={saving} className="space-y-3.5">
           <Field label="起始人物">
             <select value={editing.fromId} onChange={(e) => setEditing({ ...editing, fromId: e.target.value })} className={REL_SELECT_CLS}>
               {chars.map((c) => (
@@ -347,13 +489,26 @@ export function RelationsPage(): React.ReactElement {
             有方向性（图中显示箭头）
           </label>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setEditing(null)}>
+            <Button variant="ghost" onClick={() => cancelEditing()}>
               取消
             </Button>
-            <Button variant="primary" onClick={() => void saveEditing()} disabled={!editing.type.trim()}>
+            <Button variant="primary" onClick={() => void saveEditing()} loading={saving} disabled={!editing.type.trim() || !editing.fromId || !editing.toId || editing.fromId === editing.toId}>
               保存
             </Button>
           </div>
+          </fieldset>
+          {saveError && <p role="alert" className="mt-3 text-xs text-danger">{saveError}</p>}
+          </> : selectedCharacter ? <CharacterRelationsPanel
+            character={selectedCharacter}
+            items={characterRelationships}
+            canAdd={chars.length >= 2}
+            busy={saving}
+            error={saveError}
+            onAdd={() => startNew(selectedCharacter.id)}
+            onEdit={(relationship) => { openEditing(relationship) }}
+            onDelete={(id) => { void removeRel(id) }}
+            onClose={() => { if (!mutationPendingRef.current) { setSelectedCharacterId(null); setSaveError(null) } }}
+          /> : null}
         </aside>
       )}
     </div>

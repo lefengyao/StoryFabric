@@ -7,7 +7,7 @@ import { coordinatorFor } from '../workspace/mutationCoordinator'
 
 export const PROJECT_DOC_TOOL_DEFS: ToolDefJson[] = [
   { name: 'list_project_docs', description: '递归列出 docs 中的项目规划、临时参考资料和常见文本文件，不返回正文。', parameters: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } } } },
-  { name: 'read_project_doc', description: '按需读取 docs 中的常见文本、DOCX 或 PDF 文件，支持子目录和分段读取。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 50000 } }, required: ['path'] } },
+  { name: 'read_project_doc', description: '按需读取 docs 中的常见文本、EPUB、DOCX 或 PDF 文件，支持子目录和分段读取。EPUB 按书籍章节顺序提取正文。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 50000 } }, required: ['path'] } },
   { name: 'save_project_doc', description: '保存 docs 中的一篇常见文本文件；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['path', 'content'] } },
   { name: 'rename_project_doc', description: '在 docs 内安全重命名项目文档；不会覆盖已有目标，确认前不会移动文件。baseRevision 来自 read_project_doc 的 fileRevision（纯文本也可使用 writeRevision）。', parameters: { type: 'object', additionalProperties: false, properties: { fromPath: { type: 'string' }, toPath: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['fromPath', 'toPath', 'baseRevision'] } }
 ]

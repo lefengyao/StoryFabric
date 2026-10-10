@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import type { AppliedSkillRef, SkillApplicationEvent } from '../../shared/agentEvidence'
 import type { GlobalSkillLibrary, GlobalSkillPackage } from './globalSkillLibrary'
 import { parseSkillMarkdown } from './packageValidator'
@@ -49,7 +50,7 @@ export class SkillResolver {
   constructor(private readonly library: GlobalSkillLibrary) {}
 
   async createSnapshot(): Promise<SkillSnapshot> {
-    return { libraryId: 'global', packages: structuredClone(await this.library.list({ enabledOnly: true })), createdAt: Date.now() }
+    return { libraryId: 'global', packages: cloneValue(await this.library.list({ enabledOnly: true })), createdAt: Date.now() }
   }
 
   async listSkills(snapshot: SkillSnapshot): Promise<Array<{ packageId: string; packageVersion: string; packageName: string; contentHash: string; id: string; name: string; stages: string[]; description: string }>> {

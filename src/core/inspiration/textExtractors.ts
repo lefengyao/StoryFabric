@@ -1,25 +1,16 @@
 import JSZip from 'jszip'
 import { SaxesParser, type SaxesTagNS } from 'saxes'
-
-export class TextExtractionError extends Error {
-  constructor(readonly status: 'unsupported' | 'failed' | 'too-large', message: string) {
-    super(message)
-    this.name = 'TextExtractionError'
-  }
-}
-
-export const MAX_EXTRACTED_TEXT_CHARS = 500_000
+import { MAX_EXTRACTED_TEXT_CHARS, TextExtractionError } from './extractionErrors'
+import { documentMimeType } from './documentFormats'
+import { extractEpub } from './epubExtractor'
+import { pdfWorkerSource } from './pdfWorkerConfig'
+import type { ExtractionOptions } from './extractionErrors'
+import { readBoundedZipEntry } from './boundedZip'
+export { MAX_EXTRACTED_TEXT_CHARS, TextExtractionError } from './extractionErrors'
+export { TEXT_EXTRACTION_EXTENSIONS } from './documentFormats'
 export const MAX_DOCX_DOCUMENT_XML_BYTES = 4 * 1024 * 1024
 export const MAX_PDF_PAGES = 200
 export const MAX_PDF_EXTRACTED_CHARS = MAX_EXTRACTED_TEXT_CHARS
-
-/** Common UTF-8 text formats that are safe to keep in a project's docs folder. */
-export const TEXT_EXTRACTION_EXTENSIONS = new Set([
-  'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'yaml', 'yml', 'xml', 'html', 'htm', 'rtf',
-  'css', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'java', 'kt', 'kts', 'go', 'rs', 'rb',
-  'php', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'swift', 'sql', 'sh', 'bash', 'zsh', 'bat', 'cmd',
-  'ps1', 'vue', 'svelte', 'astro', 'toml', 'ini', 'conf', 'log', 'tex'
-])
 
 function extensionOf(path: string): string {
   const lastDot = path.lastIndexOf('.')
@@ -38,12 +29,12 @@ function decodeUtf8(bytes: Uint8Array, name: string, maxChars = MAX_EXTRACTED_TE
     for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
       const chunk = decoder.decode(bytes.subarray(offset, Math.min(offset + 64 * 1024, bytes.byteLength)), { stream: true })
       chars += chunk.length
-      if (chars > maxChars) throw tooLarge(`${name} 文本超过提取上限`)
+      if (chars > maxChars) throw tooLarge(`${name} 文本超过 ${maxChars} 字符提取上限，请按卷拆分资料`)
       chunks.push(chunk)
     }
     const last = decoder.decode()
     chars += last.length
-    if (chars > maxChars) throw tooLarge(`${name} 文本超过提取上限`)
+    if (chars > maxChars) throw tooLarge(`${name} 文本超过 ${maxChars} 字符提取上限，请按卷拆分资料`)
     chunks.push(last)
     return chunks.join('')
   } catch (error) {
@@ -103,7 +94,7 @@ function extractDocxXml(xml: string): string {
   return [...paragraphs, ...looseTexts].filter((value) => value.length > 0).join('\n')
 }
 
-async function extractDocx(bytes: Uint8Array): Promise<string> {
+async function extractDocx(bytes: Uint8Array, options: ExtractionOptions): Promise<string> {
   let zip: JSZip
   try {
     zip = await JSZip.loadAsync(bytes, { createFolders: false })
@@ -115,15 +106,16 @@ async function extractDocx(bytes: Uint8Array): Promise<string> {
 
   let xml: string
   try {
-    const xmlBytes = await document.async('uint8array')
-    if (xmlBytes.byteLength > MAX_DOCX_DOCUMENT_XML_BYTES) throw tooLarge('DOCX document.xml 超过提取上限')
-    xml = decodeUtf8(xmlBytes, 'DOCX document.xml')
+    const xmlBytes = await readBoundedZipEntry(document, options.maxDocxXmlBytes ?? MAX_DOCX_DOCUMENT_XML_BYTES)
+    xml = decodeUtf8(xmlBytes, 'DOCX document.xml', options.maxDocxXmlBytes ?? MAX_EXTRACTED_TEXT_CHARS)
   } catch (error) {
     if (error instanceof TextExtractionError) throw error
     throw error
   }
   try {
-    return extractDocxXml(xml)
+    const text = extractDocxXml(xml)
+    if (text.length > (options.maxChars ?? MAX_EXTRACTED_TEXT_CHARS)) throw tooLarge('DOCX 正文超过提取上限，请拆分文档')
+    return text
   } catch (error) {
     if (error instanceof TextExtractionError) throw error
     throw xmlError()
@@ -132,14 +124,16 @@ async function extractDocx(bytes: Uint8Array): Promise<string> {
 
 export interface PdfDocumentLike {
   numPages: number
-  getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }> }>
+  getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }>; cleanup?(): void }>
   destroy(): Promise<unknown>
 }
 
 /** Extract from a loaded PDF document while enforcing page and text budgets. */
-export async function extractPdfDocumentText(document: PdfDocumentLike): Promise<string> {
-  if (!Number.isInteger(document.numPages) || document.numPages < 0 || document.numPages > MAX_PDF_PAGES) {
-    throw tooLarge(`PDF 页数超过 ${MAX_PDF_PAGES} 页上限`)
+export async function extractPdfDocumentText(document: PdfDocumentLike, options: ExtractionOptions = {}): Promise<string> {
+  const maxPages = options.maxPdfPages ?? MAX_PDF_PAGES
+  const maxChars = options.maxChars ?? MAX_PDF_EXTRACTED_CHARS
+  if (!Number.isInteger(document.numPages) || document.numPages < 0 || document.numPages > maxPages) {
+    throw tooLarge(`PDF 页数超过 ${maxPages} 页上限，请拆分 PDF`)
   }
   const pages: string[] = []
   let chars = 0
@@ -149,22 +143,28 @@ export async function extractPdfDocumentText(document: PdfDocumentLike): Promise
       .map((item) => item && typeof item === 'object' && 'str' in item && typeof item.str === 'string' ? item.str : '')
       .filter(Boolean)
       .join(' ')
-    chars += text.length
-    if (chars > MAX_PDF_EXTRACTED_CHARS) throw tooLarge(`PDF 文本超过 ${MAX_PDF_EXTRACTED_CHARS} 字符上限`)
-    if (text) pages.push(text)
+    page.cleanup?.()
+    chars += text.length + (text && pages.length ? 1 : 0)
+    if (chars > maxChars) throw tooLarge(`PDF 文本超过 ${maxChars} 字符上限，请拆分 PDF`)
+    if (text) {
+      pages.push(text)
+      options.onPart?.({ title: `第 ${number} 页`, text })
+    }
   }
   return pages.join('\n')
 }
 
-async function extractPdf(bytes: Uint8Array): Promise<string> {
+async function extractPdf(bytes: Uint8Array, options: ExtractionOptions): Promise<string> {
   try {
     // The legacy Node entrypoint uses pdf.js's Node fake-worker path and runs unchanged
     // under Vitest's Node environment.
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const workerSource = pdfWorkerSource()
+    if (workerSource) pdfjs.GlobalWorkerOptions.workerSrc = workerSource
     const loadingTask = pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false })
     const document = await loadingTask.promise
     try {
-      return await extractPdfDocumentText(document)
+      return await extractPdfDocumentText(document, options)
     } finally {
       await document.destroy()
     }
@@ -175,12 +175,11 @@ async function extractPdf(bytes: Uint8Array): Promise<string> {
 }
 
 export function supportsTextExtraction(path: string): boolean {
-  const extension = extensionOf(path)
-  return TEXT_EXTRACTION_EXTENSIONS.has(extension) || extension === 'docx' || extension === 'pdf'
+  return documentMimeType(path) !== undefined
 }
 
 /** Extracts only text present in the source bytes; unsupported formats never get a synthetic fallback. */
-export async function extractTextFromBytes(path: string, bytes: Uint8Array): Promise<string> {
+export async function extractTextFromBytes(path: string, bytes: Uint8Array, options: ExtractionOptions = {}): Promise<string> {
   switch (extensionOf(path)) {
     case 'txt':
     case 'md':
@@ -231,11 +230,13 @@ export async function extractTextFromBytes(path: string, bytes: Uint8Array): Pro
     case 'conf':
     case 'log':
     case 'tex':
-      return decodeUtf8(bytes, path)
+      return decodeUtf8(bytes, path, options.maxChars)
     case 'docx':
-      return extractDocx(bytes)
+      return extractDocx(bytes, options)
     case 'pdf':
-      return extractPdf(bytes)
+      return extractPdf(bytes, options)
+    case 'epub':
+      return extractEpub(bytes, options)
     default:
       throw new TextExtractionError('unsupported', `不支持提取此资料类型：${path}`)
   }

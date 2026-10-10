@@ -73,7 +73,7 @@ export function normalizeEventGraphChange(events: StoryEvent[], changed: StoryEv
 
   if (!normalized.branchFromId && normalized.prevIds.length === 0 && normalized.nextIds.length === 0) {
     const mainline = buildEventGraph(list.filter((event) => event.id !== normalized.id)).mainlineIds
-    const tail = mainline.at(-1)
+    const tail = mainline[mainline.length - 1]
     if (tail) normalized.prevIds = [tail]
   }
 

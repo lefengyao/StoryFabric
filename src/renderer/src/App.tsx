@@ -9,6 +9,7 @@ import { getPlatformApi, isWebPlatform } from './platform/platformApi'
 import { useChat } from './stores/chatStore'
 import { recoverActiveRun, useRunStore } from './stores/runStore'
 import { useSettings } from './stores/settingsStore'
+import { useAutomaticUpdates } from './lib/useAutomaticUpdates'
 import { useWorkspace } from './stores/workspaceStore'
 
 const ChaptersPage = lazy(() => import('./pages/chapters/ChaptersPage').then(({ ChaptersPage: page }) => ({ default: page })))
@@ -26,10 +27,12 @@ const UsagePage = lazy(() => import('./pages/usage/UsagePage').then(({ UsagePage
 const GoalsPage = lazy(() => import('./pages/goals/GoalsPage').then(({ GoalsPage: page }) => ({ default: page })))
 const UserPage = lazy(() => import('./pages/user/UserPage').then(({ UserPage: page }) => ({ default: page })))
 const MemoryPage = lazy(() => import('./pages/memory/MemoryPage').then(({ MemoryPage: page }) => ({ default: page })))
+const HistoryPage = lazy(() => import('./features/documentHistory/HistoryPage').then(({ HistoryPage: page }) => ({ default: page })))
 
 export default function App(): React.ReactElement {
   const web = isWebPlatform()
   const [webAuthReady, setWebAuthReady] = useState(!web)
+  useAutomaticUpdates(webAuthReady)
   const [webAuthChecked, setWebAuthChecked] = useState(!web)
   const [webAuthError, setWebAuthError] = useState<string | null>(null)
   const status = useWorkspace((s) => s.status)
@@ -111,6 +114,7 @@ export default function App(): React.ReactElement {
             <Route path="/outline" element={<OutlinePage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/chapters" element={<ChaptersPage />} />
+            <Route path="/history" element={<HistoryPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/creative" element={<CreativePage />} />
             <Route path="/inspiration" element={<InspirationPage />} />

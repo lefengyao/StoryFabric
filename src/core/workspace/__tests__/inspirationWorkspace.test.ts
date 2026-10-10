@@ -20,7 +20,7 @@ describe('inspiration workspace directories', () => {
 
     const legacy = new MemoryFileStore()
     const reference = new Uint8Array([37, 80, 68, 70])
-    await legacy.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '旧项目' }))
+    await legacy.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 5, name: '旧项目' }))
     await legacy.writeBytes('inspiration/imported/src_1/reference.pdf', reference)
     await migrateWorkspace(legacy)
     expect(await legacy.exists('inspiration')).toBe(true)

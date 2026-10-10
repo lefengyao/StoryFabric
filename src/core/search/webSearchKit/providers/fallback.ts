@@ -63,7 +63,7 @@ function chainFailure(attempts: readonly Attempt[]): WebError {
   return new WebError(
     `every configured web search provider failed:\n${detail}`,
     WEB_PROVIDER_ERROR,
-    { cause: attempts.at(-1) === undefined ? undefined : new Error(attempts.at(-1)?.message ?? '') },
+    { cause: attempts[attempts.length - 1] === undefined ? undefined : new Error(attempts[attempts.length - 1]?.message ?? '') },
   )
 }
 

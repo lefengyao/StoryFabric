@@ -1,10 +1,25 @@
 {
   "name": "storyfabric",
-  "version": "0.2.24",
+  "version": "0.2.39",
   "description": "依托智能体的小说创作工作台",
   "main": "./out/main/index.js",
   "author": "StoryFabric",
   "private": true,
+  "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^7.1.6",
+    "@capacitor/clipboard": "^7.0.4",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/filesystem": "^7.1.8",
+    "@capacitor/preferences": "^7.0.4",
+    "@capacitor/share": "^7.0.4",
+    "core-js": "3.50.0",
+    "html-to-image": "1.11.13",
+    "js-yaml": "^4.3.2",
+    "jszip": "^3.10.1",
+    "openid-client": "6.8.8",
+    "pdfjs-dist": "5.4.530",
+    "saxes": "6.0.0"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -19,18 +34,6 @@
     "mobile:build": "vite build --config vite.mobile.config.ts",
     "mobile:sync": "npm run mobile:build && cap sync android",
     "mobile:open": "cap open android"
-  },
-  "dependencies": {
-    "@aparajita/capacitor-secure-storage": "^7.1.6",
-    "@capacitor/clipboard": "^7.0.4",
-    "@capacitor/core": "^7.6.9",
-    "@capacitor/filesystem": "^7.1.8",
-    "@capacitor/preferences": "^7.0.4",
-    "@capacitor/share": "^7.0.4",
-    "js-yaml": "^4.3.2",
-    "jszip": "^3.10.1",
-    "pdfjs-dist": "5.4.530",
-    "saxes": "6.0.0"
   },
   "devDependencies": {
     "@capacitor/android": "^7.6.9",
@@ -55,6 +58,7 @@
     "electron-vite": "^5.0.0",
     "lucide-react": "^1.34.0",
     "png-to-ico": "^3.0.2",
+    "postcss": "8.5.29",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",

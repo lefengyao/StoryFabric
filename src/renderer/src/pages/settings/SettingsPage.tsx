@@ -12,9 +12,12 @@ import { CHAT_FONT_SIZES } from '../../lib/chatTypography'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
 import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
+import { TRAILBLAZER_PROVIDER_ID } from '../../../../shared/cloudAccount'
 import { useSettings } from '../../stores/settingsStore'
 import { OrchestrationSettingsView } from './OrchestrationSettingsView'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { APP_VERSION } from '../../lib/appVersion'
+import { UpdatesView } from './UpdatesView'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
 
@@ -29,7 +32,8 @@ const TABS = [
   { key: 'agent', label: '智能体' },
   { key: 'orchestration', label: '编排' },
   { key: 'appearance', label: '外观' },
-  { key: 'notifications', label: '通知' }
+  { key: 'notifications', label: '通知' },
+  { key: 'updates', label: '监测更新' }
 ] as const
 
 type TabKey = (typeof TABS)[number]['key']
@@ -55,6 +59,10 @@ export function SettingsPage(): React.ReactElement {
   const [formError, setFormError] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState<string | null>(null)
   const [projectPrompt, setProjectPrompt] = useState<string | null>(null)
+
+  useEffect(() => {
+    void reload().catch((cause) => setFormError(cause instanceof Error ? cause.message : '读取供应商状态失败'))
+  }, [reload])
 
   useEffect(() => {
     let cancelled = false
@@ -117,7 +125,7 @@ export function SettingsPage(): React.ReactElement {
   }
 
   /* 模型选择公共数据 */
-  const modelOptions = settings.providers.filter((p) => p.models.length > 0)
+  const modelOptions = settings.providers.filter((p) => p.models.length > 0 && p.active !== false)
   const modelValue = (ref?: { providerId: string; model: string }): string => (ref ? `${ref.providerId}::${ref.model}` : '')
   const modelOnChange =
     (key: 'defaultChatModel') =>
@@ -186,20 +194,24 @@ export function SettingsPage(): React.ReactElement {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.name}</span>
                           <Badge tone="accent">{PROTOCOL_LABEL[p.protocol]}</Badge>
-                          {p.hasKey ? <Badge tone={p.keyStorage === 'plain' ? 'danger' : 'ok'}>Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
+                          {p.managed === 'trailblazer'
+                            ? <Badge tone={p.active ? 'ok' : 'danger'}>{p.active ? '已激活' : '登录后激活'}</Badge>
+                            : p.hasKey ? <Badge tone={p.keyStorage === 'plain' ? 'danger' : 'ok'}>Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
                           {p.keyStorage === 'plain' && <Badge tone="danger">明文降级</Badge>}
                         </div>
-                        <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
+                        <div className="mt-1 truncate text-xs text-faint">{p.managed === 'trailblazer' ? '官方托管连接 · 登录后按账号权限提供分组' : (p.baseUrl || '（未填 Base URL）')} · {p.models.length} 个模型</div>
                       </div>
                       <Button size="sm" variant="ghost" onClick={() => setManagingId(p.id)} title="管理模型">
                         <Settings2 size={13} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
-                        <Pencil size={13} />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)}>
-                        <Trash2 size={13} />
-                      </Button>
+                      {p.managed !== 'trailblazer' && <>
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(p)} title="编辑供应商">
+                          <Pencil size={13} />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)} title="删除供应商">
+                          <Trash2 size={13} />
+                        </Button>
+                      </>}
                     </Card>
                   ))}
                 </div>
@@ -528,7 +540,8 @@ export function SettingsPage(): React.ReactElement {
             </section>
           )}
 
-          <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.2.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
+          {active === 'updates' && <UpdatesView />}
+          <p className="pb-4 text-center text-xs text-faint">StoryFabric v{APP_VERSION} · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
         </div>
       </div>
 
@@ -536,7 +549,8 @@ export function SettingsPage(): React.ReactElement {
       {editing && (
         <Modal open onOpenChange={() => setEditing(null)} title={editingId ? `编辑供应商：${editing.name}` : '添加供应商'}>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            {editingId === TRAILBLAZER_PROVIDER_ID && <div className="rounded-lg border border-line bg-panel px-3 py-2 text-sm text-muted">官方供应商由 Trailblazer 账户中心托管，登录后自动激活。名称、协议、连接地址和认证方式不可修改；请使用“管理模型”调整模型列表与参数。</div>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <div className="grid grid-cols-2 gap-3">
               <Field label="名称 *">
                 <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="DeepSeek" autoFocus />
               </Field>
@@ -547,13 +561,13 @@ export function SettingsPage(): React.ReactElement {
                   ))}
                 </select>
               </Field>
-            </div>
-            <Field label="Base URL *" hint={PROTOCOL_HINTS[editing.protocol]}>
+            </div>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <Field label="Base URL *" hint={PROTOCOL_HINTS[editing.protocol]}>
               <Input value={editing.baseUrl} onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })} placeholder="https://api.deepseek.com/v1" />
-            </Field>
-            <Field label={editingId ? 'API Key（留空则沿用原密钥）' : 'API Key'}>
+            </Field>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <Field label={editingId ? 'API Key（留空则沿用原密钥）' : 'API Key'}>
               <Input type="password" value={editing.apiKey ?? ''} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value || undefined })} placeholder="sk-…" />
-            </Field>
+            </Field>}
             <Field label="模型" hint="模型列表与逐模型能力改到「管理模型」里设置（拉取、勾选、手动添加、思考强度映射）">
               <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
                 <span className="text-muted">已配置 {editing.models.length} 个模型</span>
@@ -570,9 +584,7 @@ export function SettingsPage(): React.ReactElement {
               <Button variant="ghost" onClick={() => setEditing(null)}>
                 取消
               </Button>
-              <Button variant="primary" onClick={() => void saveProvider()} loading={savingProvider} disabled={!editing.name.trim() || !editing.baseUrl.trim()}>
-                保存
-              </Button>
+              {editingId !== TRAILBLAZER_PROVIDER_ID && <Button variant="primary" onClick={() => void saveProvider()} loading={savingProvider} disabled={!editing.name.trim() || !editing.baseUrl.trim()}>保存</Button>}
             </div>
           </div>
         </Modal>

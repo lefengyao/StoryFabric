@@ -19,6 +19,6 @@
       "@/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/core/**/*"],
+  "include": ["package.json", "src/renderer/src/**/*", "src/shared/**/*", "src/core/**/*"],
   "exclude": ["src/core/storage/nodeFileStore.ts", "src/core/usage/usageService.ts", "src/core/**/__tests__/**/*"]
 }

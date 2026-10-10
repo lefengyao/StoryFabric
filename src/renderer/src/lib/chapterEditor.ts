@@ -1,3 +1,6 @@
+import { ChangeSet, EditorState, type ChangeSpec, type Text } from '@codemirror/state'
+import { externalEditorChange } from './editorChange'
+
 export interface ChapterEnterChange {
   from: number
   to: number
@@ -6,7 +9,7 @@ export interface ChapterEnterChange {
 }
 
 const FIRST_LINE_INDENT = '　　'
-const FENCE_LINE = /^(?:```|~~~)/
+const FENCE_LINE = /^(`{3,}|~{3,})(.*)$/
 const MARKDOWN_STRUCTURE_LINE = /^(?:#{1,6}(?:\s|$)|>\s?|[*+-]\s|\d+[.)]\s)/
 
 function isProseLine(line: string): boolean {
@@ -24,19 +27,58 @@ function leadingIndent(line: string): string {
 }
 
 function isInsideFence(text: string, lineStart: number): boolean {
-  let inFence = false
+  let fence: { marker: '`' | '~'; length: number } | null = null
   let offset = 0
   for (const line of text.split('\n')) {
     if (offset >= lineStart) break
-    if (FENCE_LINE.test(line.replace(/^[ \t　]*/, ''))) inFence = !inFence
+    const match = FENCE_LINE.exec(line.replace(/^[ \t　]*/, ''))
+    if (match) {
+      const marker = match[1][0] as '`' | '~'
+      if (!fence) fence = { marker, length: match[1].length }
+      else if (marker === fence.marker && match[1].length >= fence.length && !match[2].trim()) fence = null
+    }
     offset += line.length + 1
   }
-  return inFence
+  return fence !== null
 }
 
 function lineEnd(text: string, start: number): number {
   const end = text.indexOf('\n', start)
   return end === -1 ? text.length : end
+}
+
+/** Format a newly typed prose paragraph in the same undo step as the input. */
+export const chapterInputFormatting = EditorState.transactionFilter.of((transaction) => {
+  if (!transaction.docChanged || !transaction.isUserEvent('input.type') || transaction.isUserEvent('input.type.compose') || transaction.annotation(externalEditorChange)) return transaction
+
+  const changes: ChangeSpec[] = []
+  const seen = new Set<number>()
+  transaction.changes.iterChangedRanges((fromA, _toA, fromB, toB) => {
+    if (fromB === toB) return
+    const before = transaction.startState.doc.lineAt(fromA)
+    const line = transaction.newDoc.lineAt(fromB)
+    // Existing content, manual indentation and Markdown openers keep their format.
+    if (before.text.trim() || seen.has(line.from)) return
+    const indent = chapterParagraphIndent(transaction.newDoc, line.from)
+    if (!indent) return
+    seen.add(line.from)
+    changes.push(indent)
+  })
+  if (!changes.length) return transaction
+  const changeSet = ChangeSet.of(changes, transaction.newDoc.length)
+  return [transaction, {
+    changes: changeSet,
+    selection: transaction.newSelection.map(changeSet),
+    sequential: true
+  }]
+})
+
+/** Used after normal typing or after the IME finishes replacing its preedit text. */
+export function chapterParagraphIndent(doc: Text, position: number): ChangeSpec | null {
+  const line = doc.lineAt(position)
+  if (leadingIndent(line.text) || !isProseLine(line.text) || /^[#>*+`~|_-]/.test(line.text) || /^\d+[.)](?:\s|$)/.test(line.text)) return null
+  if (line.from > 0 && isInsideFence(doc.toString(), line.from)) return null
+  return { from: line.from, insert: FIRST_LINE_INDENT }
 }
 
 /**

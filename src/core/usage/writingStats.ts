@@ -1,4 +1,5 @@
 import { diffChars } from 'diff'
+import { lastItem } from '../../shared/runtimeCompatibility'
 import type { FileStore } from '../storage/fileStore'
 
 export interface WritingDay {
@@ -35,6 +36,17 @@ export async function listWritingDays(store: FileStore): Promise<WritingDay[]> {
   return months.flat().sort((a, b) => a.date.localeCompare(b.date))
 }
 
+async function latestWritingDay(store: FileStore, currentPath: string, currentDays: WritingDay[]): Promise<WritingDay | undefined> {
+  const files = (await store.listFiles(ROOT, '.json')).filter((file) => /^\d{4}-\d{2}\.json$/.test(file)).sort().reverse()
+  for (const file of files) {
+    const path = `${ROOT}/${file}`
+    const days = path === currentPath ? currentDays : parseDays(await store.readText(path))
+    const latest = lastItem([...days].sort((first, second) => first.date.localeCompare(second.date)))
+    if (latest) return latest
+  }
+  return undefined
+}
+
 export function writingChange(before: string, after: string): { added: number; deleted: number } {
   if (before === after) return { added: 0, deleted: 0 }
   const changes = diffChars(before, after, { timeout: 100 })
@@ -64,7 +76,7 @@ export function recordChapterWriting(store: FileStore, before: string, after: st
       if (Number.isFinite(value?.totalWords)) baseline = Number(value?.totalWords)
       if (Number.isFinite(value?.updatedAt)) markerUpdatedAt = Number(value?.updatedAt)
     } catch { /* reconstruct from the latest day or caller */ }
-    const latestDay = (await listWritingDays(store)).at(-1)
+    const latestDay = await latestWritingDay(store, path, days)
     if (latestDay && (baseline === undefined || latestDay.updatedAt > markerUpdatedAt)) baseline = latestDay.totalWords
     const net = count(after) - count(before)
     const totalWords = initialTotalAfter ?? Math.max(0, (baseline ?? 0) + net)

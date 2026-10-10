@@ -2,6 +2,59 @@ import { describe, expect, it, vi } from 'vitest'
 import { HttpPlatformApi, WebAuthRequiredError } from '../httpApi'
 
 describe('web platform api', () => {
+  it('loads supplier pricing through the authenticated cloud RPC', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ result: [] }), { headers: { 'content-type': 'application/json' } }))
+    const api = new HttpPlatformApi(fetcher)
+    await expect(api.cloudAccount.getSupplierLobby!()).resolves.toEqual([])
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ method: 'cloudSupplierLobby', args: [] })
+  })
+  it('opens account authorization in a popup and keeps the app page alive', async () => {
+    const originalWindow = (globalThis as { window?: unknown }).window
+    const popup = { focus: vi.fn() }
+    const open = vi.fn(() => popup)
+    const assign = vi.fn()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { open, location: { assign } } })
+    try {
+      let call = 0
+      const api = new HttpPlatformApi(async () => {
+        call += 1
+        return call === 1
+          ? new Response(JSON.stringify({ url: 'https://accounts.example/oauth/authorize' }), { status: 200 })
+          : new Response(JSON.stringify({ result: { phase: 'authorizing', persistent: false } }), { status: 200 })
+      })
+
+      await expect(api.cloudAccount.beginLogin()).resolves.toMatchObject({ phase: 'authorizing' })
+      expect(open).toHaveBeenCalledWith('https://accounts.example/oauth/authorize', 'storyfabric-account-login', 'popup,width=520,height=760,resizable=yes,scrollbars=yes')
+      expect(popup.focus).toHaveBeenCalledOnce()
+      expect(assign).not.toHaveBeenCalled()
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window
+      else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
+  })
+
+  it('falls back to same-tab navigation when the authorization popup is blocked', async () => {
+    const originalWindow = (globalThis as { window?: unknown }).window
+    const open = vi.fn(() => null)
+    const assign = vi.fn()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { open, location: { assign } } })
+    try {
+      let call = 0
+      const api = new HttpPlatformApi(async () => {
+        call += 1
+        return call === 1
+          ? new Response(JSON.stringify({ url: 'https://accounts.example/oauth/authorize' }), { status: 200 })
+          : new Response(JSON.stringify({ result: { phase: 'authorizing', persistent: false } }), { status: 200 })
+      })
+
+      await api.cloudAccount.beginLogin()
+      expect(assign).toHaveBeenCalledWith('https://accounts.example/oauth/authorize')
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window
+      else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
+  })
+
   it('maps StoryFabric calls to authenticated RPC requests', async () => {
     const requests: Array<{ url: string; body: string }> = []
     const api = new HttpPlatformApi(async (input, init) => {
@@ -119,6 +172,20 @@ describe('web platform api', () => {
     const api = new HttpPlatformApi()
 
     await expect(api.openWorkspaceByPath('  ')).rejects.toThrow('请输入工作区路径')
+  })
+
+  it('forwards explicit upgrade consent for IDs, paths and archive imports', async () => {
+    const requests: RequestInit[] = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      requests.push(init!)
+      return new Response(JSON.stringify({ name: '升级后', path: 'ws_upgraded', version: 5 }), { headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example')
+    await api.openWorkspace('ws_old', { upgradeLegacy: true })
+    await api.openWorkspaceByPath('/srv/workspaces/old', { upgradeLegacy: true })
+    await api.importWorkspace(new Uint8Array([1]), 'old.storyfabric.zip', undefined, { upgradeLegacy: true })
+    expect(JSON.parse(String(requests[0].body))).toEqual({ upgradeLegacy: true })
+    expect(JSON.parse(String(requests[1].body))).toEqual({ path: '/srv/workspaces/old', upgradeLegacy: true })
+    expect(requests[2].headers).toMatchObject({ 'x-storyfabric-upgrade-legacy': 'true' })
   })
 
   it('aborts a bearer SSE request when unsubscribing', async () => {

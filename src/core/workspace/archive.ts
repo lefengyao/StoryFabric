@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import type { FileStore } from '../storage/fileStore'
-import { CURRENT_WORKSPACE_VERSION, migrateWorkspace } from './migration'
+import { CURRENT_WORKSPACE_VERSION, migrateWorkspace, validateCurrentDocumentFormat, type WorkspaceMigrationOptions } from './migration'
+import { rotateDocumentRevision } from './resourceRevision'
 
 export interface WorkspaceArchive {
   fileName: string
@@ -47,7 +48,10 @@ function isPortablePath(path: string): boolean {
   if (ROOT_FILES.has(path)) return true
   if (path.startsWith('.storyfabric/')) {
     if (path === '.storyfabric/layout.json') return true
+    if (path === '.storyfabric/writing-tools.json') return true
     if (path === '.storyfabric/memory.md') return true
+    if (/^\.storyfabric\/format-backups\/fb_[a-zA-Z0-9_-]+\/(manifest\.json|storyfabric\.json|chapters\/volumes\.json|(?:chapters|outline)\/.+\.md|\.storyfabric\/trash\/.+\.md)$/.test(path)) return true
+    if (/^\.storyfabric\/history\/(chapters|outlines)\/[a-zA-Z0-9_-]+\/(manifest\.json|versions\/hv_[a-zA-Z0-9_-]+\.json)$/.test(path)) return true
     if (path.startsWith('.storyfabric/creative/')) {
       const relative = path.slice('.storyfabric/creative/'.length)
       if (!relative || relative.startsWith('runs/') || relative.startsWith('usage') || relative.startsWith('secrets/')) return false
@@ -69,6 +73,8 @@ function isPortablePath(path: string): boolean {
 }
 
 function canContainPortableFiles(dir: string): boolean {
+  if (dir === '.storyfabric/format-backups' || /^\.storyfabric\/format-backups\/fb_[a-zA-Z0-9_-]+(?:\/.*)?$/.test(dir)) return true
+  if (dir === '.storyfabric/history' || /^\.storyfabric\/history\/(chapters|outlines)(\/[a-zA-Z0-9_-]+(\/versions)?)?$/.test(dir)) return true
   if (dir === '.storyfabric/inspiration'
     || dir === '.storyfabric/inspiration/cache'
     || dir.startsWith('.storyfabric/inspiration/cache/')
@@ -78,7 +84,7 @@ function canContainPortableFiles(dir: string): boolean {
 }
 
 function acceptsBinaryBytes(path: string): boolean {
-  return path.startsWith('docs/') || path.startsWith('inspiration/') || path.startsWith('.storyfabric/inspiration/')
+  return path.startsWith('docs/') || path.startsWith('inspiration/') || path.startsWith('.storyfabric/inspiration/') || path.startsWith('.storyfabric/format-backups/')
 }
 
 async function addTree(zip: JSZip, store: FileStore, dir: string): Promise<void> {
@@ -104,18 +110,24 @@ function declaredSize(entry: JSZip.JSZipObject): number | null {
   return typeof data?.uncompressedSize === 'number' && Number.isFinite(data.uncompressedSize) ? data.uncompressedSize : null
 }
 
-function validateMetadata(files: ArchiveFile[]): void {
+function validateMetadata(files: ArchiveFile[], options: WorkspaceMigrationOptions): number {
   const metadata = files.find((file) => file.path === 'storyfabric.json')
   if (!metadata) throw new Error('压缩包不是有效的 StoryFabric 工作区')
+  let value: { app?: unknown; version?: unknown }
   try {
-    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadata.bytes)) as { app?: unknown; version?: unknown }
-    if (value.app !== 'storyfabric' || typeof value.version !== 'number' || !Number.isFinite(value.version) || value.version > CURRENT_WORKSPACE_VERSION) throw new Error('invalid')
+    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadata.bytes)) as { app?: unknown; version?: unknown }
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.app !== 'storyfabric' || typeof value.version !== 'number' || !Number.isInteger(value.version) || value.version > CURRENT_WORKSPACE_VERSION) throw new Error('invalid')
   } catch {
     throw new Error('压缩包不是有效的 StoryFabric 工作区')
   }
+  if (value.version === 4) {
+    if (options.upgradeLegacy !== true) throw new Error('WORKSPACE_UPGRADE_REQUIRED：这是格式 4 的旧项目压缩包，需要确认备份并升级为格式 5；原文件尚未修改，不会伪造历史版本')
+  } else if (value.version !== CURRENT_WORKSPACE_VERSION) throw new Error(`压缩包中的工作区需要按格式 5 重写；原文件已保留`)
+  if (value.version === CURRENT_WORKSPACE_VERSION) for (const file of files) if (/^(chapters|outline)\/.*\.md$/i.test(file.path)) validateCurrentDocumentFormat(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
+  return value.version as number
 }
 
-async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile[]> {
+async function readArchive(bytes: Uint8Array | ArrayBuffer, options: WorkspaceMigrationOptions): Promise<{ files: ArchiveFile[]; version: number }> {
   const input = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
   if (!input.byteLength || input.byteLength > WORKSPACE_ARCHIVE_MAX_BYTES) throw new Error('工作区压缩包大小无效或超过限制')
 
@@ -156,8 +168,8 @@ async function readArchive(bytes: Uint8Array | ArrayBuffer): Promise<ArchiveFile
   }
 
   if (!files.length) throw new Error('压缩包不是有效的 StoryFabric 工作区')
-  validateMetadata(files)
-  return files
+  const version = validateMetadata(files, options)
+  return { files, version }
 }
 
 export async function exportWorkspaceArchive(store: FileStore, name: string): Promise<WorkspaceArchive> {
@@ -176,21 +188,22 @@ export async function exportWorkspaceArchive(store: FileStore, name: string): Pr
   }
 }
 
-export async function importWorkspaceArchive(store: FileStore, bytes: Uint8Array | ArrayBuffer): Promise<void> {
+export async function importWorkspaceArchive(store: FileStore, bytes: Uint8Array | ArrayBuffer, options: WorkspaceMigrationOptions = {}): Promise<void> {
   await assertEmpty(store)
-  const files = await readArchive(bytes)
+  const { files, version } = await readArchive(bytes, options)
   for (const file of files) {
     if (file.path.startsWith('docs/')) {
       try {
-        await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
+        await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(file.bytes))
       } catch {
         await store.writeBytes(file.path, file.bytes)
       }
-    } else if (file.path.startsWith('inspiration/') || file.path.startsWith('.storyfabric/inspiration/')) {
+    } else if (file.path.startsWith('inspiration/') || file.path.startsWith('.storyfabric/inspiration/') || file.path.startsWith('.storyfabric/format-backups/')) {
       await store.writeBytes(file.path, file.bytes)
     } else {
-      await store.writeText(file.path, new TextDecoder('utf-8', { fatal: true }).decode(file.bytes))
+      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(file.bytes)
+      await store.writeText(file.path, version === CURRENT_WORKSPACE_VERSION && /^(chapters|outline)\/.*\.md$/i.test(file.path) ? rotateDocumentRevision(text) : text)
     }
   }
-  await migrateWorkspace(store)
+  await migrateWorkspace(store, options)
 }

@@ -19,6 +19,33 @@ interface RpcResponse<T> { result?: T; error?: string }
 const NON_JSON_RESPONSE_ERROR = '未连接到 StoryFabric 服务：服务端返回了非 JSON 数据'
 
 export class HttpPlatformApi implements StoryFabricApi {
+  readonly cloudAccount: import('../../../shared/cloudAccount').CloudAccountApi = {
+    getState: () => this.rpc('cloudState'),
+    beginLogin: async () => {
+      const result = await this.rest<{ url: string }>('/api/cloud/login', { method: 'POST' })
+      // Keep StoryFabric mounted while the account center handles credentials.
+      // The callback page closes this popup after completing the server-side
+      // transaction, while UserPage continues polling cloudState.
+      let popup: Window | null = null
+      try {
+        popup = window.open(result.url, 'storyfabric-account-login', 'popup,width=520,height=760,resizable=yes,scrollbars=yes')
+      } catch {
+        popup = null
+      }
+      if (popup) {
+        try { popup.focus() } catch { /* popup focus is best effort */ }
+      } else {
+        // Popup blockers should not make login impossible. In this fallback
+        // the callback response redirects back to the web app hash route.
+        window.location.assign(result.url)
+      }
+      return this.rpc('cloudState')
+    },
+    cancelLogin: () => this.rpc('cloudCancel'), logout: () => this.rpc('cloudLogout'),
+    retryOnboarding: () => this.rpc('cloudOnboard'), getAccount: () => this.rpc('cloudAccount'), getUsage: (page) => this.rpc('cloudUsage', [page]),
+    getChannels: () => this.rpc('cloudChannels'), getGroups: () => this.rpc('cloudGroups'), getSupplierLobby: () => this.rpc('cloudSupplierLobby'), redeem: (input) => this.rpc('cloudRedeem', [input]),
+    getRedeemHistory: () => this.rpc('cloudRedeemHistory'), selectGroup: (input) => this.rpc('cloudGroup', [input]), rotateConnection: (input) => this.rpc('cloudRotate', [input])
+  }
   private readonly auth: HttpAuth
 
   constructor(private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis), private readonly baseUrl = '', auth: HttpAuth = { kind: 'cookie' }) {
@@ -89,11 +116,11 @@ export class HttpPlatformApi implements StoryFabricApi {
   renameWorkspace(path: string, name: string): Promise<WorkspaceListItem> { return this.rpc('renameWorkspace', [path, name]) }
   forgetRecentWorkspace(path: string): Promise<void> { return this.rpc('forgetRecentWorkspace', [path]) }
   async createWorkspace(_parentDir: string, name: string): Promise<string> { return (await this.rest<WorkspaceSummary>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }), headers: { 'content-type': 'application/json' } })).path }
-  openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST', signal: options?.signal }) }
+  openWorkspace(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> { return this.rest(`/api/workspaces/${encodeURIComponent(path)}/open`, { method: 'POST', signal: options?.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ upgradeLegacy: options?.upgradeLegacy === true }) }) }
   openWorkspaceByPath(path: string, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const value = path.trim()
     if (!value) return Promise.reject(new Error('请输入工作区路径'))
-    return this.rest('/api/workspaces/open-path', { method: 'POST', signal: options?.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: value }) })
+    return this.rest('/api/workspaces/open-path', { method: 'POST', signal: options?.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: value, ...(options?.upgradeLegacy === true ? { upgradeLegacy: true } : {}) }) })
   }
   closeWorkspace(): Promise<void> { return this.rpc('closeWorkspace') }
   getCurrentWorkspace(): Promise<WorkspaceSummary | null> { return this.rpc('getCurrentWorkspace') }
@@ -109,6 +136,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   }
   async importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary> {
     const headers = this.headers({ 'content-type': 'application/zip' })
+    if (options?.upgradeLegacy === true) headers['x-storyfabric-upgrade-legacy'] = 'true'
     const name = target?.name || fileName.replace(/\.storyfabric\.zip$/i, '')
     if (name) headers['x-storyfabric-workspace-name'] = encodeURIComponent(name)
     return this.rest('/api/workspaces/import', { method: 'POST', signal: options?.signal, headers, body: bytes.slice().buffer as ArrayBuffer })
@@ -116,17 +144,26 @@ export class HttpPlatformApi implements StoryFabricApi {
   exportSession(id: string): ReturnType<StoryFabricApi['exportSession']> { return this.rpc('exportSession', [id]) }
   importSession(base64: string, fileName: string): ReturnType<StoryFabricApi['importSession']> { return this.rpc('importSession', [base64, fileName]) }
   getChapterBody(id: string): Promise<string | null> { return this.rpc('getChapterBody', [id]) }
+  getDocumentSnapshot(...args: Parameters<StoryFabricApi['getDocumentSnapshot']>): ReturnType<StoryFabricApi['getDocumentSnapshot']> { return this.rpc('getDocumentSnapshot', args) }
+  saveHistoryVersion(...args: Parameters<StoryFabricApi['saveHistoryVersion']>): ReturnType<StoryFabricApi['saveHistoryVersion']> { return this.rpc('saveHistoryVersion', args) }
+  listHistoryVersions(...args: Parameters<StoryFabricApi['listHistoryVersions']>): ReturnType<StoryFabricApi['listHistoryVersions']> { return this.rpc('listHistoryVersions', args) }
+  getHistoryVersion(...args: Parameters<StoryFabricApi['getHistoryVersion']>): ReturnType<StoryFabricApi['getHistoryVersion']> { return this.rpc('getHistoryVersion', args) }
+  updateHistoryVersion(...args: Parameters<StoryFabricApi['updateHistoryVersion']>): ReturnType<StoryFabricApi['updateHistoryVersion']> { return this.rpc('updateHistoryVersion', args) }
+  deleteHistoryVersion(...args: Parameters<StoryFabricApi['deleteHistoryVersion']>): ReturnType<StoryFabricApi['deleteHistoryVersion']> { return this.rpc('deleteHistoryVersion', args) }
+  restoreHistoryVersion(...args: Parameters<StoryFabricApi['restoreHistoryVersion']>): ReturnType<StoryFabricApi['restoreHistoryVersion']> { return this.rpc('restoreHistoryVersion', args) }
   searchProject(query: string): Promise<import('../../../shared/types').SearchHit[]> { return this.rpc('searchProject', [query]) }
   getGraphLayout(): Promise<Record<string, { x: number; y: number }>> { return this.rpc('getGraphLayout') }
   saveGraphLayout(layout: Record<string, { x: number; y: number }>): Promise<void> { return this.rpc('saveGraphLayout', [layout]) }
+  getWritingTools(): Promise<import('../../../shared/writingTools').WritingToolsPreferences> { return this.rpc('getWritingTools') }
+  saveWritingTools(preferences: import('../../../shared/writingTools').WritingToolsPreferences): Promise<void> { return this.rpc('saveWritingTools', [preferences]) }
   saveCharacter(doc: Partial<CharacterDoc>): Promise<CharacterDoc> { return this.rpc('saveCharacter', [doc]) }
   deleteCharacter(id: string): Promise<void> { return this.rpc('deleteCharacter', [id]) }
   saveRelationships(list: Relationship[]): Promise<void> { return this.rpc('saveRelationships', [list]) }
-  saveOutlineDoc(doc: Partial<OutlineDoc>): Promise<OutlineDoc> { return this.rpc('saveOutlineDoc', [doc]) }
+  saveOutlineDoc(doc: Partial<OutlineDoc>, options?: Parameters<StoryFabricApi['saveOutlineDoc']>[1]): Promise<OutlineDoc> { return this.rpc('saveOutlineDoc', [doc, options]) }
   deleteOutlineDoc(id: string): Promise<void> { return this.rpc('deleteOutlineDoc', [id]) }
   saveEvent(doc: Partial<StoryEvent>): Promise<StoryEvent> { return this.rpc('saveEvent', [doc]) }
   deleteEvent(id: string): Promise<void> { return this.rpc('deleteEvent', [id]) }
-  saveChapter(doc: Partial<ChapterDoc>): Promise<import('../../../shared/types').ChapterMeta> { return this.rpc('saveChapter', [doc]) }
+  saveChapter(doc: Partial<ChapterDoc>, options?: Parameters<StoryFabricApi['saveChapter']>[1]): Promise<import('../../../shared/types').ChapterMeta> { return this.rpc('saveChapter', [doc, options]) }
   deleteChapter(id: string): Promise<void> { return this.rpc('deleteChapter', [id]) }
   listVolumes(): Promise<VolumeMeta[]> { return this.rpc('listVolumes') }
   saveVolume(input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta> { return this.rpc('saveVolume', [input]) }
@@ -144,6 +181,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   saveNote(doc: Partial<NoteDoc>): Promise<NoteDoc> { return this.rpc('saveNote', [doc]) }
   deleteNote(id: string): Promise<void> { return this.rpc('deleteNote', [id]) }
   getSettings(): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('getSettings') }
+  checkAppUpdate(): Promise<import('../../../shared/updates').UpdateCheckResult> { return this.rpc('checkAppUpdate') }
   updateSettings(patch: Parameters<StoryFabricApi['updateSettings']>[0]): Promise<import('../../../shared/types').PublicAppSettings> { return this.rpc('updateSettings', [patch]) }
   getMemory(scope: import('../../../shared/memory').MemoryScope): ReturnType<StoryFabricApi['getMemory']> { return this.rpc('getMemory', [scope]) }
   updateMemory(scope: import('../../../shared/memory').MemoryScope, patch: import('../../../shared/memory').MemoryUpdate): ReturnType<StoryFabricApi['updateMemory']> { return this.rpc('updateMemory', [scope, patch]) }
@@ -155,7 +193,7 @@ export class HttpPlatformApi implements StoryFabricApi {
   fetchModels(input: Parameters<StoryFabricApi['fetchModels']>[0]): Promise<string[]> { return this.rpc('fetchModels', [input]) }
   agentRun(req: RunAgentRequest): Promise<{ sessionId: string; runId?: string }> { return this.rpc('agentRun', [req]) }
   compressSessionContext(sessionId: string, providerId: string, model: string): Promise<ChatSession> { return this.rpc('compressSessionContext', [sessionId, providerId, model]) }
-  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void> { return this.rpc('agentConfirm', [sessionId, changeId, approved]) }
+  agentConfirm(sessionId: string, changeId: string, approved: boolean, decision?: Parameters<StoryFabricApi['agentConfirm']>[3]): Promise<void> { return this.rpc('agentConfirm', [sessionId, changeId, approved, decision]) }
   agentAbort(sessionId: string): Promise<void> { return this.rpc('agentAbort', [sessionId]) }
   agentAnswerQuestion(answer: import('../../../shared/agentQuestions').AgentQuestionAnswer): Promise<void> { return this.rpc('agentAnswerQuestion', [answer]) }
   agentResolveSkillCandidate(candidateId: string, action: import('../../../shared/agentQuestions').SkillCandidateAction): Promise<void> { return this.rpc('agentResolveSkillCandidate', [candidateId, action]) }

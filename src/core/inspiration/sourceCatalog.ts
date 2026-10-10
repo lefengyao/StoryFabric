@@ -1,13 +1,14 @@
 import type { InspirationExtraction, InspirationImport, InspirationOrigin, InspirationSource } from '../../shared/inspiration'
 import type { FileStore } from '../storage/fileStore'
 import { InspirationError } from './sourceErrors'
-import { TextExtractionError, extractTextFromBytes, supportsTextExtraction } from './textExtractors'
+import { TextExtractionError, supportsTextExtraction } from './textExtractors'
+import { extractIndexedDocument, indexDocumentText, validDocumentIndex, MAX_INDEXED_DOCUMENT_CHARS, type DocumentSection, type RevisionedDocument } from './documentIndex'
 
 export { InspirationError } from './sourceErrors'
 
 export const MAX_INSPIRATION_SOURCE_BYTES = 100 * 1024 * 1024
 export const MAX_INSPIRATION_TOTAL_BYTES = 100 * 1024 * 1024
-export const MAX_INSPIRATION_EXTRACTED_CHARS = 500_000
+export const MAX_INSPIRATION_EXTRACTED_CHARS = MAX_INDEXED_DOCUMENT_CHARS
 export const MAX_INSPIRATION_MODEL_CHARS = 80_000
 
 const LIBRARY_ROOT = 'inspiration'
@@ -25,6 +26,8 @@ interface ImportedCatalogEntry {
 }
 
 interface ExtractionCatalogEntry {
+  indexVersion?: 1
+  error?: string
   revision: string
   extraction: InspirationExtraction
   extractedChars?: number
@@ -37,11 +40,12 @@ interface CatalogFile {
 }
 
 interface ExtractedCache {
-  version: 1
+  version: 2
   sourceId: string
   relativePath: string
   revision: string
   text: string
+  sections: DocumentSection[]
 }
 
 export interface ReadExtractedOptions {
@@ -142,8 +146,9 @@ function parseCache(raw: string | null): ExtractedCache | null {
   if (raw === null) return null
   try {
     const parsed = JSON.parse(raw) as Partial<ExtractedCache>
-    if (parsed.version !== 1 || typeof parsed.sourceId !== 'string' || typeof parsed.relativePath !== 'string' || typeof parsed.revision !== 'string' || typeof parsed.text !== 'string') return null
-    return parsed as ExtractedCache
+    if ((Number(parsed.version) !== 1 && parsed.version !== 2) || typeof parsed.sourceId !== 'string' || typeof parsed.relativePath !== 'string' || typeof parsed.revision !== 'string' || typeof parsed.text !== 'string') return null
+    if (Number(parsed.version) === 1) return { ...parsed, ...indexDocumentText(parsed.text), version: 2 } as ExtractedCache
+    return validDocumentIndex(parsed) ? parsed as ExtractedCache : null
   } catch {
     return null
   }
@@ -199,10 +204,15 @@ export class SourceCatalog {
         ? 'too-large'
         : 'ready'
     let extractedChars: number | undefined
-    if (remembered?.revision === revision && remembered.extraction !== 'ready') extraction = remembered.extraction
+    let sectionCount: number | undefined
+    // Retry files rejected by the older whole-file cap after upgrading to indexing.
+    if (remembered?.revision === revision && remembered.extraction !== 'ready' && (remembered.extraction !== 'too-large' || remembered.indexVersion === 1)) extraction = remembered.extraction
     if (extraction === 'ready') {
       const cache = parseCache(await this.files.readText(this.cachePath(id)))
-      if (cache?.sourceId === id && cache.relativePath === path && cache.revision === revision) extractedChars = cache.text.length
+      if (cache?.sourceId === id && cache.relativePath === path && cache.revision === revision) {
+        extractedChars = cache.text.length
+        sectionCount = cache.sections.length
+      }
     }
     return {
       id,
@@ -212,6 +222,8 @@ export class SourceCatalog {
       size: metadataSize ?? bytes.byteLength,
       extraction,
       ...(extractedChars === undefined ? {} : { extractedChars }),
+      ...(sectionCount === undefined ? {} : { sectionCount }),
+      ...(remembered?.revision === revision && remembered.error && extraction !== 'ready' ? { extractionError: remembered.error } : {}),
       ...(importedAt === undefined ? {} : { importedAt })
     }
   }
@@ -238,16 +250,26 @@ export class SourceCatalog {
   }
 
   private async find(id: string, catalog?: CatalogFile): Promise<InspirationSource> {
-    const source = (await this.discoveredSources(catalog ?? await this.loadCatalog())).find((candidate) => candidate.id === id)
+    const current = catalog ?? await this.loadCatalog()
+    const record = current.imported[id]
+    const importedPath = importedRecordPath(id, record)
+    let source: InspirationSource | null = null
+    if (importedPath) source = await this.rawSource(importedPath, id, record.name.slice(record.name.lastIndexOf('/') + 1), 'imported', record.importedAt, current)
+    else {
+      const path = (await this.walkFiles(LIBRARY_ROOT)).find((candidate) => libraryId(candidate) === id)
+      if (path) source = await this.rawSource(path, id, path.slice(path.lastIndexOf('/') + 1), 'library', undefined, current)
+    }
     if (!source) throw new InspirationError('NOT_FOUND', '未找到灵感资料')
     return source
   }
 
-  private async recordExtraction(source: InspirationSource, revision: string, extraction: InspirationExtraction, extractedChars?: number): Promise<void> {
+  private async recordExtraction(source: InspirationSource, revision: string, extraction: InspirationExtraction, extractedChars?: number, error?: string): Promise<void> {
     const catalog = await this.loadCatalog()
     catalog.extraction[source.id] = {
+      indexVersion: 1,
       revision,
       extraction,
+      ...(error === undefined ? {} : { error }),
       ...(extractedChars === undefined ? {} : { extractedChars })
     }
     await this.saveCatalog(catalog)
@@ -264,7 +286,7 @@ export class SourceCatalog {
   private async importBytesUnlocked(input: InspirationImport): Promise<InspirationSource> {
     const name = safeRelativeName(input.name)
     const bytes = input.bytes instanceof Uint8Array ? input.bytes : new Uint8Array(input.bytes)
-    if (!supportsTextExtraction(name)) throw new InspirationError('UNSUPPORTED', '只支持导入常见文本、DOCX 或 PDF 资料')
+    if (!supportsTextExtraction(name)) throw new InspirationError('UNSUPPORTED', '只支持导入常见文本、EPUB、DOCX 或 PDF 资料')
     if (!bytes.byteLength) throw new InspirationError('UNSUPPORTED', '不能导入空资料')
     if (bytes.byteLength > MAX_INSPIRATION_SOURCE_BYTES) throw new InspirationError('TOO_LARGE', '单份灵感资料不能超过 100 MiB')
 
@@ -322,12 +344,12 @@ export class SourceCatalog {
   private async extractUnlocked(id: string): Promise<InspirationSource> {
     const catalog = await this.loadCatalog()
     const source = await this.find(id, catalog)
-    if (source.extraction === 'unsupported' || source.extraction === 'too-large') return source
+    if (source.extraction === 'unsupported' || source.size > MAX_INSPIRATION_SOURCE_BYTES) return source
     const bytes = await this.files.readBytes(source.relativePath)
     if (bytes === null) throw new InspirationError('NOT_FOUND', '灵感资料已不存在')
     const revision = sourceRevision(bytes)
     try {
-      const text = await extractTextFromBytes(source.relativePath, bytes)
+      const { text, sections } = await extractIndexedDocument(source.relativePath, bytes)
       if (text.length > MAX_INSPIRATION_EXTRACTED_CHARS) {
         await this.files.remove(this.cachePath(id))
         await this.recordExtraction(source, revision, 'too-large')
@@ -339,16 +361,16 @@ export class SourceCatalog {
         throw new InspirationError('SOURCE_CHANGED', '灵感资料在提取期间已变化')
       }
       await this.files.ensureDir(EXTRACTED_ROOT)
-      const cache: ExtractedCache = { version: 1, sourceId: id, relativePath: source.relativePath, revision, text }
+      const cache: ExtractedCache = { version: 2, sourceId: id, relativePath: source.relativePath, revision, text, sections }
       await this.files.writeText(this.cachePath(id), JSON.stringify(cache))
       await this.recordExtraction(source, revision, 'ready', text.length)
-      return { ...source, extraction: 'ready', extractedChars: text.length }
+      return { ...source, extraction: 'ready', extractedChars: text.length, sectionCount: sections.length, extractionError: undefined }
     } catch (error) {
       if (!(error instanceof TextExtractionError)) throw error
       await this.files.remove(this.cachePath(id))
       const extraction = error.status === 'too-large' ? 'too-large' : error.status === 'unsupported' ? 'unsupported' : 'failed'
-      await this.recordExtraction(source, revision, extraction)
-      return { ...source, extraction }
+      await this.recordExtraction(source, revision, extraction, undefined, error.message)
+      return { ...source, extraction, extractedChars: undefined, sectionCount: undefined, extractionError: error.message }
     }
   }
 
@@ -356,10 +378,26 @@ export class SourceCatalog {
     const maxChars = typeof options === 'number' ? options : options.maxChars ?? MAX_INSPIRATION_MODEL_CHARS
     if (!Number.isInteger(maxChars) || maxChars < 1) throw new InspirationError('INVALID_PATH', 'maxChars 必须是正整数')
     if (maxChars > MAX_INSPIRATION_MODEL_CHARS) throw new InspirationError('TOO_LARGE', `模型读取上限为 ${MAX_INSPIRATION_MODEL_CHARS} 字符`)
+    return safeSlice((await this.readIndexedCache(id)).text, maxChars)
+  }
+
+  /** Model tools receive only bounded views; this full cache stays inside the workspace core. */
+  async document(id: string, expectedRevision?: unknown): Promise<RevisionedDocument> {
     const source = await this.find(id)
-    if (source.extraction === 'too-large') throw new InspirationError('TOO_LARGE', '灵感资料提取内容超过上限')
+    const bytes = await this.files.readBytes(source.relativePath)
+    if (!bytes) throw new InspirationError('NOT_FOUND', '灵感资料已不存在')
+    if (expectedRevision !== undefined && expectedRevision !== sourceRevision(bytes)) throw new InspirationError('SOURCE_CHANGED', '资料版本已变化，请重新查询目录')
+    const cached = parseCache(await this.files.readText(this.cachePath(id)))
+    if (!cached || cached.revision !== sourceRevision(bytes) || cached.sourceId !== id || cached.relativePath !== source.relativePath) await this.extract(id)
+    const cache = await this.readIndexedCache(id)
+    return { text: cache.text, sections: cache.sections, revision: cache.revision }
+  }
+
+  private async readIndexedCache(id: string): Promise<ExtractedCache> {
+    const source = await this.find(id)
+    if (source.extraction === 'too-large') throw new InspirationError('TOO_LARGE', source.extractionError ?? '资料超过索引上限（正文 1000 万字符、PDF 2000 页），请按卷拆分后导入')
     if (source.extraction === 'unsupported' || source.extraction === 'failed') {
-      throw new InspirationError('UNSUPPORTED', '灵感资料当前无法提取为文本')
+      throw new InspirationError('UNSUPPORTED', source.extractionError ?? '灵感资料当前无法提取为文本')
     }
     const before = await this.files.readBytes(source.relativePath)
     if (before === null) throw new InspirationError('NOT_FOUND', '灵感资料已不存在')
@@ -372,6 +410,6 @@ export class SourceCatalog {
       await this.files.remove(this.cachePath(id))
       throw new InspirationError('SOURCE_CHANGED', '灵感资料已变化，请重新提取')
     }
-    return safeSlice(cache.text, maxChars)
+    return cache
   }
 }

@@ -14,6 +14,10 @@ const doubles = vi.hoisted(() => ({
   importWorkspaceArchive: vi.fn(),
   setWorkspaceName: vi.fn(),
   fetchProviderModels: vi.fn(),
+  getAdapter: vi.fn(),
+  agentOptions: undefined as Record<string, unknown> | undefined,
+  createCapacitorWebFetch: vi.fn(),
+  nativeFetcher: vi.fn(),
   clipboardRead: vi.fn(),
   clipboardWrite: vi.fn(),
   readText: vi.fn(),
@@ -38,6 +42,26 @@ vi.mock('@capacitor/clipboard', () => ({
   Clipboard: {
     read: doubles.clipboardRead,
     write: doubles.clipboardWrite
+  }
+}))
+
+vi.mock('@capacitor/core', () => ({
+  CapacitorHttp: { request: vi.fn() },
+  registerPlugin: vi.fn(() => ({}))
+}))
+
+vi.mock('../capacitorWebFetch', () => ({
+  createCapacitorWebFetch: doubles.createCapacitorWebFetch
+}))
+
+vi.mock('../../../../core/agent/agentLoop', () => ({
+  CoreAgentService: class FakeCoreAgentService {
+    readonly options: Record<string, unknown>
+
+    constructor(options: Record<string, unknown>) {
+      this.options = options
+      doubles.agentOptions = options
+    }
   }
 }))
 
@@ -89,7 +113,8 @@ vi.mock('../../../../core/workspace/archive', () => ({
 
 vi.mock('../../../../core/llm', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../../core/llm')>(),
-  fetchProviderModels: doubles.fetchProviderModels
+  fetchProviderModels: doubles.fetchProviderModels,
+  getAdapter: doubles.getAdapter
 }))
 
 import { AndroidPlatformApi, normalizeAndroidWorkspacePath } from '../androidApi'
@@ -122,6 +147,10 @@ beforeEach(() => {
   doubles.importWorkspaceArchive.mockResolvedValue(undefined)
   doubles.setWorkspaceName.mockResolvedValue(undefined)
   doubles.fetchProviderModels.mockResolvedValue([])
+  doubles.getAdapter.mockReturnValue({})
+  doubles.nativeFetcher = vi.fn()
+  doubles.createCapacitorWebFetch.mockImplementation(() => doubles.nativeFetcher)
+  doubles.agentOptions = undefined
   doubles.clipboardRead.mockResolvedValue({ type: 'text/plain', value: '' })
   doubles.clipboardWrite.mockResolvedValue(undefined)
   doubles.initializeWorkspace.mockResolvedValue(undefined)
@@ -501,6 +530,24 @@ describe('AndroidPlatformApi fetchModels', () => {
   })
 })
 
+describe('AndroidPlatformApi agent transport', () => {
+  it('passes the native Capacitor fetcher to LLM adapters', async () => {
+    doubles.validateWorkspace.mockResolvedValue({ ok: true })
+    doubles.loadSummary.mockResolvedValue({ name: 'demo', path: 'workspaces/demo' })
+
+    await freshApi().openWorkspace('workspaces/demo')
+
+    const getAdapter = doubles.agentOptions?.getAdapter as ((protocol: string, baseUrl: string) => unknown)
+    getAdapter('openai', 'https://gateway.example/v1')
+
+    expect(doubles.getAdapter).toHaveBeenCalledWith(
+      'openai',
+      'https://gateway.example/v1',
+      expect.objectContaining({ fetcher: doubles.nativeFetcher })
+    )
+  })
+})
+
 describe('AndroidPlatformApi clipboard', () => {
   it('uses the Android system clipboard for reading and writing text', async () => {
     const api = freshApi()
@@ -548,9 +595,80 @@ describe('Android external workspaces', () => {
   it('imports a ZIP directly into a selected external parent folder', async () => {
     const parent = makeSafPath(treeUri)
     await freshApi().importWorkspace(new Uint8Array([1, 2]), 'archive.storyfabric.zip', { parentDir: parent, name: '外部导入' })
-    expect(doubles.importWorkspaceArchive).toHaveBeenCalledWith(expect.objectContaining({ path: makeSafPath(treeUri, '外部导入') }), new Uint8Array([1, 2]))
+    expect(doubles.importWorkspaceArchive).toHaveBeenCalledWith(expect.objectContaining({ path: makeSafPath(treeUri, '外部导入') }), new Uint8Array([1, 2]), { upgradeLegacy: false })
     expect(doubles.safMkdir).toHaveBeenCalledWith({ treeUri, root: '', path: '外部导入', exclusive: true })
   })
+})
+
+it('rejects legacy open before changing active Android workspace or recent settings, then forwards consent', async () => {
+  const api = freshApi()
+  await api.openWorkspace('workspaces/current')
+  doubles.preferencesSet.mockClear()
+  doubles.loadSummary.mockRejectedValueOnce(new Error('WORKSPACE_UPGRADE_REQUIRED：旧项目'))
+  await expect(api.openWorkspace('workspaces/legacy')).rejects.toThrow('WORKSPACE_UPGRADE_REQUIRED')
+  expect(doubles.preferencesSet).not.toHaveBeenCalled()
+  expect(doubles.agentOptions?.workspaceId).toBe('workspaces/current')
+  doubles.loadSummary.mockResolvedValueOnce({ name: '升级后', path: 'workspaces/legacy', version: 5 })
+  await expect(api.openWorkspace('workspaces/legacy', { upgradeLegacy: true })).resolves.toMatchObject({ version: 5 })
+  expect(doubles.loadSummary).toHaveBeenLastCalledWith(expect.objectContaining({ path: 'workspaces/legacy' }), 'legacy', 'workspaces/legacy', { upgradeLegacy: true })
+  await api.importWorkspace(new Uint8Array([1]), 'old.storyfabric.zip', undefined, { upgradeLegacy: true })
+  expect(doubles.importWorkspaceArchive).toHaveBeenLastCalledWith(expect.anything(), new Uint8Array([1]), { upgradeLegacy: true })
+})
+
+it.each(['failure', 'abort'])('rolls back Android import when its final summary has %s', async (mode) => {
+  const api = freshApi()
+  await api.openWorkspace('workspaces/current')
+  doubles.preferencesSet.mockClear()
+  const controller = new AbortController()
+  let entered = false
+  let release!: () => void
+  const deferred = new Promise<void>((resolve) => { release = resolve })
+  doubles.loadSummary.mockImplementationOnce(async () => {
+    entered = true
+    await deferred
+    if (mode === 'failure') throw new Error('summary read failed')
+    return { name: '导入项目', path: 'workspaces/imported', version: 5 }
+  })
+  const importing = api.importWorkspace(new Uint8Array([1]), 'imported.storyfabric.zip', undefined, { signal: controller.signal })
+  await vi.waitFor(() => expect(entered).toBe(true))
+  if (mode === 'abort') controller.abort()
+  release()
+  await expect(importing).rejects.toThrow(mode === 'failure' ? 'summary read failed' : '工作区请求已取消')
+  expect(doubles.agentOptions?.workspaceId).toBe('workspaces/current')
+  expect(doubles.preferencesSet).not.toHaveBeenCalled()
+  expect(doubles.remove).toHaveBeenCalledWith('workspaces', 'imported')
+})
+
+it('an earlier Android summary failure cannot replace a later successful workspace', async () => {
+  const api = freshApi()
+  await api.openWorkspace('workspaces/original')
+  let rejectOlder!: (error: Error) => void
+  doubles.loadSummary.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOlder = reject }))
+  const older = api.openWorkspace('workspaces/older')
+  await vi.waitFor(() => expect(rejectOlder).toBeTypeOf('function'))
+  doubles.loadSummary.mockResolvedValueOnce({ name: 'newer', path: 'workspaces/newer' })
+  await api.openWorkspace('workspaces/newer')
+  rejectOlder(new Error('older summary failed'))
+  await expect(older).rejects.toThrow('older summary failed')
+  expect(doubles.agentOptions?.workspaceId).toBe('workspaces/newer')
+  doubles.loadSummary.mockResolvedValueOnce({ name: 'newer', path: 'workspaces/newer' })
+  await expect(api.getCurrentWorkspace()).resolves.toMatchObject({ path: 'workspaces/newer' })
+})
+
+it('does not install or clear Android runtime replay until recent settings commit succeeds', async () => {
+  const api = freshApi()
+  await api.openWorkspace('workspaces/current')
+  type TestRuntime = { runtimeBuffers: Map<string, unknown>; runtimeSequences: Map<string, number>; runtimeTouched: Map<string, number> }
+  const runtime = api as unknown as TestRuntime
+  runtime.runtimeBuffers.set('current-run', { protected: true })
+  runtime.runtimeSequences.set('current-run', 7)
+  runtime.runtimeTouched.set('current-run', 10)
+  doubles.preferencesSet.mockRejectedValueOnce(new Error('recent disk failed'))
+  await expect(api.openWorkspace('workspaces/next')).rejects.toThrow('recent disk failed')
+  expect(doubles.agentOptions?.workspaceId).toBe('workspaces/current')
+  expect(runtime.runtimeBuffers.get('current-run')).toEqual({ protected: true })
+  expect(runtime.runtimeSequences.get('current-run')).toBe(7)
+  expect(runtime.runtimeTouched.get('current-run')).toBe(10)
 })
 
 describe('AndroidPlatformApi generation preferences', () => {

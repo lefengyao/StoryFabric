@@ -15,7 +15,7 @@ describe('versioned agent mutations', () => {
     const appended = await executeTool(store, 'append_chapter', JSON.stringify({ chapterId: chapter.id, baseRevision, appendText: '新增段落' }))
     expect(appended.kind).toBe('pending')
     if (appended.kind !== 'pending') return
-    expect((await appended.apply()).ok).toBe(true)
+    expect((await appended.apply({ saveHistory: false })).ok).toBe(true)
     expect(await getChapterBody(store, chapter.id)).toBe(normalizeChapterContent('原有正文\n\n新增段落'))
     const stale = await executeTool(store, 'append_chapter', JSON.stringify({ chapterId: chapter.id, baseRevision, appendText: '旧版本续写' }))
     expect(stale).toMatchObject({ kind: 'result', ok: false })
@@ -30,7 +30,7 @@ describe('versioned agent mutations', () => {
     const pending = await executeTool(store, 'append_chapter', JSON.stringify({ chapterId: chapter.id, baseRevision, appendText: '智能体续写' }))
     if (pending.kind !== 'pending') throw new Error('未生成待确认续写')
     await saveChapter(store, { id: chapter.id, content: '用户新正文' })
-    expect((await pending.apply()).ok).toBe(false)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(false)
     expect(await getChapterBody(store, chapter.id)).toBe(normalizeChapterContent('用户新正文'))
   })
   it('uses a search hit writeRevision as the fragment edit base revision', async () => {
@@ -51,7 +51,7 @@ describe('versioned agent mutations', () => {
       replacement: '更新后的正文'
     }))
     expect(saved.kind).toBe('pending')
-    if (saved.kind === 'pending') expect((await saved.apply()).ok).toBe(true)
+    if (saved.kind === 'pending') expect((await saved.apply({ saveHistory: false })).ok).toBe(true)
     expect(await getChapterBody(store, chapter.id)).toBe(normalizeChapterContent('开篇更新后的正文目前维持原样，后面保留其余章节内容用于回归测试。'))
   })
 
@@ -77,7 +77,7 @@ describe('versioned agent mutations', () => {
     const pending = await executeTool(store, 'save_character', JSON.stringify({ character: { id: character.id, baseRevision: contentRevision(before), content: '模型修改' } }))
     if (pending.kind !== 'pending') throw new Error('未生成待确认修改')
     await saveCharacter(store, { id: character.id, name: '甲', content: '用户修改' })
-    const applied = await pending.apply()
+    const applied = await pending.apply({ saveHistory: false })
     expect(applied.ok).toBe(false)
     expect((await findCharacter(store, { id: character.id }))?.content).toBe('用户修改')
   })
@@ -89,7 +89,7 @@ describe('versioned agent mutations', () => {
     const pending = await executeTool(store, 'delete_note', JSON.stringify({ noteId: note.id }))
     if (pending.kind !== 'pending') throw new Error('未生成待确认删除')
     await saveNote(store, { id: note.id, title: '待删除', content: '用户先改了' })
-    const applied = await pending.apply()
+    const applied = await pending.apply({ saveHistory: false })
     expect(applied.ok).toBe(false)
     expect((await getNote(store, note.id))?.content).toBe('用户先改了')
   })

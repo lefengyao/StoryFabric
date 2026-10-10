@@ -1,6 +1,8 @@
 import type { EntityKind, PendingChange, ToolDefJson } from '../../shared/types'
+import { saveDocument } from '../workspace/documentWrites'
+import { parseFrontMatter } from '../workspace/frontMatter'
 import type { FileStore } from '../storage/fileStore'
-import { supportsTextExtraction } from '../inspiration/textExtractors'
+import { isPlainTextDocument } from '../inspiration/documentFormats'
 import { invalidateProjectIndex } from '../retrieval'
 import { loadCharacterDocuments, loadEventDocuments, loadNoteDocuments, loadOutlineDocuments, loadSettingDocuments } from '../workspace/entityStore'
 import { commitTextChanges } from '../workspace/mutationJournal'
@@ -8,6 +10,8 @@ import { coordinatorFor } from '../workspace/mutationCoordinator'
 import { normalizeProjectDocPath } from '../workspace/projectDocs'
 import { contentRevision } from '../workspace/resourceRevision'
 import type { ToolOutcome } from './registry'
+import { assertDocumentReadSourceUnchanged, checkDocumentReadRevision } from '../retrieval/documentReadRevision'
+import { DOCUMENT_READ_BASELINE_SCHEMA } from './writeSchemas'
 
 type EditableKind = Exclude<EntityKind, 'chapter'>
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024
@@ -17,7 +21,7 @@ const KINDS: EditableKind[] = ['character', 'event', 'outline', 'setting', 'note
 export const CONTENT_EDIT_TOOL_DEFS: ToolDefJson[] = [
   {
     name: 'read_content_lines',
-    description: '按行读取人物、事件、大纲、设定、便签正文或纯文本 docs；返回行号和局部编辑用 writeRevision。后续页带 expectedRevision 防止混读。章节使用 get_chapter/edit_chapter。id 为实体 id，projectDoc 的 id 为 docs 内相对路径。',
+    description: '按行读取人物、事件、大纲、设定、便签正文或纯文本 docs；返回行号、局部编辑用 writeRevision 和分页用 readRevision。后续页将 readRevision 作为 expectedRevision 防止混读。章节使用 get_chapter/edit_chapter。id 为实体 id，projectDoc 的 id 为 docs 内相对路径。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       kind: { type: 'string', enum: KINDS }, id: { type: 'string', minLength: 1 },
       lineStart: { type: 'integer', minimum: 1 }, maxLines: { type: 'integer', minimum: 1, maximum: 200 },
@@ -30,6 +34,7 @@ export const CONTENT_EDIT_TOOL_DEFS: ToolDefJson[] = [
     parameters: { type: 'object', additionalProperties: false, properties: {
       kind: { type: 'string', enum: KINDS }, id: { type: 'string', minLength: 1 },
       baseRevision: { type: 'string', minLength: 1 }, expectedText: { type: 'string', minLength: 1 },
+      baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA,
       lineStart: { type: 'integer', minimum: 1 }, lineEnd: { type: 'integer', minimum: 1 },
       replacement: { type: 'string' }
     }, required: ['kind', 'id', 'baseRevision', 'replacement'] }
@@ -45,7 +50,7 @@ async function sourcePath(store: FileStore, kind: EditableKind, id: string): Pro
   if (!id.trim() || id !== id.trim()) throw new Error('id 不能为空或带首尾空格')
   if (kind === 'projectDoc') {
     const path = normalizeProjectDocPath(id)
-    if (!supportsTextExtraction(path) || /\.(?:pdf|docx)$/i.test(path)) throw new Error('只有纯文本项目文档可以按行编辑')
+    if (!isPlainTextDocument(path)) throw new Error('只有纯文本项目文档可以按行编辑')
     return `docs/${path}`
   }
   const loaders = {
@@ -124,7 +129,8 @@ export async function executeContentEditTool(store: FileStore, name: string, arg
   const source = await loadSource(store, kind, id)
   if (name === 'read_content_lines') {
     const revision = contentRevision(source.raw)
-    if (args.expectedRevision !== undefined && args.expectedRevision !== revision) throw new Error('SOURCE_CHANGED：分页期间正文版本已变化，请从首行重新读取')
+    const sourceRevision = checkDocumentReadRevision(store, kind, id, source.raw, revision, args.expectedRevision as string | undefined)
+    if (!sourceRevision.matches) throw new Error('SOURCE_CHANGED：分页期间正文版本已变化，请从首行重新读取')
     const starts = lineStarts(source.body)
     const first = (args.lineStart as number | undefined) ?? 1
     if (first > starts.length) throw new Error(`起始行超出正文：共 ${starts.length} 行`)
@@ -132,11 +138,12 @@ export async function executeContentEditTool(store: FileStore, name: string, arg
     const lines = Array.from({ length: last - first + 1 }, (_, index) => ({ number: first + index, text: lineText(source.body, starts, first + index) }))
     const offset = source.prefix.length + starts[first - 1]
     const end = last < starts.length ? source.prefix.length + starts[last] : source.raw.length
-    const payload = { kind, id, sourcePath: source.path, offset, length: end - offset, complete: first === 1 && last === starts.length, lines, totalLines: starts.length, ...(last < starts.length ? { nextLine: last + 1 } : {}), writeRevision: revision }
+    const payload = { kind, id, sourcePath: source.path, offset, length: end - offset, complete: first === 1 && last === starts.length, lines, totalLines: starts.length, ...(last < starts.length ? { nextLine: last + 1 } : {}), writeRevision: revision, readRevision: sourceRevision.readRevision }
     return { kind: 'result', ok: true, text: JSON.stringify(payload), preview: `${kind} ${id} 第 ${first}-${last} 行` }
   }
   if (name !== 'edit_content') throw new Error(`未知正文工具：${name}`)
   if (contentRevision(source.raw) !== args.baseRevision) throw new Error('SOURCE_CHANGED：正文版本已变化，请重新读取行号')
+  if (kind === 'outline' || args.baseReadRevision !== undefined) assertDocumentReadSourceUnchanged(store, kind, id, source.raw, args.baseRevision as string, args.baseReadRevision as string | undefined)
   const edit = patchBody(source.body, args)
   if (edit.after === source.body) throw new Error('正文没有变化')
   const afterRaw = source.prefix + edit.after
@@ -150,6 +157,22 @@ export async function executeContentEditTool(store: FileStore, name: string, arg
     toolName: name, entityKind: kind, entityId: id,
     title: `修改${kind === 'projectDoc' ? '项目文档' : '资料'}正文：${id} 第 ${edit.lineStart}-${edit.lineEnd} 行`,
     beforeText: beforePreview, afterText: afterPreview
+  }
+  if (kind === 'outline') {
+    change.historyEligible = true
+    return { kind: 'pending', change, apply: async (decision) => {
+      if (typeof decision?.saveHistory !== 'boolean') throw new Error('请选择是否保存为长期历史版本')
+      const parsed = parseFrontMatter(afterRaw)
+      try {
+      const saved = await saveDocument(store, 'outline', { ...parsed.data, id, content: parsed.content.replace(/^\n+/, '') }, {
+        baseRevision: contentRevision(source.raw), baseText: source.raw, sourcePath: source.path,
+        ...(decision.saveHistory ? { history: { source: 'agent' as const } } : {})
+      })
+      return { ok: true, text: `已修改大纲「${saved.title}」${decision.saveHistory ? '并保存为新版本' : ''}` }
+      } catch (error) {
+        return { ok: false, text: `正文提交失败，请重新读取：${error instanceof Error ? error.message : String(error)}` }
+      }
+    } }
   }
   return { kind: 'pending', change, apply: () => coordinatorFor(store).run(kind === 'event' ? 'event-graph' : `${kind}:${id}`, async () => {
     const current = await store.readText(source.path)

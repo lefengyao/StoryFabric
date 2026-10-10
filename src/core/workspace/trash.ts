@@ -1,10 +1,12 @@
 import type { EntityKind, Relationship, TrashEntry } from '../../shared/types'
+import { lastItem } from '../../shared/runtimeCompatibility'
 import type { FileStore } from '../storage/fileStore'
 import { normalizeRelativePath } from '../storage/fileStore'
 import { parseFrontMatter, stringifyFrontMatter } from './frontMatter'
 import { commitTextChanges, type JournalTextChange } from './mutationJournal'
 import { buildEventGraph } from './eventGraph'
 import { recordChapterWriting } from '../usage/writingStats'
+import { rotateDocumentRevision } from './resourceRevision'
 
 const INDEX_PATH = '.storyfabric/trash/index.json'
 const TRASH_KINDS = new Set<EntityKind>(['character', 'outline', 'event', 'chapter', 'setting', 'note'])
@@ -17,7 +19,7 @@ function trashPath(entry: Pick<TrashEntry, 'kind' | 'id' | 'trashPath'>): string
 function isSafeOriginalPath(path: string): boolean {
   try {
     const normalized = normalizeRelativePath(path)
-    return normalized === path.replaceAll('\\', '/') && ORIGINAL_ROOTS.has(normalized.split('/')[0])
+    return normalized === path.replace(/\\/g, '/') && ORIGINAL_ROOTS.has(normalized.split('/')[0])
   } catch {
     return false
   }
@@ -26,7 +28,7 @@ function isSafeOriginalPath(path: string): boolean {
 function isSafeTrashPath(path: string): boolean {
   try {
     const normalized = normalizeRelativePath(path)
-    return normalized === path.replaceAll('\\', '/') && normalized.startsWith('.storyfabric/trash/') && normalized.length > '.storyfabric/trash/'.length
+    return normalized === path.replace(/\\/g, '/') && normalized.startsWith('.storyfabric/trash/') && normalized.length > '.storyfabric/trash/'.length
   } catch {
     return false
   }
@@ -160,7 +162,7 @@ async function restoreLegacyEventWithPlacement(store: FileStore, entry: TrashEnt
     content: record.content
   }))
   const previousId = placement.kind === 'mainline-tail'
-    ? buildEventGraph(graphEvents).mainlineIds.at(-1)
+    ? lastItem(buildEventGraph(graphEvents).mainlineIds)
     : placement.previousId
   if (!previousId || !records.some((record) => record.id === previousId)) throw new Error(`RESTORE_CONFLICT：指定前驱事件不存在：${previousId ?? ''}`)
   const branchFromId = placement.kind === 'after' ? placement.branchFromId : undefined
@@ -234,6 +236,14 @@ export async function restoreFromTrash(store: FileStore, id: string, placement?:
     if (entry.eventConnections) await restoreEventGraph(store, entry)
     else if (placement) await restoreLegacyEventWithPlacement(store, entry, placement)
     else throw new Error('RESTORE_REQUIRES_PLACEMENT：旧回收站事件没有连接快照，请提供 placement')
+  } else if (entry.kind === 'chapter' || entry.kind === 'outline') {
+    const raw = await store.readText(source)
+    if (raw === null) throw new Error(`回收站文件不存在：${source}`)
+    const result = await commitTextChanges(store, `restore-document-${entry.id}-${Date.now()}`, [
+      { path: source, beforeText: raw, afterText: null },
+      { path: entry.originalPath, beforeText: null, afterText: rotateDocumentRevision(raw) }
+    ])
+    if (!result.ok) throw new Error(result.text)
   } else await store.move(source, entry.originalPath)
   await restoreRelatedRelationships(store, entry.relatedRelationships)
   await writeIndex(store, entries.filter((item) => item.id !== id))

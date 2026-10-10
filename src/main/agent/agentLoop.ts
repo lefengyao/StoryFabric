@@ -18,6 +18,7 @@ import type { FileStore } from '../../core/storage/fileStore'
 import { GlobalSkillLibrary } from '../../core/skills/globalSkillLibrary'
 import { ActiveRunTracker } from './activeRunTracker'
 import { MemoryStore } from '../../core/memory/memoryStore'
+import type { CloudAccountService } from '../../core/cloud/cloudAccountService'
 
 /**
  * Electron 适配层：Agent 的状态机、工具循环和确认机制全部由 CoreAgentService 维护。
@@ -32,7 +33,8 @@ export class AgentService {
     private readonly emitEvent: (sessionId: string, event: AgentEvent, runId?: string, workspaceId?: string) => void,
     private readonly onUsage?: (record: UsageRecord) => void,
     private readonly globalStore?: FileStore,
-    onBackgroundActivity?: (active: boolean) => void
+    onBackgroundActivity?: (active: boolean) => void,
+    private readonly cloudAccount?: CloudAccountService
   ) {
     this.activeRuns = new ActiveRunTracker(onBackgroundActivity ?? (() => undefined))
   }
@@ -57,15 +59,16 @@ export class AgentService {
       sessions: new CoreSessionStore(store, root),
       settings: async (): Promise<AgentSettings> => {
         const settings = await this.settings.load()
+        const cloudProvider = await this.cloudAccount?.agentProvider(settings.trailblazerProvider)
         return {
-          providers: settings.providers.map((provider) => ({
+          providers: [...settings.providers.map((provider) => ({
             id: provider.id,
             protocol: provider.protocol,
             baseUrl: provider.baseUrl,
             apiKey: decryptApiKey(provider.apiKeyEncrypted),
             name: provider.name,
             modelSettings: provider.modelSettings
-          })),
+          })), ...(cloudProvider ? [cloudProvider] : [])],
           customPrompt: settings.customPrompt,
           agentGeneration: settings.agentGeneration,
         }
@@ -82,13 +85,13 @@ export class AgentService {
     return service
   }
 
-  confirmChange(changeId: string, approved: boolean, sessionId?: string): void {
-    for (const service of this.services.values()) service.confirmChange(changeId, approved, sessionId)
+  confirmChange(changeId: string, approved: boolean, sessionId?: string, decision?: import('../../shared/api').AgentChangeDecision): void {
+    for (const service of this.services.values()) service.confirmChange(changeId, approved, sessionId, decision)
   }
 
   /** Scope approval to the workspace currently selected by the renderer. */
-  confirmChangeForWorkspace(workspaceRoot: string, changeId: string, approved: boolean, sessionId?: string): void {
-    this.serviceFor(workspaceRoot).confirmChange(changeId, approved, sessionId)
+  confirmChangeForWorkspace(workspaceRoot: string, changeId: string, approved: boolean, sessionId?: string, decision?: import('../../shared/api').AgentChangeDecision): void {
+    this.serviceFor(workspaceRoot).confirmChange(changeId, approved, sessionId, decision)
   }
 
   abort(sessionId: string): void {

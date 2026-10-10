@@ -1,0 +1,2 @@
+import { OidcClient, cloudConfigFromPlatformWebUrl, DEFAULT_TRAILBLAZER_API_URL } from './src/core/cloud/oidcClient'
+;(async()=>{ const c = new OidcClient(cloudConfigFromPlatformWebUrl('https://trauser.fengyao.xin:10048', DEFAULT_TRAILBLAZER_API_URL)); const a = await c.authorize('http://127.0.0.1:64525/oauth/callback'); const u=new URL(a.url); console.log(u.origin, u.pathname, u.searchParams.get('client_id'), u.searchParams.get('resource')) })().catch(e=>{console.error(e);process.exit(1)})

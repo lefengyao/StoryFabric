@@ -47,34 +47,50 @@ export async function commitTextChanges(
   }
 
   const applied: JournalTextChange[] = []
+  let externalDetected = false
   try {
     for (const change of changes) {
+      if (await store.readText(change.path) !== change.beforeText) {
+        externalDetected = true
+        throw new Error(`提交期间发现外部修改：${change.path}`)
+      }
+      if (change.beforeText === change.afterText) continue
+      applied.push(change)
       if (change.afterText === null) await store.remove(change.path)
       else await store.writeText(change.path, change.afterText)
-      applied.push(change)
     }
     if (afterCommit) await afterCommit()
+    for (const change of changes) {
+      if (await store.readText(change.path) !== change.afterText) {
+        externalDetected = true
+        throw new Error(`提交期间发现外部修改：${change.path}`)
+      }
+    }
     record.status = 'committed'
     await writeJournal(store, record)
     await store.remove(journalPath(id)).catch(() => undefined)
     return { ok: true, text: '事务已提交' }
   } catch (error) {
-    let recoveryRequired = false
+    let recoveryRequired = externalDetected
     for (const change of [...applied].reverse()) {
-      const current = await store.readText(change.path)
-      if (current !== change.afterText) {
-        recoveryRequired = true
-        continue
-      }
-      if (change.beforeText === null) await store.remove(change.path)
-      else await store.writeText(change.path, change.beforeText)
+      try {
+        const current = await store.readText(change.path)
+        if (current === change.beforeText) continue
+        if (current !== change.afterText) {
+          recoveryRequired = true
+          continue
+        }
+        if (change.beforeText === null) await store.remove(change.path)
+        else await store.writeText(change.path, change.beforeText)
+      } catch { recoveryRequired = true }
     }
     record.status = recoveryRequired ? 'recovery_required' : 'prepared'
-    await writeJournal(store, record)
+    try { await writeJournal(store, record) } catch { recoveryRequired = true }
+    if (!recoveryRequired) await store.remove(journalPath(id)).catch(() => undefined)
     return {
       ok: false,
       text: recoveryRequired
-        ? `RECOVERY_REQUIRED：回滚时检测到外部修改，恢复记录保存在 ${journalPath(id)}`
+        ? `RECOVERY_REQUIRED：事务或回滚未能安全完成，请检查恢复记录 ${journalPath(id)}`
         : `事务失败并已回滚：${error instanceof Error ? error.message : String(error)}`,
       ...(recoveryRequired ? { recoveryRequired: true } : {})
     }

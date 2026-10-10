@@ -34,7 +34,7 @@ describe('agent placement guardrails', () => {
 
     const pending = await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '草稿章', box: 'draft', status: 'draft', content: '草稿内容' } }))
     expect(pending.kind).toBe('pending')
-    if (pending.kind === 'pending') await pending.apply()
+    if (pending.kind === 'pending') await pending.apply({ saveHistory: false })
     expect((await listChapters(store))[0].box).toBe('draft')
   })
 
@@ -55,7 +55,7 @@ describe('agent placement guardrails', () => {
 
     const pending = await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '目标章章纲', kind: 'chapter', chapterId: chapter.id, content: '# 章纲' } }))
     expect(pending.kind).toBe('pending')
-    if (pending.kind === 'pending') await pending.apply()
+    if (pending.kind === 'pending') await pending.apply({ saveHistory: false })
     const outline = (await listOutline(store)).find((doc) => doc.title === '目标章章纲')
     expect(outline?.kind).toBe('chapter')
     expect(outline?.chapterId).toBe(chapter.id)
@@ -68,7 +68,7 @@ describe('agent placement guardrails', () => {
     const pending = await executeTool(store, 'save_outline_doc', JSON.stringify({ doc: { title: '第一章章纲', kind: 'chapter', content: '先写章纲' } }))
     expect(pending.kind).toBe('pending')
     if (pending.kind !== 'pending') return
-    await pending.apply()
+    await pending.apply({ saveHistory: false })
 
     const unbound = (await listOutline(store)).find((doc) => doc.title === '第一章章纲')!
     expect(unbound.chapterId).toBeUndefined()
@@ -81,7 +81,7 @@ describe('agent placement guardrails', () => {
     } }))
     expect(linked.kind).toBe('pending')
     if (linked.kind !== 'pending') return
-    await linked.apply()
+    await linked.apply({ saveHistory: false })
 
     const outline = (await listOutline(store)).find((doc) => doc.id === unbound.id)!
     expect(outline.chapterId).toBe(chapter.id)
@@ -94,7 +94,7 @@ describe('agent placement guardrails', () => {
     } }))
     expect(detached.kind).toBe('pending')
     if (detached.kind !== 'pending') return
-    await detached.apply()
+    await detached.apply({ saveHistory: false })
     expect((await listOutline(store)).find((doc) => doc.id === outline.id)?.chapterId).toBeUndefined()
     expect(await store.listFiles('outline/unassigned', '.md')).toHaveLength(1)
     expect(await store.listFiles(`outline/chapters/${chapter.id}`, '.md')).toHaveLength(0)
@@ -156,7 +156,7 @@ describe('agent placement guardrails', () => {
       replacement: '第二行（修订）'
     }))
     expect(pending.kind).toBe('pending')
-    if (pending.kind === 'pending') expect((await pending.apply()).ok).toBe(true)
+    if (pending.kind === 'pending') expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect(await getChapterBody(store, chapter.id)).toBe(normalizeChapterContent('第一行背景内容用于章节版本保护\n第二行（修订）\n第一行结尾内容用于确认没有覆盖全文'))
 
     const stale = await executeTool(store, 'edit_chapter', JSON.stringify({
@@ -196,7 +196,7 @@ describe('agent placement guardrails', () => {
       replacement: ''
     }))
     expect(pending.kind).toBe('pending')
-    if (pending.kind === 'pending') expect((await pending.apply()).ok).toBe(true)
+    if (pending.kind === 'pending') expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect(await getChapterBody(store, chapter.id)).toBe('　　第一行\n第三行')
   })
 
@@ -294,7 +294,7 @@ describe('agent placement guardrails', () => {
     }))
     expect(pending.kind).toBe('pending')
     if (pending.kind !== 'pending') return
-    expect((await pending.apply()).ok).toBe(true)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect(listCalls.filter((call) => call === 'files:chapters:.md').length).toBe(1)
     expect((await listChapters(store)).find((item) => item.id === chapter.id)?.status).toBe('revised')
   })
@@ -317,7 +317,7 @@ describe('agent placement guardrails', () => {
     expect(await listNotes(store)).toHaveLength(1)
     expect(await listTrash(store)).toHaveLength(0)
 
-    const applied = await pending.apply()
+    const applied = await pending.apply({ saveHistory: false })
     expect(applied.ok).toBe(true)
     expect(applied.text).toContain('移入回收站')
     expect(await listNotes(store)).toHaveLength(0)
@@ -336,7 +336,7 @@ describe('agent placement guardrails', () => {
     expect(pending.kind).toBe('pending')
     if (pending.kind !== 'pending') return
     expect((await listVolumes(store)).map((volume) => volume.title)).toEqual(['第一卷'])
-    expect((await pending.apply()).ok).toBe(true)
+    expect((await pending.apply({ saveHistory: false })).ok).toBe(true)
     expect((await listVolumes(store)).map((volume) => volume.title)).toContain('第二卷')
 
     const duplicate = await executeTool(store, 'create_volume', JSON.stringify({ title: '第二卷' }))

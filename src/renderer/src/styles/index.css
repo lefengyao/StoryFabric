@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import './android-workbench.css';
+@import './writing-tools.css';
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -543,6 +544,169 @@ button {
   font-family: var(--editor-font, var(--font-sans)) !important;
   font-size: var(--editor-font-size, 14px);
   line-height: var(--editor-line-height, 1.75) !important;
+}
+
+.action-panel {
+  top: 4.5rem;
+  right: 1rem;
+  width: 24rem;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 6rem);
+  border-radius: 1rem;
+}
+
+.chapter-compact-tools,
+.workspace-compact-tools {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .action-panel,
+  .android-native .action-panel {
+    top: auto;
+    right: env(safe-area-inset-right, 0px);
+    bottom: env(safe-area-inset-bottom, 0px);
+    left: env(safe-area-inset-left, 0px);
+    width: auto;
+    max-width: none;
+    max-height: calc(85vh - env(safe-area-inset-top, 0px));
+    max-height: calc(85dvh - env(safe-area-inset-top, 0px));
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  .action-panel-content {
+    padding-bottom: 1.25rem;
+  }
+
+  .chapter-desktop-tools,
+  .workspace-home-action,
+  .workspace-header-version {
+    display: none;
+  }
+
+  .chapter-compact-tools,
+  .workspace-compact-tools {
+    display: block;
+  }
+
+  [data-chapter-toolbar] {
+    flex-wrap: nowrap;
+    padding: 8px;
+  }
+
+  [data-chapter-toolbar] .chapter-title {
+    flex: 1;
+    width: 0;
+    max-width: none;
+    height: 40px;
+  }
+
+  [data-chapter-toolbar] .chapter-save,
+  [data-chapter-toolbar] .chapter-more {
+    height: 40px;
+    min-width: 40px;
+  }
+
+  [data-chapter-editor] {
+    padding: 8px;
+  }
+}
+
+/* Native tablets use the same focused writing controls as native phones. */
+.android-native .chapter-desktop-tools,
+.android-native .workspace-home-action,
+.android-native .workspace-header-version {
+  display: none;
+}
+
+.android-native .chapter-compact-tools,
+.android-native .workspace-compact-tools {
+  display: block;
+}
+
+.android-native [data-chapter-toolbar] {
+  flex-wrap: nowrap;
+  padding: 6px 8px;
+}
+
+.android-native [data-chapter-toolbar] .chapter-title {
+  flex: 1;
+  width: 0;
+  max-width: none;
+  font-size: 14px;
+}
+
+.android-native .action-panel-content button,
+.android-native .action-panel-content input,
+.android-native .action-panel-content select {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.android-native .action-panel-content button {
+  min-height: 44px;
+}
+
+.android-native .action-panel-content label {
+  font-size: 12px;
+}
+
+.android-native [data-chapter-editor] {
+  padding: 6px 8px;
+}
+
+.android-native [data-android-app-header] .workspace-compact-tools button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+@media (max-width: 639px) {
+  [data-chapter-writing="true"] [data-chapter-directory-toggle] {
+    display: flex;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] {
+    height: auto;
+    min-height: 0;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] > div {
+    display: none;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="true"] [data-android-list-pane] {
+    height: 240px;
+    min-height: 0;
+    max-height: 40vh;
+  }
+}
+
+@media (orientation: portrait) {
+  .android-native [data-chapter-writing="true"] [data-chapter-directory-toggle] {
+    display: flex;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] {
+    height: auto;
+    min-height: 0;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] > div {
+    display: none;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="true"] [data-android-list-pane] {
+    height: 240px;
+    min-height: 0;
+    max-height: 40vh;
+  }
+}
+
+@media (orientation: landscape) {
+  .android-native [data-android-chapter-actions] [role="tablist"] svg,
+  .android-native [data-chapter-list-heading] > div > span {
+    display: none;
+  }
 }
 
 /* 手机端底部导航需要和 Android 系统导航区明确分层，避免误触返回/主页。 */

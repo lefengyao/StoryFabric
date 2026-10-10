@@ -1,6 +1,6 @@
 # StoryFabric 最小项目示例
 
-这是一个按 StoryFabric v2 工作区规范准备的最小可打开项目，用于 Windows 端冒烟测试。
+这是一个按 StoryFabric 格式 5 工作区规范准备的最小可打开项目，用于 Windows 端冒烟测试。
 
 覆盖内容：
 

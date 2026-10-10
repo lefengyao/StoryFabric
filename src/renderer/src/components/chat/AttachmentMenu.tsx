@@ -2,6 +2,7 @@ import { FilePlus, ImagePlus, Minimize2, Plus } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import type { AgentMode } from '../../../../shared/types'
 import { Button } from '../ui/primitives'
+import { DOCUMENT_FILE_ACCEPT } from '../../../../core/inspiration/documentFormats'
 
 export function AttachmentMenu({ open, onOpenChange, onFiles, onReference, onCompressContext, compressing = false, agentMode, onAgentModeChange }: {
   open: boolean
@@ -48,7 +49,7 @@ export function AttachmentMenu({ open, onOpenChange, onFiles, onReference, onCom
   return <div ref={rootRef} className="relative">
     <Button variant="ghost" size="sm" onClick={() => onOpenChange(!open)} title="添加图片或文件" aria-label="添加图片或文件"><Plus size={15} /></Button>
     <input ref={imageRef} type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={consume} />
-    <input ref={fileRef} type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json" multiple className="hidden" onChange={consume} />
+    <input ref={fileRef} type="file" accept={DOCUMENT_FILE_ACCEPT} multiple className="hidden" onChange={consume} />
     {open && <div className="absolute bottom-12 left-0 z-30 w-56 rounded-xl border border-line bg-panel p-1.5 shadow-xl">
       {agentMode && onAgentModeChange && <div className="mb-1.5 border-b border-line px-1 pb-1.5">
         <span className="mb-1 block px-1.5 text-[10px] text-faint">运行模式</span>

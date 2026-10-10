@@ -12,6 +12,8 @@ export interface InspirationSource {
   size: number
   extraction: InspirationExtraction
   extractedChars?: number
+  sectionCount?: number
+  extractionError?: string
   importedAt?: number
 }
 

@@ -32,7 +32,7 @@ describe('desktop create writes', () => {
       const outcome = await executeTool(root, testCase.tool, JSON.stringify(testCase.args))
       if (outcome.kind !== 'pending') throw new Error(`未生成待确认变更：${outcome.kind === 'result' ? outcome.text : ''}`)
       const expectedId = outcome.change.entityId
-      await outcome.apply()
+      expect((await outcome.apply({ saveHistory: false })).ok).toBe(true)
 
       const saved = await testCase.list(new NodeFileStore(root))
       expect(saved.map((item) => item.id)).toContain(expectedId)

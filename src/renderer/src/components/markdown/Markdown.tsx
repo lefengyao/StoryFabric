@@ -2,9 +2,10 @@
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { memo } from 'react'
 import { CodeBlock } from './CodeBlock'
 
-export function Markdown({ text }: { text: string }) {
+function MarkdownInner({ text }: { text: string }) {
   const components: Components = {
     a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
     pre: ({ children }) => <CodeBlock>{children}</CodeBlock>
@@ -15,3 +16,5 @@ export function Markdown({ text }: { text: string }) {
     </div>
   )
 }
+
+export const Markdown = memo(MarkdownInner)

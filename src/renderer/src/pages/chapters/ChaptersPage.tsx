@@ -1,21 +1,31 @@
-import { ArchiveRestore, BookOpen, Check, Copy, Download, FileImage, FolderPlus, Menu, Plus, Redo2, Save, Search, Sparkles, TextSelect, Trash2, Undo2 } from 'lucide-react'
+import { ArchiveRestore, BookOpen, Check, ChevronDown, Copy, FolderPlus, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MarkdownEditor, type MarkdownEditorHandle } from '../../components/editor/MarkdownEditor'
-import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
+import { ChapterToolbar } from './ChapterToolbar'
+import { QuickWordEditor, QuickWordRail, QuickWordResult } from './QuickWords'
+import { AndroidPunctuationBar } from './AndroidPunctuationBar'
+import { useAndroidKeyboardVisible } from '../../platform/androidKeyboard'
+import { getPlatformApi } from '../../platform/platformApi'
+import { normalizeWritingTools, suggestedWritingWords, visibleWritingWords, type WritingToolsPreferences } from '../../../../shared/writingTools'
+import { findWordMatches, type WordMatch } from '../../lib/writingTools'
+import { Badge, Button, EmptyState } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { api } from '../../lib/api'
 import { createAutosave } from '../../lib/autosave'
 import { copyPlainText } from '../../lib/clipboard'
-import { canSwitchDocument } from '../../lib/documentSwitch'
+import { useDocumentHistoryEditor } from '../../features/documentHistory/useDocumentHistoryEditor'
+import { EditorHistoryActions } from '../../features/documentHistory/EditorHistoryActions'
+import { loadDocumentIntoEditor } from '../../features/documentHistory/documentRead'
 import { chapterTextAgentEnabled, chapterTextAgentPurpose, chapterTextAgentTask, type ChapterTextAgent } from '../../lib/chapterTextAgent'
 import { creativePreferencesForMode } from '../../lib/creativePreferences'
 import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { chapterReadingStorageKey, readChapterReadingState, resolveChapterTarget, writeChapterReadingState, type ChapterReadingState } from '../../lib/chapterReadingState'
 import { imageFileStem, renderChapterImages, shareChapterImages } from '../../lib/chapterLongImage'
+import { readChapterPaneCollapsed, writeChapterPaneCollapsed } from '../../lib/chapterPanePreference'
 import type { UiWorkspaceIdentity } from '../../lib/workspaceUiScope'
-import { CHAPTER_STATUS_LABEL, cn, countWords } from '../../lib/utils'
+import { CHAPTER_STATUS_LABEL, countWords } from '../../lib/utils'
 import type { ChapterBox, ChapterDoc, ChapterStatus, TrashEntry } from '../../../../shared/types'
-import { boxForChapterStatus } from '../../../../shared/chapterPlacement'
 import { useChat } from '../../stores/chatStore'
 import { chatDraftScope, chatDraftStore } from '../../stores/chatDraftStore'
 import { useSettings } from '../../stores/settingsStore'
@@ -27,6 +37,33 @@ const STATUS_TONE: Record<ChapterStatus, 'default' | 'accent' | 'ok'> = {
   revised: 'accent',
   body: 'accent',
   final: 'ok'
+}
+
+export function ChapterPaneToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }): React.ReactElement {
+  return collapsed ? (
+    <button
+      type="button"
+      data-chapter-pane-rail-toggle="true"
+      aria-label="展开章节目录"
+      aria-expanded="false"
+      aria-controls="chapter-directory-pane"
+      onClick={onToggle}
+    >
+      <PanelLeftOpen size={16} aria-hidden="true" />
+      <span>章节</span>
+    </button>
+  ) : (
+    <button
+      type="button"
+      data-chapter-pane-collapse="true"
+      aria-label="收起章节目录"
+      aria-expanded="true"
+      aria-controls="chapter-directory-pane"
+      onClick={onToggle}
+    >
+      <PanelLeftClose size={16} aria-hidden="true" />
+    </button>
+  )
 }
 
 export function ChapterTrashRow({ item, onRestore, onPurge }: { item: TrashEntry; onRestore: (id: string) => void; onPurge: (item: TrashEntry) => void }): React.ReactElement {
@@ -43,6 +80,8 @@ export function ChapterTrashRow({ item, onRestore, onPurge }: { item: TrashEntry
 }
 
 export function ChaptersPage(): React.ReactElement {
+  const navigate = useNavigate()
+  const [params] = useSearchParams()
   const summary = useWorkspace((s) => s.summary)
   const uiSource = useWorkspace((s) => s.uiSource)
   const refresh = useWorkspace((s) => s.refresh)
@@ -64,11 +103,42 @@ export function ChaptersPage(): React.ReactElement {
   const [confirmOverwrite, setConfirmOverwrite] = useState(false)
   const [copiedChapterId, setCopiedChapterId] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [sharingImage, setSharingImage] = useState(false)
+  const [directoryOpen, setDirectoryOpen] = useState(false)
+  const [chapterPaneCollapsed, setChapterPaneCollapsed] = useState<boolean>(() => {
+    try {
+      return readChapterPaneCollapsed(globalThis.localStorage, false)
+    } catch {
+      return false
+    }
+  })
+  const toggleChapterPane = (): void => {
+    const next = !chapterPaneCollapsed
+    setChapterPaneCollapsed(next)
+    try {
+      writeChapterPaneCollapsed(globalThis.localStorage, next)
+    } catch {
+      // Storage may be unavailable in restricted renderer contexts.
+    }
+  }
   const [actionMessage, setActionMessage] = useState<string | null>(null)
-  const menuRef = useRef<HTMLDivElement | null>(null)
   const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null)
+  const [writingTools, setWritingTools] = useState<WritingToolsPreferences>(() => normalizeWritingTools(null))
+  const [wordsLoaded, setWordsLoaded] = useState(false)
+  const [wordLoadError, setWordLoadError] = useState('')
+  const [wordLoadAttempt, setWordLoadAttempt] = useState(0)
+  const [editWords, setEditWords] = useState(false)
+  const [wordsCollapsed, setWordsCollapsed] = useState(false)
+  const [activeWord, setActiveWord] = useState('')
+  const [editorSelection, setEditorSelection] = useState<WordMatch>({ from: 0, to: 0 })
+  const [editorFocused, setEditorFocused] = useState(false)
+  const [pendingPunctuation, setPendingPunctuation] = useState('')
+  const androidKeyboardVisible = useAndroidKeyboardVisible()
+  const isAndroidNative = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
+  const suggestions = useMemo(() => suggestedWritingWords(summary ?? {}), [summary?.characters, summary?.settings])
+  const quickWords = useMemo(() => visibleWritingWords(suggestions, writingTools), [suggestions, writingTools])
+  const wordMatches = useMemo(() => findWordMatches(draft?.content ?? '', activeWord), [draft?.content, activeWord])
+  const wordMatchIndex = wordMatches.findIndex((match) => match.from === editorSelection.from && match.to === editorSelection.to)
   /** 打开（或最近一次同步）时的磁盘内容，用于检测智能体等外部修改 */
   const baseRef = useRef<string>('')
   const openRequestRef = useRef(0)
@@ -84,6 +154,49 @@ export function ChaptersPage(): React.ReactElement {
   const volumes = summary?.volumes ?? []
   const workspaceIdentity = useMemo<UiWorkspaceIdentity | null>(() => summary ? { source: uiSource ?? 'electron-local', path: summary.path } : null, [summary?.path, uiSource])
   const workspaceKey = workspaceIdentity ?? ''
+  const writingScope = workspaceIdentity ? JSON.stringify(workspaceIdentity) : ''
+  const writingScopeRef = useRef(writingScope)
+  writingScopeRef.current = writingScope
+  const history = useDocumentHistoryEditor({
+    kind: 'chapter', workspaceKey: writingScope,
+    onDocument: (document: Partial<ChapterDoc>, changed) => { setDraft(document); setDirty(changed) },
+    onSaved: async (saved) => {
+      const savedBox = saved.box === 'draft' ? 'draft' : 'main'
+      baseRef.current = saved.content ?? ''
+      setBox(savedBox); setSelectedId(saved.id ?? null); setReloadHint(false)
+      persistReading({ activeBox: savedBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [savedBox]: saved.id ?? '' } })
+      await refresh()
+    }
+  })
+  useEffect(() => {
+    let current = true
+    setWritingTools(normalizeWritingTools(null)); setWordsLoaded(false); setWordLoadError(''); setEditWords(false); setActiveWord('')
+    if (writingScope) {
+      void getPlatformApi().getWritingTools().then((value) => {
+        if (current) { setWritingTools(normalizeWritingTools(value)); setWordsLoaded(true) }
+      }).catch((error) => { if (current) setWordLoadError(error instanceof Error ? error.message : String(error)) })
+    }
+    return () => { current = false }
+  }, [writingScope, wordLoadAttempt])
+  useEffect(() => { setActiveWord(''); setEditorSelection({ from: 0, to: 0 }); markdownEditorRef.current?.clearWord() }, [draft?.id])
+  useEffect(() => {
+    document.documentElement.classList.toggle('android-writing-keyboard', androidKeyboardVisible && editorFocused)
+    return () => document.documentElement.classList.remove('android-writing-keyboard')
+  }, [androidKeyboardVisible, editorFocused])
+  const saveWritingTools = async (preferences: WritingToolsPreferences): Promise<void> => {
+    const scope = writingScope
+    const normalized = normalizeWritingTools(preferences)
+    await getPlatformApi().saveWritingTools(normalized)
+    if (writingScopeRef.current === scope) setWritingTools(normalized)
+  }
+  const locateQuickWord = (word: string, direction: 1 | -1 = 1): void => {
+    setActiveWord(word)
+    markdownEditorRef.current?.locateWord(word, direction)
+  }
+  const formatChapter = (): void => {
+    const result = markdownEditorRef.current?.format()
+    setActionMessage(result === 'queued' ? '确认候选字后完成排版，可撤销恢复原文。' : result === 'formatted' ? '已统一首行缩进和段间空行，可撤销恢复原文。' : '正文已符合排版规则。')
+  }
   const chapterListRef = useRef<HTMLDivElement | null>(null)
   const chapterReadOnlyRef = useRef<HTMLDivElement | null>(null)
   const chapterEditorRef = useRef<HTMLDivElement | null>(null)
@@ -93,17 +206,6 @@ export function ChaptersPage(): React.ReactElement {
   usePersistentScrollPosition(chapterReaderRef, workspaceKey, `chapters:reader:${box}:${draft?.id ?? selectedId ?? 'overview'}`, Boolean(draft && editorReady))
 
   useEffect(() => { void api.listTrash().then(setTrashItems).catch(() => setTrashItems([])) }, [summary?.trashCount])
-
-  useEffect(() => {
-    if (!menuOpen) return
-    const onPointer = (event: PointerEvent): void => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false) }
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setMenuOpen(false) }
-    document.addEventListener('pointerdown', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('pointerdown', onPointer); document.removeEventListener('keydown', onKey) }
-  }, [menuOpen])
-
-  useEffect(() => setMenuOpen(false), [draft?.id, box])
 
   const persistReading = (patch: Partial<ChapterReadingState>): void => {
     if (!workspaceIdentity) return
@@ -118,28 +220,26 @@ export function ChaptersPage(): React.ReactElement {
     const target = [...(summary?.chapters ?? [])].filter((chapter) => (chapter.box ?? 'main') === requestedBox).find((chapter) => chapter.id === id)
     if (!target) return
     if (!force && draft?.id === target.id) return
-    if (!canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: target.id, dirty, confirmDiscard: () => window.confirm('当前章节有未保存的修改，放弃并切换？') })) return
+    if (!force && !await history.leave()) return
     const requestId = ++openRequestRef.current
+    const generation = history.editGeneration()
     setChapterError(null)
     setFailedChapterId(null)
     setEditorReady(false)
-    let body: string | null
+    let snapshot: Awaited<ReturnType<typeof api.getDocumentSnapshot>>
     try {
-      body = await api.getChapterBody(id)
+      snapshot = await api.getDocumentSnapshot('chapter', id)
     } catch (error) {
       if (requestId === openRequestRef.current) { setChapterError(error instanceof Error ? error.message : String(error)); setFailedChapterId(id) }
       return
     }
     if (requestId !== openRequestRef.current) return
-    if (body === null) {
-      setChapterError('章节正文不存在或无法读取，请重试。')
-      setFailedChapterId(id)
-      return
-    }
-    baseRef.current = body
+    if (history.editGeneration() !== generation) { setChapterError('读取期间发生了新编辑，草稿已保留，请再次选择章节。'); return }
+    baseRef.current = snapshot.document.content
     setBox(requestedBox)
     setSelectedId(target.id)
-    setDraft({ ...target, content: body })
+    history.begin(snapshot)
+    setDirectoryOpen(false)
     setDirty(false)
     setReloadHint(false)
     persistReading({ activeBox: requestedBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [requestedBox]: target.id } })
@@ -147,9 +247,10 @@ export function ChaptersPage(): React.ReactElement {
 
   const openChapter = async (meta: { id: string }): Promise<void> => { await loadChapter(meta.id, box === 'trash' ? 'main' : box) }
 
-  const changeBox = (next: ChapterBox): void => {
+  const changeBox = async (next: ChapterBox): Promise<void> => {
     if (next === box) return
-    if (!canSwitchDocument({ currentId: draft?.id ?? selectedId, targetId: null, dirty, confirmDiscard: () => window.confirm('当前章节有未保存的修改，放弃并切换？') })) return
+    if (!await history.leave()) return
+    history.reset()
     openRequestRef.current += 1
     setBox(next)
     setSelectedId(null)
@@ -177,10 +278,12 @@ export function ChaptersPage(): React.ReactElement {
     const storage = (() => { try { return globalThis.localStorage } catch { return null } })()
     const remembered = readChapterReadingState(storage, chapterReadingStorageKey(key))
     readingStateRef.current = remembered
-    const target = resolveChapterTarget(remembered, {
+    let target = resolveChapterTarget(remembered, {
       main: [...summary.chapters].filter((chapter) => (chapter.box ?? 'main') === 'main'),
       draft: [...summary.chapters].filter((chapter) => (chapter.box ?? 'main') === 'draft')
     })
+    const requestedChapter = summary.chapters.find((chapter) => chapter.id === params.get('id'))
+    if (requestedChapter && requestedChapter.box !== 'trash') target = { box: requestedChapter.box === 'draft' ? 'draft' : 'main', chapterId: requestedChapter.id }
     setBox(target.box)
     setSelectedId(null)
     setDraft(null)
@@ -192,25 +295,36 @@ export function ChaptersPage(): React.ReactElement {
     // Metadata refreshes must not replace an editor the user is already working in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summary?.path, uiSource])
+  useEffect(() => {
+    if (!draft?.id) return
+    const current = summary?.chapters.find((chapter) => chapter.id === draft.id)
+    if (!current?.writeRevision || current.writeRevision === draft.writeRevision) return
+    if (dirty) setReloadHint(true)
+    else void reloadOpen()
+  }, [summary?.chapters])
 
   /** 拉取当前打开章节的最新磁盘内容并同步到草稿 */
   const reloadOpen = async (): Promise<void> => {
     if (!draft?.id) return
-    let body: string | null
+    const request = ++openRequestRef.current
+    const scope = writingScope
     try {
-      body = await api.getChapterBody(draft.id)
+      const result = await loadDocumentIntoEditor({
+        read: () => api.getDocumentSnapshot('chapter', draft.id!),
+        generation: history.editGeneration,
+        isCurrent: () => request === openRequestRef.current && writingScopeRef.current === scope,
+        apply: (snapshot) => {
+          baseRef.current = snapshot.document.content
+          history.begin(snapshot)
+          setDirty(false)
+          setReloadHint(false)
+        }
+      })
+      if (result === 'edited') setReloadHint(true)
     } catch (error) {
-      setChapterError(error instanceof Error ? error.message : String(error))
+      if (request === openRequestRef.current && writingScopeRef.current === scope) setChapterError(error instanceof Error ? error.message : String(error))
       return
     }
-    if (body === null) {
-      setChapterError('章节正文不存在或无法读取，请重试。')
-      return
-    }
-    baseRef.current = body
-    setDraft((d) => (d ? { ...d, content: body } : d))
-    setDirty(false)
-    setReloadHint(false)
   }
 
   /** 智能体写回了当前打开的章节：无本地改动则静默同步，有改动则提示 */
@@ -223,7 +337,8 @@ export function ChaptersPage(): React.ReactElement {
   }, [lastApplied])
 
   const create = async (): Promise<void> => {
-    await api.saveChapter({
+    if (!await history.leave()) return
+    const created = await api.saveChapter({
       title: `第${chapters.length + 1}章`,
       volume: volumes[0]?.title ?? '第一卷',
       volumeId: volumes[0]?.id ?? 'vol_default',
@@ -232,11 +347,12 @@ export function ChaptersPage(): React.ReactElement {
       status: box === 'draft' ? 'draft' : 'body',
       content: ''
     })
-    const fresh = await useWorkspace.getState().refresh().then(() => useWorkspace.getState().summary)
-    const last = fresh?.chapters[fresh.chapters.length - 1]
-    if (last) {
-      setSelectedId(last.id)
-      setDraft({ ...last, content: '' })
+    await refresh()
+    if (created) {
+      const snapshot = await api.getDocumentSnapshot('chapter', created.id)
+      setSelectedId(created.id)
+      history.begin(snapshot)
+      setDirectoryOpen(false)
       baseRef.current = ''
       setDirty(false)
       setReloadHint(false)
@@ -247,16 +363,7 @@ export function ChaptersPage(): React.ReactElement {
     if (!draft) return
     setSaving(true)
     try {
-      const saved = await api.saveChapter(draft)
-      baseRef.current = draft.content ?? ''
-      await refresh()
-      const savedBox = saved.box === 'draft' ? 'draft' : 'main'
-      setBox(savedBox)
-      setSelectedId(saved.id)
-      setDraft({ ...draft, ...saved, content: draft.content ?? '' })
-      persistReading({ activeBox: savedBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [savedBox]: saved.id } })
-      setDirty(false)
-      setReloadHint(false)
+      await history.overwrite()
     } finally {
       setSaving(false)
     }
@@ -264,15 +371,11 @@ export function ChaptersPage(): React.ReactElement {
 
   const save = async (): Promise<void> => {
     if (!draft) return
-    // 保存前比对磁盘内容：智能体等外部修改过则先征求用户意见，避免静默覆盖
-    if (draft.id) {
-      const disk = await api.getChapterBody(draft.id)
-      if (disk !== null && disk !== baseRef.current) {
-        setConfirmOverwrite(true)
-        return
-      }
-    }
-    await doSave()
+    setSaving(true)
+    try {
+      const success = await history.save()
+      if (!success) setReloadHint(true)
+    } finally { setSaving(false) }
   }
 
   /** 空闲自动保存：只在有未保存改动时计时，到点仍走 save()（外部修改照旧弹确认） */
@@ -284,22 +387,20 @@ export function ChaptersPage(): React.ReactElement {
     saveRef.current = save
   })
 
-  // 离开页面时把未到点的自动保存立即执行一次，避免改动丢失。
-  // 声明在调度 effect 之前：React 卸载按声明顺序跑 cleanup，先 flush 再 cancel。
-  useEffect(() => () => autosave.flush(), [autosave])
-
   useEffect(() => {
-    if (!dirty || !draft || autosaveSeconds <= 0) {
+    if (!dirty || !draft || autosaveSeconds <= 0 || history.state.error) {
       // 没有未保存改动：丢弃待执行回调，避免干净状态卸载时多写一次磁盘
       autosave.discard()
       return
     }
     autosave.schedule(() => void saveRef.current().catch(() => {}))
     return () => autosave.cancel()
-  }, [draft?.title, draft?.content, dirty, autosave, autosaveSeconds])
+  }, [draft?.title, draft?.content, dirty, autosave, autosaveSeconds, history.state.error])
 
   const remove = async (): Promise<void> => {
     if (!selectedId) return
+    if (!await history.leave(false)) return
+    history.reset()
     // 章节即将被删除：先丢弃待执行的自动保存，避免删完又被写回来
     autosave.discard()
     await api.deleteChapter(selectedId)
@@ -319,6 +420,7 @@ export function ChaptersPage(): React.ReactElement {
   const moveOpenChapter = async (): Promise<void> => {
     if (!draft?.id) return
     if (dirty) { setActionMessage('请先保存当前章节，再移动箱位'); return }
+    if (!await history.leave(false)) return
     const targetBox = draft.box === 'draft' ? 'main' : 'draft'
     try {
       await api.moveChapter(draft.id, { box: targetBox, volumeId: draft.volumeId })
@@ -326,7 +428,7 @@ export function ChaptersPage(): React.ReactElement {
       const updated = useWorkspace.getState().summary?.chapters.find((chapter) => chapter.id === draft.id)
       setBox(targetBox)
       setSelectedId(draft.id)
-      setDraft({ ...draft, ...updated, content: draft.content ?? '' })
+      history.begin(await api.getDocumentSnapshot('chapter', draft.id))
       persistReading({ activeBox: targetBox, lastChapterByBox: { ...(readingStateRef.current?.lastChapterByBox ?? {}), [targetBox]: draft.id } })
       setDirty(false)
     } catch (error) {
@@ -417,9 +519,15 @@ export function ChaptersPage(): React.ReactElement {
   }
 
   return (
-    <div data-android-document-layout className="flex h-full min-h-0 flex-col sm:flex-row">
+    <div data-android-document-layout data-chapter-writing={Boolean(draft)} data-chapter-directory-open={directoryOpen} data-chapter-pane-collapsed={chapterPaneCollapsed} className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 章节列表 */}
-      <div data-android-list-pane className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+      <div id="chapter-directory-pane" data-android-list-pane className="flex h-64 w-full shrink-0 flex-col border-b border-line bg-panel sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+        <ChapterPaneToggle collapsed={chapterPaneCollapsed} onToggle={toggleChapterPane} />
+        {draft && <button data-chapter-directory-toggle type="button" aria-label={directoryOpen ? '收起章节目录' : '展开章节目录'} aria-expanded={directoryOpen} aria-controls="chapter-directory-list" className="hidden min-h-10 items-center gap-2 border-b border-line px-3 text-left text-xs text-muted" onClick={() => setDirectoryOpen((open) => !open)}>
+          <BookOpen size={14} className="shrink-0 text-accent" />
+          <span className="shrink-0">章节目录</span><span className="min-w-0 flex-1 truncate text-faint">{draft.volume ?? '第一卷'} · {draft.title}</span>
+          <ChevronDown size={14} className={directoryOpen ? 'shrink-0 rotate-180' : 'shrink-0'} />
+        </button>}
         <div className="shrink-0 border-b border-line px-3 py-3">
           <div data-android-chapter-actions className="flex min-w-0 items-center gap-2">
             <div role="tablist" aria-label="章节箱" className="grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
@@ -434,7 +542,7 @@ export function ChaptersPage(): React.ReactElement {
             {box !== 'trash' && <Button size="sm" variant="primary" className="h-9 shrink-0 px-3" onClick={() => void create()}><Plus size={14} /> 新建</Button>}
           </div>
           {box !== 'trash' && (
-            <div className="mt-3 flex items-center justify-between gap-2">
+            <div data-chapter-list-heading className="mt-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-medium text-muted">
                 <BookOpen size={14} className="text-accent" />
                 <span>{box === 'main' ? '正文结构' : '待整理章节'}</span>
@@ -443,7 +551,7 @@ export function ChaptersPage(): React.ReactElement {
             </div>
           )}
         </div>
-        <div ref={chapterListRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div id="chapter-directory-list" ref={chapterListRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {box === 'trash' ? <>{trashActionError && <div className="mb-2 rounded-lg border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs text-danger">{trashActionError}</div>}{trashItems.filter((item) => item.kind === 'chapter').map((item) => <ChapterTrashRow key={item.id} item={item} onRestore={(id) => void restore(id)} onPurge={(target) => { setTrashActionError(null); setPurgeTarget(target) }} />)}</> : <>
           {chapters.length === 0 && <EmptyState icon={<BookOpen size={26} />} title="还没有章节" hint="新建第一章开始写作" />}
           {(box === 'draft' ? [{ id: 'draft', title: '草稿箱', order: 0 }] : volumes).map((vol) => (
@@ -514,73 +622,45 @@ export function ChaptersPage(): React.ReactElement {
           )}
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-3 sm:px-5">
-            <Input value={draft.title ?? ''} onChange={(e) => { setDraft({ ...draft, title: e.target.value }); setDirty(true) }} className="max-w-56" />
-            <select
-              value={draft.volumeId ?? volumes[0]?.id ?? 'vol_default'}
-              onChange={(e) => { const volume = volumes.find((item) => item.id === e.target.value); setDraft({ ...draft, volumeId: e.target.value, volume: volume?.title ?? draft.volume }); setDirty(true) }}
-              className={cn('h-9 rounded-lg border border-line bg-panel px-2.5 text-sm outline-none focus:border-accent cursor-pointer')}
-            >
-              {(volumes.length ? volumes : [{ id: 'vol_default', title: draft.volume ?? '第一卷', order: 1 }]).map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.title}
-                </option>
-              ))}
-            </select>
-            <select
-              value={draft.status ?? 'draft'}
-              onChange={(e) => { const status = e.target.value as ChapterStatus; setDraft({ ...draft, status, box: boxForChapterStatus(status) }); setDirty(true) }}
-              className="h-9 rounded-lg border border-line bg-panel px-2.5 text-sm outline-none focus:border-accent cursor-pointer"
-            >
-              <optgroup label="草稿箱">{(['draft', 'revised'] as const).map((s) => <option key={s} value={s}>{CHAPTER_STATUS_LABEL[s]}</option>)}</optgroup>
-              <optgroup label="正文箱">{(['body', 'final'] as const).map((s) => <option key={s} value={s}>{CHAPTER_STATUS_LABEL[s]}</option>)}</optgroup>
-            </select>
-            <label className="flex items-center gap-1.5 text-xs text-muted">
-              序号
-              <Input type="number" value={draft.order ?? 1} onChange={(e) => { setDraft({ ...draft, order: Number(e.target.value) || 1 }); setDirty(true) }} className="w-16" />
-            </label>
-            <Input value={(draft.terms ?? []).map((term) => term.term).join('，')} onChange={(e) => { const terms = e.target.value.split(/[,，、\s]+/).map((term) => term.trim()).filter(Boolean).map((term) => ({ term })); setDraft({ ...draft, terms }); setDirty(true) }} placeholder="术语标注" className="max-w-40" title="用逗号分隔章节中的陌生名词" />
-            {dirty && <span className="text-xs text-accent">未保存</span>}
-            <div className="hidden flex-1 sm:block" />
-            <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setDirty(false) }}>
-              完成
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => void askAi()} title="让智能体基于本章设定续写">
-              <Sparkles size={13} /> AI 续写
-            </Button>
-            <Button variant="ghost" size="sm" disabled={!draft.id || !chapterTextAgentEnabled('polish', generationPreferences)} onClick={() => void askAi(chapterTextAgentTask('polish', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'polish')} title="普通模式 AI 润色">AI 润色</Button>
-            <Button variant="ghost" size="sm" disabled={!draft.id || !chapterTextAgentEnabled('de-ai', generationPreferences)} onClick={() => void askAi(chapterTextAgentTask('de-ai', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'de-ai')} title="普通模式去 AI 风格">去 AI 风格</Button>
-            <div ref={menuRef} className="relative">
-              <Button variant="outline" size="sm" aria-label="章节更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><Menu size={16} /></Button>
-              {menuOpen && <div role="menu" aria-label="章节操作" className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border border-line bg-panel p-1 shadow-lg">
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.openSearch() }}><Search size={14} /> 查找与替换</button>
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.undo() }}><Undo2 size={14} /> 撤销</button>
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.redo() }}><Redo2 size={14} /> 重做</button>
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); markdownEditorRef.current?.selectAll() }}><TextSelect size={14} /> 全选正文</button>
-                <div className="my-1 border-t border-line" />
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); void copyChapter(draft.id ?? 'draft', draft.content ?? '') }}><Copy size={14} /> {copiedChapterId === (draft.id ?? 'draft') ? '已复制' : '复制全章'}</button>
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); downloadChapterMarkdown() }}><Download size={14} /> 导出 Markdown</button>
-                <button role="menuitem" type="button" disabled={sharingImage} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated disabled:opacity-50" onClick={() => { setMenuOpen(false); void shareChapter() }}><FileImage size={14} /> {sharingImage ? '生成中…' : '生成长图分享'}</button>
-                {draft.id && <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated" onClick={() => { setMenuOpen(false); void moveOpenChapter() }}><ArchiveRestore size={14} /> {draft.box === 'draft' ? '移入正文箱' : '移入草稿箱'}</button>}
-                <div className="my-1 border-t border-line" />
-                <button role="menuitem" type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-danger hover:bg-elevated" onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}><Trash2 size={14} /> 删除章节</button>
-              </div>}
-            </div>
-            <Button variant="primary" size="sm" onClick={() => void save()} loading={saving}>
-              <Save size={13} /> 保存
-            </Button>
-          </div>
-
+        <div className="flex min-w-0 flex-1 flex-col" onCompositionStartCapture={history.compositionStart} onCompositionEndCapture={history.compositionEnd}>
+          <ChapterToolbar
+            draft={draft}
+            volumes={volumes}
+            dirty={dirty}
+            saving={saving || history.state.saving}
+            copied={copiedChapterId === (draft.id ?? 'draft')}
+            sharingImage={sharingImage}
+            canPolish={Boolean(draft.id) && chapterTextAgentEnabled('polish', generationPreferences)}
+            canDeAi={Boolean(draft.id) && chapterTextAgentEnabled('de-ai', generationPreferences)}
+            onChange={(patch) => history.change({ ...draft, ...patch })}
+            onSave={() => void save()}
+            onFinish={() => { void history.leave().then((allowed) => { if (allowed) { history.reset(); setDraft(null); setDirty(false) } }) }}
+            onAi={() => void askAi()}
+            onPolish={() => void askAi(chapterTextAgentTask('polish', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'polish')}
+            onDeAi={() => void askAi(chapterTextAgentTask('de-ai', { id: draft.id ?? '', title: draft.title ?? '当前章节' }), 'de-ai')}
+            onSearch={() => markdownEditorRef.current?.openSearch()}
+            onFormat={formatChapter}
+            onEditWords={() => { if (wordsLoaded) setEditWords(true); else setWordLoadAttempt((attempt) => attempt + 1) }}
+            onUndo={() => markdownEditorRef.current?.undo()}
+            onRedo={() => markdownEditorRef.current?.redo()}
+            onSelectAll={() => markdownEditorRef.current?.selectAll()}
+            onCopy={() => void copyChapter(draft.id ?? 'draft', draft.content ?? '')}
+            onExport={downloadChapterMarkdown}
+            onShare={() => void shareChapter()}
+            onMove={() => void moveOpenChapter()}
+            onDelete={() => setConfirmDelete(true)}
+          />
+          <EditorHistoryActions state={history.state} onCapture={() => void history.save('manual')} onRetry={() => void history.retry()} onHistory={() => { void history.leave().then((allowed) => { if (allowed) navigate(`/history?kind=chapter&id=${encodeURIComponent(draft.id ?? '')}`) }) }} />
           {reloadHint && (
             <div className="flex items-center gap-2 border-b border-line bg-accent-soft px-5 py-2 text-xs text-accent">
-              智能体已更新此章节，而你有未保存的本地修改。
+              当前章节文件已变化，本地草稿已保留。
               <Button size="sm" variant="soft" onClick={() => void reloadOpen()}>
                 载入最新版（放弃本地修改）
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setReloadHint(false)}>
                 继续编辑我的版本
               </Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirmOverwrite(true)}>确认覆盖当前文件</Button>
             </div>
           )}
 
@@ -591,25 +671,36 @@ export function ChaptersPage(): React.ReactElement {
             </div>
           )}
 
-          {actionMessage && <div role="status" className="flex items-center justify-between border-b border-line px-5 py-2 text-xs text-muted"><span>{actionMessage}</span><button type="button" onClick={() => setActionMessage(null)}>关闭</button></div>}
+          {actionMessage && <div data-chapter-action-message role="status" className="flex items-center justify-between border-b border-line px-5 py-2 text-xs text-muted"><span>{actionMessage}</span><button type="button" onClick={() => setActionMessage(null)}>关闭</button></div>}
 
-          <div className="min-h-0 flex-1 p-4">
-            <MarkdownEditor
+          {wordLoadError && <div role="alert" className="flex items-center gap-2 px-3 py-2 text-xs text-danger"><span className="min-w-0 flex-1 truncate">快捷词读取失败：{wordLoadError}</span><button type="button" onClick={() => setWordLoadAttempt((attempt) => attempt + 1)}>重试</button></div>}
+          <div data-chapter-editor className="flex min-h-0 flex-1 gap-2 p-4">
+            <QuickWordRail words={quickWords} activeWord={activeWord} collapsed={wordsCollapsed} onCollapse={() => setWordsCollapsed((value) => !value)} onFormat={formatChapter} onEdit={() => { if (wordsLoaded) setEditWords(true); else setWordLoadAttempt((attempt) => attempt + 1) }} onLocate={(word) => locateQuickWord(word)} />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <QuickWordResult word={activeWord} count={wordMatches.length} index={wordMatchIndex} onPrevious={() => locateQuickWord(activeWord, -1)} onNext={() => locateQuickWord(activeWord)} onClose={() => { setActiveWord(''); markdownEditorRef.current?.clearWord() }} />
+              <div className="min-h-0 flex-1"><MarkdownEditor
               ref={markdownEditorRef}
               value={draft.content ?? ''}
               chapterFormatting
               documentId={draft.id}
               onLayoutReady={(documentId) => { if (documentId === draft.id) setEditorReady(true) }}
-              onChange={(content) => { setDraft({ ...draft, content }); setDirty(true) }}
+              onChange={(content) => history.change({ ...draft, content })}
               scrollRef={chapterReaderRef}
-            />
+              onSelectionChange={setEditorSelection}
+              onFocusChange={setEditorFocused}
+              onPendingInputChange={setPendingPunctuation}
+            /></div>
+            </div>
           </div>
 
-          <div className="flex h-8 shrink-0 items-center border-t border-line px-4 text-xs text-faint">
+          <div data-chapter-status className="flex h-8 shrink-0 items-center gap-3 border-t border-line px-4 text-xs text-faint">
             {countWords(draft.content ?? '')} 字
+            <span role="status" className={dirty ? 'text-accent' : 'text-faint'}>{saving ? '保存中…' : dirty ? '未保存' : '已保存'}</span>
           </div>
+          <AndroidPunctuationBar visible={isAndroidNative && editorFocused} pending={pendingPunctuation} onInsert={(symbol) => markdownEditorRef.current?.insertText(symbol)} />
         </div>
       )}
+      <QuickWordEditor key={writingScope} open={editWords} onOpenChange={setEditWords} preferences={writingTools} suggestions={suggestions} onSave={saveWritingTools} />
 
       <Modal open={confirmOverwrite} onOpenChange={setConfirmOverwrite} title="章节已被外部修改" description="磁盘上的内容与你打开时不一致（可能来自智能体写回或其他编辑器）">
         <p className="text-sm text-muted">选择「覆盖」将以你当前编辑器里的内容为准；选择「载入最新版」将放弃本地修改。</p>
@@ -638,7 +729,7 @@ export function ChaptersPage(): React.ReactElement {
       </Modal>
 
       <Modal open={confirmDelete} onOpenChange={setConfirmDelete} title={`删除「${selected?.title ?? ''}」？`}>
-        <p className="text-sm text-muted">此操作不可撤销。</p>
+        <p className="text-sm text-muted">章节将移入回收站，历史版本继续保留。可从回收站恢复当前章节。</p>
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
             取消

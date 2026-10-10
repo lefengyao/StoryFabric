@@ -3,12 +3,15 @@
  * Keeping these contracts in one module prevents core and desktop tools from
  * teaching the agent different placement rules.
  */
+export const DOCUMENT_READ_BASELINE_SCHEMA = { type: 'string', minLength: 1, description: '章节/大纲更新时将本次读取的 readRevision 原样填入；用于校验外部编辑器未更新 wr_ 时的原文，不替代 baseRevision' } as const
+
 export const AGENT_OUTLINE_DOC_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     id: { type: 'string', description: '更新已有文档时必填' },
     baseRevision: { type: 'string', minLength: 1, description: '更新时必填，取自读取工具返回的 writeRevision；不能使用 sourceRevision' },
+    baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA,
     title: { type: 'string' },
     order: { type: 'number' },
     kind: { type: 'string', enum: ['total', 'chapter'], description: '文档类型：total=总纲，chapter=章纲' },
@@ -109,6 +112,7 @@ export const AGENT_CHAPTER_SCHEMA = {
   properties: {
     id: { type: 'string', description: '更新已有章节时必填' },
     baseRevision: { type: 'string', minLength: 1, description: '更新时必填，取自读取工具返回的 writeRevision；不能使用 sourceRevision' },
+    baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA,
     title: { type: 'string' },
     volume: { type: 'string' },
     volumeId: { type: 'string', description: '正文箱所属卷 id；box 为 main 时必填' },
@@ -127,6 +131,7 @@ export const AGENT_CHAPTER_EDIT_SCHEMA = {
   properties: {
     chapterId: { type: 'string', minLength: 1 },
     baseRevision: { type: 'string', minLength: 1, description: '取自 get_chapter 或 search_project 的 writeRevision' },
+    baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA,
     expectedText: { type: 'string', maxLength: 12000, description: '要替换的唯一连续片段；与 lineStart/lineEnd 二选一' },
     lineStart: { type: 'integer', minimum: 1, description: '1 起始行；与 lineEnd 一起使用' },
     lineEnd: { type: 'integer', minimum: 1, description: '包含在内的结束行；与 lineStart 一起使用' },

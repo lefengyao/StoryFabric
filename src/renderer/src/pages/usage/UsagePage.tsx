@@ -1,5 +1,5 @@
 import { BarChart3, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Card, EmptyState, Spinner } from '../../components/ui/primitives'
 import { getPlatformApi } from '../../platform/platformApi'
 import { summarizeUsageBuckets, summarizeUsageBucketHours, usageDateKey, usageModelKey } from '../../../../core/usage/usageLog'
@@ -10,6 +10,7 @@ import { useWorkspace } from '../../stores/workspaceStore'
 import { usageProjectOptions } from './usageProjects'
 import { UsageBarChart, UsageTokenPie } from './UsageCharts'
 import { summarizeWritingDays } from './writingSummary'
+import { PageImageExport } from '../../features/imageExport/PageImageExport'
 
 const nf = new Intl.NumberFormat('zh-CN')
 const fmt = (value: number): string => nf.format(Math.round(value))
@@ -26,6 +27,7 @@ export function UsagePage(): React.ReactElement {
   const [selectedModelKey, setSelectedModelKey] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [writingMonth, setWritingMonth] = useState<string | null>(null)
+  const exportContentRef = useRef<HTMLDivElement | null>(null)
 
   const load = async (): Promise<void> => {
     try {
@@ -90,7 +92,7 @@ export function UsagePage(): React.ReactElement {
 
   return (
     <div data-android-usage-page className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl space-y-6 p-6">
+      <div ref={exportContentRef} className="mx-auto max-w-3xl space-y-6 p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-base font-semibold">统计</h1>
@@ -100,9 +102,12 @@ export function UsagePage(): React.ReactElement {
               {unattributedCount > 0 && ` 其中 ${fmt(unattributedCount)} 次旧调用没有项目归属，仅计入全部项目。`}
             </p>
           </div>
+          <div data-image-export-action className="flex shrink-0 flex-wrap justify-end gap-2">
+          <PageImageExport sourceRef={exportContentRef} workspaceName={selectedProject?.name ?? '全部项目'} title="用量统计" />
           <Button size="sm" variant="outline" onClick={() => void load()}>
             <RefreshCw size={13} /> 刷新
           </Button>
+          </div>
         </div>
 
         <Card className="flex flex-wrap items-center gap-3 p-4">

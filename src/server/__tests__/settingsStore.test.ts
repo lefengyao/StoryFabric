@@ -11,6 +11,16 @@ afterEach(async () => {
 })
 
 describe('server settings store', () => {
+  it('preserves the owner of managed model preferences across server reloads and offline edits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-model-scope-'))
+    roots.push(root)
+    const file = join(root, 'settings.json'), store = new ServerSettingsStore(file)
+    await store.saveTrailblazerProvider({ models: ['custom-model'], modelSettings: {}, modelScope: 'b'.repeat(64) })
+    const restored = new ServerSettingsStore(file)
+    expect(await restored.managedProviderPreferences()).toEqual({ models: ['custom-model'], modelSettings: {}, modelScope: 'b'.repeat(64) })
+    await restored.saveTrailblazerProvider({ models: ['offline-edit'], modelSettings: {} })
+    expect((await restored.managedProviderPreferences()).modelScope).toBe('b'.repeat(64))
+  })
   it('forgets a recent workspace without changing another recent record', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-recent-forget-'))
     roots.push(root)

@@ -1,8 +1,12 @@
 import { promises as fs } from 'node:fs'
+import { checkForUpdates } from '../shared/updates'
+import { version as APP_VERSION } from '../../package.json'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { extname, join, relative, resolve, sep } from 'node:path'
 import { URL } from 'node:url'
 import type { FileStore } from '../core/storage/fileStore'
+import { getDocumentSnapshot, saveDocument, saveHistoryVersion, listHistoryVersions, getHistoryVersion, updateHistoryVersion, deleteHistoryVersion, restoreHistoryVersion } from '../core/workspace/documentWrites'
+import type { DocumentKind, HistorySaveOptions, HistoryVersionPatch } from '../shared/documentHistory'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { orderRecentWorkspacePaths } from '../shared/recentWorkspaces'
 import { createAccessKeyVerifier, createAuthAttemptTracker, createSessionStore } from './auth'
@@ -22,6 +26,8 @@ import { CoreSessionStore } from '../core/workspace/sessionStore'
 import { decodeSessionArchive, exportSessionArchive } from '../core/workspace/sessionArchive'
 import { exportWorkspaceArchive, WORKSPACE_ARCHIVE_MAX_BYTES, WORKSPACE_ARCHIVE_MIME } from '../core/workspace/archive'
 import { listVolumes, saveVolume, deleteVolume, moveChapter, readGraphLayout, writeGraphLayout } from '../core/workspace/workspaceService'
+import { readWritingTools, writeWritingTools } from '../core/workspace/writingTools'
+import type { WritingToolsPreferences } from '../shared/writingTools'
 import { listTrash, restoreFromTrash, purgeTrashEntry } from '../core/workspace/trash'
 import { deleteChapter, deleteCharacter, deleteEvent, deleteNote, deleteOutlineDoc, deleteSetting, getChapterBody, getNote, getSetting, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveEvent, saveNote, saveOutlineDoc, saveRelationships, saveSetting, searchProject, genId } from '../core/workspace/entityStore'
 import { summarizeContentPackage } from '../core/skills/packageStore'
@@ -36,6 +42,9 @@ import { SourceCatalog } from '../core/inspiration/sourceCatalog'
 import { normalizeProjectDocPath, validateProjectDocContent } from '../core/workspace/projectDocs'
 import { saveInspirationArtifact } from '../core/inspiration/inspirationService'
 import type { InspirationImport } from '../shared/inspiration'
+import { CloudAccountService } from '../core/cloud/cloudAccountService'
+import { cloudConfigFromEnv } from '../core/cloud/oidcClient'
+import { MemoryCloudCredentialStore } from '../core/cloud/cloudCredential'
 
 const MAX_JSON_BODY_BYTES = 16 * 1024 * 1024
 const DEFAULT_SESSION_TTL = 8 * 60 * 60 * 1000
@@ -82,6 +91,7 @@ interface AuthContext {
   token: string
   workspaceId?: string
 }
+type ServerCloud = CloudAccountService
 
 interface Runtime {
   store: FileStore
@@ -275,16 +285,59 @@ function parseBearer(req: IncomingMessage): string | null {
 }
 
 function cookieHeader(token: string, secure: boolean, ttlMs: number): string {
-  return `storyfabric_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ttlMs / 1000)}${secure ? '; Secure' : ''}`
+  // OAuth returns to /api/cloud/callback through a top-level cross-site GET.
+  // Lax sends this session cookie for that navigation while still blocking
+  // it on cross-site subrequests and writes.
+  return `storyfabric_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(ttlMs / 1000)}${secure ? '; Secure' : ''}`
 }
 
 function clearCookie(secure: boolean): string {
-  return `storyfabric_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`
+  return `storyfabric_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`
+}
+
+function cloudTransactionCookie(value: string, secure: boolean): string {
+  return `storyfabric_cloud_oauth=${encodeURIComponent(value)}; Path=/api/cloud; HttpOnly; SameSite=Lax; Max-Age=600${secure ? '; Secure' : ''}`
+}
+function clearCloudTransactionCookie(secure: boolean): string {
+  return `storyfabric_cloud_oauth=; Path=/api/cloud; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`
+}
+
+/**
+ * Rebuild the OAuth callback URL as seen by the public deployment.
+ *
+ * The Node server usually sits behind an HTTP reverse proxy, while the OIDC
+ * redirect URI is registered with the public HTTPS origin. Using a hard-coded
+ * HTTP base here makes openid-client reject an otherwise valid callback. The
+ * configured redirect URI is the authoritative public origin; forwarded
+ * headers are only a fallback for deployments that construct the callback
+ * configuration elsewhere.
+ */
+export function cloudCallbackUrl(req: IncomingMessage, redirectUri?: string): URL {
+  const raw = req.url ?? '/'
+  if (/^https?:\/\//i.test(raw)) return new URL(raw)
+  if (redirectUri) return new URL(raw, redirectUri)
+
+  const forwarded = req.headers['x-forwarded-proto']
+  const protocol = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0])?.trim().toLowerCase()
+  const safeProtocol = protocol === 'https' ? 'https' : 'http'
+  return new URL(raw, `${safeProtocol}://${req.headers.host ?? 'localhost'}`)
+}
+
+function cloudCallbackPage(success: boolean): string {
+  const status = success ? 'complete' : 'error'
+  const title = success ? '登录完成' : '登录未完成'
+  const description = success
+    ? '账户已连接，正在返回 StoryFabric…'
+    : '授权没有完成，请返回 StoryFabric 重试。'
+  // The callback is normally opened as a popup by the web client. Keep a
+  // same-origin message for future clients, then close it. If a popup was
+  // blocked and the OAuth page replaced the app tab, restore the hash route.
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body><p>${description}</p><script>(({status})=>{const message={type:'storyfabric-cloud-login',status};if(window.opener&&!window.opener.closed){window.opener.postMessage(message,window.location.origin);window.close();setTimeout(()=>{if(!window.closed)window.location.replace('/#user')},300)}else{window.location.replace('/#user')}})({status:${JSON.stringify(status)}})</script></body></html>`
 }
 
 function mimeType(path: string): string {
   return {
-    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2'
   }[extname(path).toLowerCase()] ?? 'application/octet-stream'
 }
@@ -329,6 +382,13 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
   const serverGetAdapter = (protocol: Parameters<typeof getAdapter>[0], baseUrl: string) => getAdapter(protocol, baseUrl, { allowPrivateUrls: allowPrivateProviderUrls })
   const events = new EventHub()
   const runtimes = new Map<string, Runtime>()
+  const cloudSessions = new Map<string, ServerCloud>()
+  const cloudConfig = cloudConfigFromEnv(process.env, true)
+  const cloudFor = (token: string): ServerCloud => {
+    let service = cloudSessions.get(token)
+    if (!service) { service = new CloudAccountService(cloudConfig, new MemoryCloudCredentialStore()); cloudSessions.set(token, service) }
+    return service
+  }
   const globalSkillLibrary = new GlobalSkillLibrary(new NodeFileStore(dataRoot))
   const MAX_SSE_CLIENTS = 128
   let activeSseClients = 0
@@ -375,11 +435,16 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     if (!runtime) {
       const store = await registry.getStore(id)
       const sessions = new CoreSessionStore(store)
+      const cloud = cloudFor(context.token)
       const agent = new CoreAgentService({
         store,
         workspaceId: id,
         sessions,
-        settings: () => settings.agentSettings(),
+        settings: async () => {
+          const current = await settings.agentSettings()
+          const managed = await cloud.agentProvider(await settings.managedProviderPreferences())
+          return managed ? { ...current, providers: [...current.providers, managed] } : current
+        },
         consumeLegacyCustomPrompt: (migrate) => settings.consumeLegacyCustomPrompt(migrate),
         getAdapter: serverGetAdapter,
         emit: (sessionId, event, runId) => events.emit({ workspaceId: id, sessionId, ...(runId ? { runId } : {}), event }),
@@ -414,7 +479,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       return summary.path
     }
     if (method === 'openWorkspace') {
-      const summary = await registry.summary(String(arg<string>()))
+      const summary = await registry.summary(String(arg<string>()), { upgradeLegacy: arg<{ upgradeLegacy?: boolean }>(1)?.upgradeLegacy === true })
       await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path))
       authSessions.setWorkspace(context.token, summary.path)
       return summary
@@ -460,12 +525,42 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     // Settings are global to the server and the web shell loads them before a
     // workspace is selected. Keep these RPCs outside the workspace runtime
     // gate; otherwise a fresh web session remains stuck on the settings spinner.
-    if (method === 'getSettings') return settings.load()
+    const cloud = cloudFor(context.token)
+    if (method === 'getSettings') {
+      const current = await settings.load()
+      const managed = await cloud.publicProvider(await settings.managedProviderPreferences())
+      return managed ? { ...current, providers: [...current.providers, managed] } : current
+    }
+    if (method === 'cloudState') return cloud.getState()
+    if (method === 'cloudCancel') return cloud.cancelLogin()
+    if (method === 'cloudLogout') { const result = await cloud.logout(); cloudSessions.delete(context.token); return result }
+    if (method === 'cloudOnboard') return cloud.retryOnboarding()
+    if (method === 'cloudAccount') return cloud.getAccount()
+    if (method === 'cloudUsage') return cloud.getUsage(arg<number>() ?? 1)
+    if (method === 'cloudChannels') return cloud.getChannels()
+    if (method === 'cloudGroups') return cloud.getGroups()
+    if (method === 'cloudSupplierLobby') return cloud.getSupplierLobby()
+    if (method === 'cloudRedeem') return cloud.redeem(arg())
+    if (method === 'cloudRedeemHistory') return cloud.getRedeemHistory()
+    if (method === 'cloudGroup') return cloud.selectGroup(arg())
+    if (method === 'cloudRotate') return cloud.rotateConnection(arg())
+    if (method === 'checkAppUpdate') return checkForUpdates({ currentVersion: APP_VERSION, platform: 'linux', preferences: (await settings.load()).updatePreferences })
     if (method === 'updateSettings') return settings.update(arg<SettingsPatch>())
-    if (method === 'saveProvider') return settings.saveProvider(arg<ProviderInput>())
-    if (method === 'deleteProvider') return settings.deleteProvider(arg<string>())
+    if (method === 'saveProvider') {
+      const input = arg<ProviderInput>()
+      return input.id === 'trailblazer-managed'
+        ? settings.saveTrailblazerProvider(await cloud.scopeModelPreferences({ models: input.models, modelSettings: input.modelSettings ?? {} }))
+        : settings.saveProvider(input)
+    }
+    if (method === 'deleteProvider') return arg<string>() === 'trailblazer-managed' ? settings.load() : settings.deleteProvider(arg<string>())
     if (method === 'fetchModels') {
       const input = arg<FetchModelsInput>()
+      if (input.providerId === 'trailblazer-managed') {
+        const models = await cloud.fetchModels(input.protocol)
+        const current = await settings.managedProviderPreferences()
+        await settings.saveTrailblazerProvider(await cloud.scopeModelPreferences({ models, modelSettings: current.modelSettings }))
+        return models
+      }
       const provider = await settings.providerInput(input)
       return fetchProviderModels(provider.protocol, provider.baseUrl, provider.apiKey, { allowPrivateUrls: allowPrivateProviderUrls })
     }
@@ -474,25 +569,34 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     const needsImmediateAgentControl = method === 'agentConfirm' || method === 'agentAbort' || method === 'agentAnswerQuestion' || method === 'agentResolveSkillCandidate'
     if (!serialized && !needsImmediateAgentControl) return serializeWorkspace(runtime, () => dispatch(context, method, args, true))
     const { store } = runtime
-    const saveChapterMeta = async (input: Partial<ChapterDoc>): Promise<unknown> => {
-      const saved = await saveChapter(store, input)
+    const saveChapterMeta = async (input: Partial<ChapterDoc>, options?: Parameters<StoryFabricApi['saveChapter']>[1]): Promise<unknown> => {
+      const saved = await saveDocument(store, 'chapter', input, options)
       const { content: _content, ...meta } = saved
       return meta
     }
 
     switch (method as keyof StoryFabricApi) {
       case 'getChapterBody': return getChapterBody(store, arg<string>())
+      case 'getDocumentSnapshot': return getDocumentSnapshot(store, arg<DocumentKind>(), arg<string>(1))
+      case 'saveHistoryVersion': return saveHistoryVersion(store, arg<DocumentKind>(), arg<string>(1), arg<HistorySaveOptions>(2))
+      case 'listHistoryVersions': return listHistoryVersions(store, arg<DocumentKind>(), arg<string | undefined>(1))
+      case 'getHistoryVersion': return getHistoryVersion(store, arg<DocumentKind>(), arg<string>(1), arg<string>(2))
+      case 'updateHistoryVersion': return updateHistoryVersion(store, arg<DocumentKind>(), arg<string>(1), arg<string>(2), arg<HistoryVersionPatch>(3))
+      case 'deleteHistoryVersion': return deleteHistoryVersion(store, arg<DocumentKind>(), arg<string>(1), arg<string>(2), arg<boolean>(3))
+      case 'restoreHistoryVersion': return restoreHistoryVersion(store, arg<DocumentKind>(), arg<string>(1), arg<string>(2), arg<string>(3), arg<string | undefined>(4))
       case 'searchProject': return searchProject(store, arg<string>())
       case 'getGraphLayout': return readGraphLayout(store)
+      case 'getWritingTools': return readWritingTools(store)
+      case 'saveWritingTools': return writeWritingTools(store, arg<WritingToolsPreferences>())
       case 'saveGraphLayout': return writeGraphLayout(store, arg<Record<string, { x: number; y: number }> >())
       case 'saveCharacter': return saveCharacter(store, arg())
       case 'deleteCharacter': return deleteCharacter(store, arg<string>())
       case 'saveRelationships': return saveRelationships(store, arg<Relationship[]>())
-      case 'saveOutlineDoc': return saveOutlineDoc(store, arg<Partial<OutlineDoc>>())
+      case 'saveOutlineDoc': return saveDocument(store, 'outline', arg<Partial<OutlineDoc>>(), arg(1))
       case 'deleteOutlineDoc': return deleteOutlineDoc(store, arg<string>())
       case 'saveEvent': return saveEvent(store, arg<Partial<StoryEvent>>())
       case 'deleteEvent': return deleteEvent(store, arg<string>())
-      case 'saveChapter': return saveChapterMeta(arg<Partial<ChapterDoc>>())
+      case 'saveChapter': return saveChapterMeta(arg<Partial<ChapterDoc>>(), arg(1))
       case 'deleteChapter': return deleteChapter(store, arg<string>())
       case 'listVolumes': return listVolumes(store)
       case 'saveVolume': return saveVolume(store, arg<Partial<VolumeMeta> & { id?: string }>())
@@ -551,7 +655,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const model = arg<string>(2)
         return runtime.agent.compressSessionContext(sessionId, providerId, model)
       }
-      case 'agentConfirm': runtime.agent.confirmChange(arg<string>(1), Boolean(arg<boolean>(2)), arg<string>()); return undefined
+      case 'agentConfirm': runtime.agent.confirmChange(arg<string>(1), Boolean(arg<boolean>(2)), arg<string>(), arg(3)); return undefined
       case 'agentAbort': runtime.agent.abort(arg<string>()); return undefined
       case 'agentAnswerQuestion': await runtime.agent.answerQuestion(arg<import('../shared/agentQuestions').AgentQuestionAnswer>()); return undefined
       case 'agentResolveSkillCandidate': await runtime.agent.resolveSkillCandidate(arg<string>(), arg<import('../shared/agentQuestions').SkillCandidateAction>(1)); return undefined
@@ -680,6 +784,21 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
 
     const context = requireAuth(req, res)
     if (!context) return
+    if (pathname === '/api/cloud/login' && req.method === 'POST') {
+      try { const service = cloudFor(context.token); const url = await service.beginWebLogin(); const cookie = service.webTransactionCookie; if (!cookie) throw new Error('登录事务创建失败'); sendJson(res, 200, { url }, { 'set-cookie': cloudTransactionCookie(cookie, secureCookie) }) } catch (error) { sendError(res, 400, error) }
+      return
+    }
+    if (pathname === '/api/cloud/callback' && req.method === 'GET') {
+      try {
+        await cloudFor(context.token).completeWebLogin(cloudCallbackUrl(req, cloudConfig?.redirectUri), parseCookie(req, 'storyfabric_cloud_oauth') ?? undefined)
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': clearCloudTransactionCookie(secureCookie) })
+        res.end(cloudCallbackPage(true))
+      } catch {
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': clearCloudTransactionCookie(secureCookie) })
+        res.end(cloudCallbackPage(false))
+      }
+      return
+    }
     try { await registryReady } catch (error) { sendError(res, 500, error); return }
 
     if (pathname === '/api/runtime-events' && req.method === 'GET') {
@@ -735,8 +854,8 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
     if (pathname === '/api/workspaces/open-path' && req.method === 'POST') {
       const signal = requestAbortSignal(req, res)
       try {
-        const body = JSON.parse(await readBody(req, bodyIdleTimeoutMs)) as { path?: string }
-        const summary = await registry.openPath(body.path ?? '', signal)
+        const body = JSON.parse(await readBody(req, bodyIdleTimeoutMs)) as { path?: string; upgradeLegacy?: boolean }
+        const summary = await registry.openPath(body.path ?? '', signal, { upgradeLegacy: body.upgradeLegacy === true })
         await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path, signal))
         throwIfWorkspaceRequestAborted(signal)
         authSessions.setWorkspace(context.token, summary.path)
@@ -751,7 +870,7 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
         const bytes = await readBinaryBody(req, WORKSPACE_ARCHIVE_MAX_BYTES, bodyIdleTimeoutMs)
         const requestedName = req.headers['x-storyfabric-workspace-name']
         const name = typeof requestedName === 'string' ? decodeURIComponent(requestedName) : undefined
-        imported = await registry.importArchive(bytes, name, signal)
+        imported = await registry.importArchive(bytes, name, signal, { upgradeLegacy: req.headers['x-storyfabric-upgrade-legacy'] === 'true' })
         await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(imported!.path, signal))
         await new Promise<void>((resolve) => setImmediate(resolve))
         throwIfRequestAborted(req, res, signal)
@@ -769,7 +888,16 @@ export function createStoryFabricServer(options: StoryFabricServerOptions): Serv
       if (id === null) { sendError(res, 400, '非法工作区地址'); return }
       if (match[2] === 'open' && req.method === 'POST') {
         const signal = requestAbortSignal(req, res)
-        try { const summary = await registry.summary(id); await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path, signal)); throwIfWorkspaceRequestAborted(signal); authSessions.setWorkspace(context.token, summary.path); sendJson(res, 200, summary) } catch (error) { sendError(res, 404, error) }
+        try {
+          const rawBody = await readBody(req, bodyIdleTimeoutMs)
+          const body = rawBody.trim() ? JSON.parse(rawBody) as { upgradeLegacy?: boolean } : {}
+          throwIfWorkspaceRequestAborted(signal)
+          const summary = await registry.summary(id, { upgradeLegacy: body.upgradeLegacy === true })
+          await recordRecentWorkspaceBestEffort(() => settings.recordRecentWorkspace(summary.path, signal))
+          throwIfWorkspaceRequestAborted(signal)
+          authSessions.setWorkspace(context.token, summary.path)
+          sendJson(res, 200, summary)
+        } catch (error) { sendError(res, 404, error) }
         return
       }
       if (match[2] === 'archive' && req.method === 'GET') {

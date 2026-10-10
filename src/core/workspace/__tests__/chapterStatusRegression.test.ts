@@ -38,7 +38,7 @@ describe('chapter status and word count regression', () => {
     const outcome = await executeTool(store, 'save_chapter', JSON.stringify({ chapter: { title: '正文箱章节', box: 'main', volumeId: volume.id, content: '正文内容' } }))
     expect(outcome.kind).toBe('pending')
     if (outcome.kind !== 'pending') return
-    await outcome.apply()
+    await outcome.apply({ saveHistory: false })
     expect((await listChapters(store)).find((chapter) => chapter.title === '正文箱章节')?.status).toBe('body')
   })
 
@@ -54,7 +54,7 @@ describe('chapter status and word count regression', () => {
     expect((await loadChapterDocuments(store)).find((item) => item.doc.id === chapter.id)?.fileName).toContain('main/')
   })
 
-  it('repairs old mixed chapter boxes without changing their status or body', async () => {
+  it('preserves old mixed boxes and bodies while requesting an explicit format-5 rewrite', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '旧项目')
     await store.writeText('chapters/main/vol_default/001-draft.md', '---\nid: cha_draft\ntitle: Draft\nstatus: draft\nvolumeId: vol_default\n---\n\n草稿正文')
@@ -62,44 +62,44 @@ describe('chapter status and word count regression', () => {
     await store.writeText('chapters/draft/003-final.md', '---\nid: cha_final\ntitle: Final\nstatus: final\nvolumeId: vol_default\n---\n\n定稿正文')
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 3, name: '旧项目' }))
 
-    await migrateWorkspace(store)
+    await expect(migrateWorkspace(store)).rejects.toThrow('格式 5')
     const chapters = await loadChapterDocuments(store)
     expect(chapters.map(({ doc }) => [doc.id, doc.status, doc.box])).toEqual([
-      ['cha_draft', 'draft', 'draft'], ['cha_revised', 'revised', 'draft'], ['cha_final', 'final', 'main']
+      ['cha_final', 'final', 'draft'], ['cha_draft', 'draft', 'main'], ['cha_revised', 'revised', 'main']
     ])
-    expect(chapters.map(({ doc }) => doc.content)).toEqual(['　　草稿正文', '　　修订正文', '　　定稿正文'])
-    expect((await store.readText('storyfabric.json'))).toContain('"version": 4')
-    await migrateWorkspace(store)
-    expect((await loadChapterDocuments(store)).map(({ doc }) => doc.id)).toEqual(['cha_draft', 'cha_revised', 'cha_final'])
+    expect(chapters.map(({ doc }) => doc.content)).toEqual(['　　定稿正文', '　　草稿正文', '　　修订正文'])
+    expect((await store.readText('storyfabric.json'))).toContain('"version":3')
+    await expect(migrateWorkspace(store)).rejects.toThrow('格式 5')
+    expect((await loadChapterDocuments(store)).map(({ doc }) => doc.id)).toEqual(['cha_final', 'cha_draft', 'cha_revised'])
   })
 
-  it('keeps both chapters when migration meets a destination filename collision', async () => {
+  it('keeps both original paths when a legacy workspace contains destination collisions', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '同名迁移')
     await store.writeText('chapters/draft/001-same.md', '---\nid: cha_original\ntitle: Same\nstatus: draft\nvolumeId: vol_default\n---\n\n已有草稿')
     await store.writeText('chapters/main/vol_default/001-same.md', '---\nid: cha_moved\ntitle: Same\nstatus: revised\nvolumeId: vol_default\n---\n\n需要迁移')
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 3, name: '同名迁移' }))
 
-    await migrateWorkspace(store)
+    await expect(migrateWorkspace(store)).rejects.toThrow('格式 5')
     const chapters = await loadChapterDocuments(store)
     expect(chapters).toHaveLength(2)
     expect(chapters.map(({ doc }) => [doc.id, doc.box, doc.status])).toEqual([
-      ['cha_original', 'draft', 'draft'], ['cha_moved', 'draft', 'revised']
+      ['cha_original', 'draft', 'draft'], ['cha_moved', 'main', 'revised']
     ])
-    expect(chapters.map(({ fileName }) => fileName)).toEqual(['draft/001-same.md', 'draft/001-same_cha_moved.md'])
-    expect(await store.exists('chapters/main/vol_default/001-same.md')).toBe(false)
+    expect(chapters.map(({ fileName }) => fileName)).toEqual(['draft/001-same.md', 'main/vol_default/001-same.md'])
+    expect(await store.exists('chapters/main/vol_default/001-same.md')).toBe(true)
   })
 
-  it('uses an existing volume when an old draft lacks a valid volume id', async () => {
+  it('preserves a legacy draft with a missing volume until explicit rewriting', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '旧卷号')
     await store.writeText('chapters/volumes.json', JSON.stringify([{ id: 'vol_second', title: '第二卷', order: 1 }]))
     await store.writeText('chapters/draft/001-final.md', '---\nid: cha_final\ntitle: Final\nstatus: final\nvolumeId: missing\n---\n\n定稿正文')
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 3, name: '旧卷号' }))
 
-    await migrateWorkspace(store)
+    await expect(migrateWorkspace(store)).rejects.toThrow('格式 5')
     const [chapter] = await loadChapterDocuments(store)
-    expect(chapter.doc.volumeId).toBe('vol_second')
-    expect(chapter.fileName).toBe('main/vol_second/001-final.md')
+    expect(chapter.doc.volumeId).toBe('missing')
+    expect(chapter.fileName).toBe('draft/001-final.md')
   })
 })

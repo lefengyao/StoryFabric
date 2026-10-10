@@ -1,4 +1,5 @@
 import { Check, CircleAlert, Clock3, Loader2, Sparkles, Wrench } from 'lucide-react'
+import { memo, useMemo, useState } from 'react'
 import { cn } from '../../lib/utils'
 import { toolArgsPreview, type LiveToolRun } from '../../stores/chatStore'
 import type { LiveTurnItem } from '../../stores/chatStore'
@@ -92,7 +93,7 @@ export function ThinkingRow({ label = '模型正在思考' }: { label?: string }
   )
 }
 
-export function ToolRunRow({
+function ToolRunRowInner({
   name,
   argsJson,
   status,
@@ -113,7 +114,8 @@ export function ToolRunRow({
     ok: { label: '已完成', icon: <Check size={11} />, tone: 'text-ok bg-elevated' },
     error: { label: '失败', icon: <CircleAlert size={11} />, tone: 'text-danger bg-danger-soft' }
   }[status]
-  const summary = preview || summarizeResult(resultText)
+  const summary = useMemo(() => preview ? preview.slice(0, 180) : summarizeResult(resultText), [preview, resultText])
+  const argsPreview = useMemo(() => argsJson ? toolArgsPreview(argsJson, 96) : '', [argsJson])
   const detail = resultText?.trim() ? resultText : ''
 
   return (
@@ -129,29 +131,38 @@ export function ToolRunRow({
           {config.label}
         </span>
       </div>
-      {!compact && argsJson && <p className="mt-1 truncate pl-[68px] font-mono text-[10px] text-faint">{toolArgsPreview(argsJson, 96)}</p>}
+      {!compact && argsJson && <p className="mt-1 truncate pl-[68px] font-mono text-[10px] text-faint">{argsPreview}</p>}
+      {argsJson && <ToolDetail label={`参数详情${argsJson.length > 12000 || argsJson.endsWith('…工具参数过长，已省略…') ? '（已截断）' : ''}`} text={argsJson} limit={12000} />}
       {summary && <p className="mt-1 line-clamp-2 pl-[68px] text-[10px] leading-5 text-muted">{summary}</p>}
-      {detail && detail.length > 160 && (
-        <details className="ml-[68px] mt-1 text-[10px] text-faint">
-          <summary className="cursor-pointer select-none hover:text-fg">查看完整结果</summary>
-          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-app p-2 leading-4">{detail.slice(0, 6000)}</pre>
-        </details>
+      {detail && (
+        <ToolDetail label={detail.length > 6000 ? '查看结果（已截断，前6000字符）' : '查看结果'} text={detail} limit={6000} />
       )}
     </div>
   )
+}
+
+export const ToolRunRow = memo(ToolRunRowInner)
+
+function ToolDetail({ label, text, limit }: { label: string; text: string; limit: number }): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  return <details className="ml-[68px] mt-1 text-[10px] text-faint" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="cursor-pointer select-none hover:text-fg">{label}</summary>
+    {open && <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-app p-2 leading-4">{text.slice(0, limit)}</pre>}
+  </details>
 }
 
 function summarizeResult(text: string | undefined): string {
   const value = text?.trim()
   if (!value) return ''
   try {
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    if (typeof parsed.message === 'string') return parsed.message
-    if (typeof parsed.error === 'string') return parsed.error
+    const parsed = value.length <= 12000 ? JSON.parse(value) as Record<string, unknown> : null
+    if (!parsed) return value.slice(0, 180).split('\n').find(Boolean) ?? ''
+    if (typeof parsed.message === 'string') return parsed.message.slice(0, 180)
+    if (typeof parsed.error === 'string') return parsed.error.slice(0, 180)
     if (Array.isArray(parsed.items)) return `返回 ${parsed.items.length} 项结果`
     if (typeof parsed.count === 'number') return `返回 ${parsed.count} 项结果`
   } catch {
     // Plain text tool results are already suitable for the compact summary.
   }
-  return value.split('\n').find(Boolean)?.slice(0, 180) ?? ''
+  return value.slice(0, 180).split('\n').find(Boolean) ?? ''
 }

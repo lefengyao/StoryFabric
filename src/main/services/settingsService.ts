@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'path'
 import type {
   AppSettings,
+  ManagedProviderPreferences,
   ProviderInput,
   ProviderPublic,
   ProviderStored,
@@ -20,6 +21,7 @@ import { forgetRecentWorkspace, markRecentWorkspace } from '../../shared/recentW
 import { throwIfWorkspaceRequestAborted } from '../../shared/api'
 import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../../shared/creative'
 import { DEFAULT_AGENT_GENERATION_PREFERENCES, normalizeAgentGenerationPreferences } from '../../shared/agentGeneration'
+import { normalizeUpdatePreferences } from '../../shared/updates'
 
 /* electron 仅在主进程运行时可用，vitest 下返回 null 走降级 */
 type SafeStorageLike = {
@@ -41,7 +43,9 @@ function getSafeStorage(): SafeStorageLike | null {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  updatePreferences: normalizeUpdatePreferences(undefined),
   providers: [],
+  trailblazerProvider: { models: [], modelSettings: {} },
   orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
   agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
   theme: 'system',
@@ -118,12 +122,26 @@ function normalizeSettings(raw: unknown): AppSettings {
     ...DEFAULT_SETTINGS,
     ...parsed,
     providers,
+    trailblazerProvider: normalizeManagedProviderPreferences(parsed.trailblazerProvider),
     recentWorkspaces,
     recentWorkspaceOpenedAt,
+    updatePreferences: normalizeUpdatePreferences(parsed.updatePreferences),
     orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
     agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration),
     chatFontSize: normalizeChatFontSize(parsed.chatFontSize)
   }
+}
+
+function normalizeManagedProviderPreferences(value: unknown): ManagedProviderPreferences {
+  if (!isRecord(value)) return { models: [], modelSettings: {} }
+  const models = Array.isArray(value.models)
+    ? [...new Set(value.models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0))]
+    : []
+  const modelSettings = isRecord(value.modelSettings)
+    ? Object.fromEntries(Object.entries(value.modelSettings).filter((entry) => isRecord(entry[1]))) as ManagedProviderPreferences['modelSettings']
+    : {}
+  const modelScope = typeof value.modelScope === 'string' && /^[a-f0-9]{64}$/.test(value.modelScope) ? value.modelScope : undefined
+  return { models, modelSettings: pruneModelSettings(models, modelSettings), ...(modelScope ? { modelScope } : {}) }
 }
 
 export function encryptApiKey(plain: string): string {
@@ -271,6 +289,16 @@ export class SettingsService {
     })
   }
 
+  saveTrailblazerProvider(input: Pick<ProviderInput, 'models' | 'modelSettings'> & { modelScope?: string }): Promise<AppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRaw()
+      const models = [...new Set(input.models.filter((model) => typeof model === 'string' && model.trim().length > 0))]
+      const next = { ...settings, trailblazerProvider: { models, modelSettings: pruneModelSettings(models, input.modelSettings ?? settings.trailblazerProvider.modelSettings), ...((input.modelScope ?? settings.trailblazerProvider.modelScope) ? { modelScope: input.modelScope ?? settings.trailblazerProvider.modelScope } : {}) } }
+      await this.saveRaw(next)
+      return next
+    })
+  }
+
   deleteProvider(id: string): Promise<AppSettings> {
     return this.serialized(async () => {
       const settings = await this.loadRaw()
@@ -284,8 +312,9 @@ export class SettingsService {
   }
 
   toPublic(settings: AppSettings): PublicAppSettings {
+    const { trailblazerProvider: _trailblazerProvider, ...publicSettings } = settings
     return {
-      ...settings,
+      ...publicSettings,
       agentGeneration: normalizeAgentGenerationPreferences(settings.agentGeneration),
       providers: settings.providers.map(
         (p): ProviderPublic => {

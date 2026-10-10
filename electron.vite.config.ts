@@ -12,6 +12,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
     renderer: {
+      worker: { format: 'es' },
       plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

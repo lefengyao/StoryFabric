@@ -51,7 +51,7 @@ export function OrchestrationSettingsView({
   update: (patch: { orchestrationDefaults: PublicAppSettings['orchestrationDefaults'] }) => Promise<void>
 }): React.ReactElement {
   const profile = normalizeOrchestrationPreferences(settings.orchestrationDefaults)
-  const providers = settings.providers.filter((provider) => provider.models.length > 0)
+  const providers = settings.providers.filter((provider) => provider.models.length > 0 && provider.active !== false)
   const save = (patch: Partial<PublicAppSettings['orchestrationDefaults']>): void => {
     void update({
       orchestrationDefaults: {

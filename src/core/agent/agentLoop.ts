@@ -1,4 +1,6 @@
+import { cloneValue, lastItem } from '../../shared/runtimeCompatibility'
 import type { AgentEvent, AppliedChange, ApprovalPolicy, ChatMessage, ChatSession, GoalRun, GoalTask, ModelSettings, OrchestrationRunRecord, PendingChange, RunAgentRequest, ToolCallData, ToolFailure, UsageRecord } from '../../shared/types'
+import type { AgentChangeDecision } from '../../shared/api'
 import { agentTemperatureToRawModelTemperature, normalizeAgentGenerationPreferences, type AgentGenerationPreferences } from '../../shared/agentGeneration'
 import { parseSkillCandidate, validateAgentQuestionAnswer, type AgentQuestionAnswer, type SkillCandidate, type SkillCandidateAction } from '../../shared/agentQuestions'
 import { MAX_TOOL_ROUNDS } from '../../shared/types'
@@ -62,7 +64,7 @@ import {
 } from './contextWindow'
 
 export interface AgentSettings {
-  providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>
+  providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings>; authentication?: 'custom-key' | 'trailblazer-session'; adapter?: LlmAdapter; fetcher?: typeof fetch }>
   customPrompt?: string
   agentGeneration?: AgentGenerationPreferences
 }
@@ -96,7 +98,8 @@ export interface AgentRunOptions {
   consumeLegacyCustomPrompt?: (migrate: (prompt: string) => Promise<void>) => Promise<string | undefined>
 }
 
-interface Waiter { sessionId: string; resolve: (approved: boolean) => void }
+interface ApprovalResolution extends AgentChangeDecision { approved: boolean }
+interface Waiter { sessionId: string; historyEligible?: boolean; historyRequired?: boolean; resolve: (approved: boolean, decision?: AgentChangeDecision) => void }
 
 function appliedChangeOf(change: PendingChange): AppliedChange {
   return { entityKind: change.entityKind, entityId: change.entityId }
@@ -332,7 +335,7 @@ export class CoreAgentService {
         model: search.model,
         provider: search.provider,
         signal: search.signal,
-        fetcher: this.options.webFetch
+        fetcher: search.provider.fetcher ?? this.options.webFetch
       })
       return { kind: 'result', ok: true, text: JSON.stringify(result), preview: `联网搜索：${result.results.length} 条来源` }
     }
@@ -481,8 +484,8 @@ export class CoreAgentService {
     if (!session) throw new Error('会话不存在')
     const settings = await this.options.settings()
     const provider = settings.providers.find((item) => item.id === providerId)
-    if (!provider || !provider.apiKey) throw new Error('找不到可用供应商或 API Key')
-    const adapter = this.options.getAdapter(provider.protocol, provider.baseUrl)
+    if (!provider || (!provider.apiKey && provider.authentication !== 'trailblazer-session')) throw new Error('找不到可用供应商或账户连接')
+    const adapter = provider.adapter ?? this.options.getAdapter(provider.protocol, provider.baseUrl)
     const resolved = resolveModelSettings(provider, model)
     const controller = new AbortController()
     const runId = `context_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -515,12 +518,14 @@ export class CoreAgentService {
     }
   }
 
-  confirmChange(id: string, approved: boolean, sessionId?: string): void {
+  confirmChange(id: string, approved: boolean, sessionId?: string, decision?: AgentChangeDecision): void {
     const waiter = this.waiters.get(id)
     if (waiter && sessionId && waiter.sessionId !== sessionId) throw new Error('审批变更不属于当前会话')
     if (waiter) {
+      if (approved && waiter.historyEligible && typeof decision?.saveHistory !== 'boolean') throw new Error('请选择是否保存为长期历史版本')
+      if (approved && waiter.historyRequired && decision?.saveHistory !== true) throw new Error('恢复必须保留恢复前保护版本与恢复结果')
       this.waiters.delete(id)
-      waiter.resolve(approved)
+      waiter.resolve(approved, decision)
     }
   }
 
@@ -548,7 +553,7 @@ export class CoreAgentService {
       throw new Error('问题已经由另一个回答请求处理')
     }
 
-    this.answeredQuestions.set(answer.questionId, structuredClone(answer))
+    this.answeredQuestions.set(answer.questionId, cloneValue(answer))
     this.pendingQuestions.delete(answer.questionId)
     this.questionWaiters.delete(answer.questionId)
     const previousSessionWaitingQuestion = pending.session.waitingQuestion
@@ -644,21 +649,23 @@ export class CoreAgentService {
   /** Returns the acceptance id immediately after run() has been invoked. */
   getActiveRunId(sessionId: string): string | undefined { return this.activeRunIds.get(sessionId) ?? this.pendingRunIds.get(sessionId) }
 
-  private waitConfirm(change: PendingChange, sessionId: string, signal: AbortSignal): Promise<boolean> {
+  private waitConfirm(change: PendingChange, sessionId: string, signal: AbortSignal): Promise<ApprovalResolution> {
     return new Promise((resolve) => {
       const cleanup = () => signal.removeEventListener('abort', onAbort)
       const onAbort = () => {
         this.waiters.delete(change.id)
         cleanup()
-        resolve(false)
+        resolve({ approved: false })
       }
-      if (signal.aborted) return resolve(false)
+      if (signal.aborted) return resolve({ approved: false })
       signal.addEventListener('abort', onAbort, { once: true })
       this.waiters.set(change.id, {
         sessionId,
-        resolve: (approved) => {
+        historyEligible: change.historyEligible,
+        historyRequired: change.historyRequired,
+        resolve: (approved, decision) => {
           cleanup()
-          resolve(approved)
+          resolve({ approved, ...decision })
         }
       })
     })
@@ -675,7 +682,7 @@ export class CoreAgentService {
     sessionId: string,
     signal: AbortSignal,
     notify: () => void
-  ): Promise<boolean> {
+  ): Promise<ApprovalResolution> {
     const approval = this.waitConfirm(change, sessionId, signal)
     notify()
     try {
@@ -700,10 +707,10 @@ export class CoreAgentService {
       session.approvalPolicy = disk.approvalPolicy
       session.creativePreferences = disk.creativePreferences
     }
-    session.pendingChange = structuredClone(change)
+    session.pendingChange = cloneValue(change)
     if (change.runId) {
       const record = session.orchestrationRuns?.find((item) => item.runId === change.runId)
-      if (record) record.pendingChange = structuredClone(change)
+      if (record) record.pendingChange = cloneValue(change)
     }
     await this.options.sessions.save(session)
   }
@@ -843,7 +850,7 @@ export class CoreAgentService {
 
   private waitForQuestion(questionId: string, signal: AbortSignal): Promise<AgentQuestionAnswer> {
     const answered = this.answeredQuestions.get(questionId)
-    if (answered) return Promise.resolve(structuredClone(answered))
+    if (answered) return Promise.resolve(cloneValue(answered))
     const waiter = this.questionWaiters.get(questionId)
     if (!waiter) return Promise.reject(new Error('问题等待器不存在，无法安全继续运行'))
     if (signal.aborted) {
@@ -866,7 +873,7 @@ export class CoreAgentService {
 
   private waitForSkillCandidate(candidateId: string, signal: AbortSignal): Promise<SkillCandidateResolution> {
     const answered = this.answeredSkillCandidates.get(candidateId)
-    if (answered) return Promise.resolve(structuredClone(answered))
+    if (answered) return Promise.resolve(cloneValue(answered))
     const waiter = this.pendingSkillCandidates.get(candidateId)
     if (!waiter) return Promise.reject(new Error('技能候选等待器不存在，无法安全继续运行'))
     if (signal.aborted) {
@@ -978,25 +985,28 @@ export class CoreAgentService {
       const mutationKind = classifyMutation(outcome.change.toolName)
       const change = approvalChangeOf({ ...outcome.change, sessionId: options.sessionId, runId: options.runId, ...(mutationKind ? { mutationKind } : {}), goalId: options.goal.id, goalTaskId: options.task.id })
       const auditId = await options.approvalAudit.request({ runId: options.runId, goalId: options.goal.id, taskId: options.task.id, toolName: change.toolName, mutationKind: mutationKind ?? undefined, argsJson: toolCall.argsJson, policy: options.approvalPolicy })
-      const needsApproval = requiresApproval(options.approvalPolicy, change.toolName)
+      const needsApproval = requiresApproval(options.approvalPolicy, change.toolName) || change.historyEligible === true
       let approved = true
+      let historyDecision: AgentChangeDecision | undefined
       if (needsApproval) {
         options.goal.status = 'awaiting-approval'
         options.task.status = 'awaiting-approval'
-        this.emit(options.sessionId, { type: 'goal-task', goalId: options.goal.id, task: structuredClone(options.task) }, options.runId)
+        this.emit(options.sessionId, { type: 'goal-task', goalId: options.goal.id, task: cloneValue(options.task) }, options.runId)
         if (options.saveGoal) await options.saveGoal(options.goal)
-        approved = await this.waitForApproval(
+        const approval = await this.waitForApproval(
           options.session,
           change,
           options.sessionId,
           options.signal,
           () => this.emit(options.sessionId, { type: 'pending-change', change }, options.runId)
         )
+        approved = approval.approved
+        historyDecision = approval
         await this.clearPendingChange(options.session, change.id)
         if (!options.goal.status || options.goal.status === 'awaiting-approval') options.goal.status = 'running'
         if (options.task.status === 'awaiting-approval') {
           options.task.status = 'running'
-          this.emit(options.sessionId, { type: 'goal-task', goalId: options.goal.id, task: structuredClone(options.task) }, options.runId)
+          this.emit(options.sessionId, { type: 'goal-task', goalId: options.goal.id, task: cloneValue(options.task) }, options.runId)
         }
         if (options.saveGoal) await options.saveGoal(options.goal)
       }
@@ -1005,7 +1015,7 @@ export class CoreAgentService {
       let status: 'applied' | 'rejected' | 'conflict' | 'failed' = 'rejected'
       if (approved) {
         try {
-          const applied = await outcome.apply()
+          const applied = await outcome.apply(historyDecision)
           ok = applied.ok
           text = applied.text
           status = applied.ok ? 'applied' : text.includes('等待期间修改') ? 'conflict' : 'failed'
@@ -1272,12 +1282,12 @@ export class CoreAgentService {
       const provider = assignedProvider
       const model = assigned?.model ?? options.model
       const apiKey = provider?.apiKey ?? options.apiKey
-      if (!apiKey) throw new Error(`阶段 ${stageId} 配置的供应商没有 API Key`)
+      if (!apiKey && provider?.authentication !== 'trailblazer-session' && !options.providers.some((item) => item.adapter === options.adapter && item.authentication === 'trailblazer-session')) throw new Error(`阶段 ${stageId} 配置的供应商没有可用认证`)
       return {
         provider,
         model,
         apiKey,
-        adapter: provider ? this.options.getAdapter(provider.protocol, provider.baseUrl) : options.adapter,
+        adapter: provider ? provider.adapter ?? this.options.getAdapter(provider.protocol, provider.baseUrl) : options.adapter,
         settings: provider
           ? { ...resolveModelSettings(provider, model), ...(options.modelSettings.temperature === undefined ? {} : { temperature: options.modelSettings.temperature }) }
           : options.modelSettings
@@ -1537,16 +1547,19 @@ export class CoreAgentService {
           const mutationKind = classifyMutation(outcome.change.toolName) ?? undefined
           const change = approvalChangeOf({ ...outcome.change, sessionId: options.sessionId, runId: options.runId, stageId, ...(mutationKind ? { mutationKind } : {}) })
           const auditId = await options.approvalAudit.request({ runId: options.runId, toolName: change.toolName, mutationKind, argsJson: toolCall.argsJson, policy: options.approvalPolicy })
-          const needsApproval = requiresApproval(options.approvalPolicy, change.toolName)
+          const needsApproval = requiresApproval(options.approvalPolicy, change.toolName) || change.historyEligible === true
           let approved = true
+          let historyDecision: AgentChangeDecision | undefined
           if (needsApproval) {
-            approved = await this.waitForApproval(
+            const approval = await this.waitForApproval(
               options.session,
               change,
               options.sessionId,
               options.signal,
               () => this.emit(options.sessionId, { type: 'pending-change', change }, options.runId)
             )
+            approved = approval.approved
+            historyDecision = approval
             await this.clearPendingChange(options.session, change.id)
           }
           let ok = approved
@@ -1554,7 +1567,7 @@ export class CoreAgentService {
           let status: 'applied' | 'rejected' | 'failed' = approved ? 'failed' : 'rejected'
           if (approved) {
             try {
-              const applied = await outcome.apply()
+              const applied = await outcome.apply(historyDecision)
               ok = applied.ok
               text = applied.text
               status = applied.ok ? 'applied' : 'failed'
@@ -1663,7 +1676,7 @@ export class CoreAgentService {
               toolName: toolCall.name,
               text: answerText
             })
-            options.session.messages.push(stageMessages.at(-1)!)
+            options.session.messages.push(lastItem(stageMessages)!)
              loopResult = await runStageLoop()
            }
            const stopped = stoppedToolLoopError(loopResult.stoppedReason)
@@ -1710,7 +1723,7 @@ export class CoreAgentService {
     })
     const finalText = result.artifacts.find((artifact) => artifact.stageId === 'polish')?.text
       ?? result.artifacts.find((artifact) => artifact.stageId === 'write')?.text
-      ?? result.artifacts.at(-1)?.text
+      ?? lastItem(result.artifacts)?.text
     if (finalText?.trim()) {
       options.session.messages.push({ id: `msg_${Date.now().toString(36)}_orchestration`, role: 'assistant', text: finalText })
     } else if (result.status === 'completed') {
@@ -1747,7 +1760,7 @@ export class CoreAgentService {
       ...(lastErrorCode ? { errorCode: lastErrorCode } : {}),
       ...(lastErrorRecoverable ? { recoverable: true, recoveryHint: '可重新读取资料、修正参数或解决版本冲突后重新发送；当前阶段及其后续阶段未被视为完成。' } : {}),
       ...(lastErrorStage ? { currentStage: lastErrorStage } : {}),
-      ...(toolReceipts.at(-1) ? { lastToolReceipt: toolReceipts.at(-1) } : {}),
+      ...(lastItem(toolReceipts) ? { lastToolReceipt: lastItem(toolReceipts) } : {}),
       ...(result.stages.find((stage) => stage.status === 'running' || stage.status === 'waiting_user' || stage.status === 'paused_budget' || stage.status === 'failed')?.stageId
         ? { currentStage: lastErrorStage ?? result.stages.find((stage) => stage.status === 'running' || stage.status === 'waiting_user' || stage.status === 'paused_budget' || stage.status === 'failed')?.stageId }
         : {})
@@ -1827,11 +1840,11 @@ export class CoreAgentService {
       approvalAudit = new ApprovalAuditLog()
       this.emit(sid, { type: 'approval-policy', policy: approvalPolicy }, runId)
       const provider = settings.providers.find((item) => item.id === req.providerId)
-      if (!provider || !provider.apiKey) throw new Error('找不到可用供应商或 API Key')
+      if (!provider || (!provider.apiKey && provider.authentication !== 'trailblazer-session')) throw new Error('找不到可用供应商或账户连接')
       const profile = profileForModel(req.model)
       const vision = provider.modelSettings?.[req.model]?.vision ?? profile.vision
       if (files.some((file) => file.kind === 'image') && !vision) throw new Error('当前模型不支持图片输入，请切换模型或移除图片')
-      const adapter: LlmAdapter = this.options.getAdapter(provider.protocol, provider.baseUrl)
+      const adapter: LlmAdapter = provider.adapter ?? this.options.getAdapter(provider.protocol, provider.baseUrl)
       let projectPrompt = await this.options.store.readText('docs/system-prompt.md').catch(() => null)
       const legacyPrompt = settings.customPrompt?.trim()
       // Migrate the old global prompt once into the active project. Subsequent runs
@@ -2225,16 +2238,19 @@ export class CoreAgentService {
           const auditId = approvalAudit
             ? await approvalAudit.request({ runId, toolName: change.toolName, mutationKind: mutationKind ?? undefined, argsJson: toolCall.argsJson, policy: approvalPolicy })
             : undefined
-          const needsApproval = requiresApproval(approvalPolicy, change.toolName)
+          const needsApproval = requiresApproval(approvalPolicy, change.toolName) || change.historyEligible === true
           let approved = true
+          let historyDecision: AgentChangeDecision | undefined
           if (needsApproval) {
-            approved = await this.waitForApproval(
+            const approval = await this.waitForApproval(
               session,
               change,
               sid,
               controller.signal,
               () => this.emit(sid, { type: 'pending-change', change }, runId)
             )
+            approved = approval.approved
+            historyDecision = approval
             await this.clearPendingChange(session, change.id)
           }
           let ok = approved
@@ -2242,7 +2258,7 @@ export class CoreAgentService {
           let status: 'applied' | 'rejected' | 'conflict' | 'failed' = 'rejected'
           if (approved) {
             try {
-              const applied = await outcome.apply()
+              const applied = await outcome.apply(historyDecision)
               ok = applied.ok
               text = applied.text
               status = applied.ok ? 'applied' : text.includes('等待期间修改') ? 'conflict' : 'failed'

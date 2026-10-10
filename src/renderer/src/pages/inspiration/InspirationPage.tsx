@@ -6,6 +6,8 @@ import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 import type { AgentEvent } from '../../../../shared/types'
 import type { InspirationArtifactTarget, InspirationSource } from '../../../../shared/inspiration'
+import { DOCUMENT_FILE_ACCEPT } from '../../../../core/inspiration/documentFormats'
+import { documentReference } from '../../../../core/inspiration/documentReference'
 
 type DeskMode = 'name' | 'distill' | 'decompose'
 
@@ -35,7 +37,7 @@ export function InspirationPage(): React.ReactElement {
   const model = useMemo(() => {
     const preferred = settings?.defaultChatModel
     if (preferred) return preferred
-    const provider = settings?.providers.find((item) => item.models.length > 0)
+    const provider = settings?.providers.find((item) => item.models.length > 0 && item.active !== false)
     return provider ? { providerId: provider.id, model: provider.models[0] } : null
   }, [settings])
 
@@ -61,9 +63,13 @@ export function InspirationPage(): React.ReactElement {
     if (!api.importInspirationSource) return
     setError(null)
     try {
+      if (file.size > 100 * 1024 * 1024) throw new Error('单份资料不能超过 100 MiB，请按卷拆分后导入')
       const bytes = new Uint8Array(await file.arrayBuffer())
       const imported = await api.importInspirationSource({ name: file.name, bytes })
-      if (api.extractInspirationSource) await api.extractInspirationSource(imported.id)
+      if (api.extractInspirationSource) {
+        const extracted = await api.extractInspirationSource(imported.id)
+        if (extracted.extraction !== 'ready') setError(extracted.extractionError ?? '无法提取资料，请检查文件或按卷拆分')
+      }
       await reloadSources()
     } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
   }
@@ -102,7 +108,14 @@ export function InspirationPage(): React.ReactElement {
     try {
       const session = await api.createSession()
       sessionRef.current = session.id
-      const sourceText = selectedSource && api.readInspirationSource ? await api.readInspirationSource(selectedSource, 60_000).catch(() => '') : ''
+      let sourceText = ''
+      if (selectedSource && mode !== 'name') {
+        if (!api.extractInspirationSource) throw new Error('当前平台无法提取资料，请更新应用后重试')
+        const source = await api.extractInspirationSource(selectedSource)
+        if (source.extraction !== 'ready' || source.extractedChars === undefined) throw new Error(source.extractionError ?? (source.extraction === 'too-large' ? '资料超过索引上限，请按卷拆分后导入' : '当前资料无法提取文本'))
+        sourceText = documentReference(source)
+        await reloadSources()
+      }
       const task = mode === 'name'
         ? `请为以下对象提供 8 个中文名称候选，每个说明语义、气质和适用场景。不要写正文。\n\n对象描述：${prompt}`
         : `${mode === 'distill' ? '请蒸馏以下资料' : '请拆解以下资料'}。${mode === 'distill' ? '输出故事核心、结构、人物、冲突、节奏、语言风格、可迁移写作规律，并明确区分原文事实与推断。' : '输出主题、结构、叙事视角、节奏、人物塑造、语言风格、场景组织和可观察写法；只分析，不生成 Skill、规则集、docs，也不写正文。'}\n\n用户补充：${prompt || '请从已选资料开始。'}\n\n资料内容：\n${sourceText || '当前没有已提取的资料，请先导入并提取资料。'}`
@@ -135,9 +148,9 @@ export function InspirationPage(): React.ReactElement {
               </div>
             </Card>
             <Card className="p-3">
-              <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-muted">灵感资料</span><label className="cursor-pointer rounded-md p-1.5 text-muted hover:bg-elevated hover:text-fg" title="导入资料"><Upload size={14} /><input type="file" accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.rtf,.docx,.pdf,.js,.ts,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.sql,.sh,.ps1" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importFile(file); e.currentTarget.value = '' }} /></label></div>
+              <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-muted">灵感资料</span><label className="cursor-pointer rounded-md p-1.5 text-muted hover:bg-elevated hover:text-fg" title="导入资料"><Upload size={14} /><input type="file" accept={DOCUMENT_FILE_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importFile(file); e.currentTarget.value = '' }} /></label></div>
               {desktopPathImport && <div className="mb-2 flex gap-1.5"><Input value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="输入电脑上的资料路径" className="min-w-0 flex-1 text-xs" /><Button size="sm" variant="outline" onClick={() => void importPath()} disabled={!localPath.trim()} title="从电脑路径导入"><FolderOpen size={13} /></Button></div>}
-              {sources.length === 0 ? <EmptyState icon={<FileText size={22} />} title="暂无资料" hint="导入小说、样章或设定资料" /> : <div className="space-y-1">{sources.map((source) => <div key={source.id} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs ${selectedSource === source.id ? 'bg-accent-soft text-accent' : 'text-muted'}`}><button type="button" className="min-w-0 flex-1 truncate text-left" onClick={() => void selectSource(source)} title={source.relativePath}>{source.displayName}<span className="ml-1 text-[10px] opacity-70">{source.extraction === 'ready' ? source.extractedChars ? `${source.extractedChars} 字` : '待提取' : source.extraction}</span></button>{source.extraction === 'ready' && source.extractedChars === undefined && <button type="button" title="提取文本" onClick={() => { if (api.extractInspirationSource) void api.extractInspirationSource(source.id).then(reloadSources).catch((err) => setError(err instanceof Error ? err.message : String(err))) }} className="text-faint hover:text-accent"><FileSearch size={13} /></button>}{source.origin === 'imported' && <button type="button" title="移除资料" onClick={() => void removeSource(source)} className="text-faint hover:text-danger"><Trash2 size={13} /></button>}</div>)}</div>}
+              {sources.length === 0 ? <EmptyState icon={<FileText size={22} />} title="暂无资料" hint="导入小说、样章或设定资料" /> : <div className="space-y-1">{sources.map((source) => <div key={source.id} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs ${selectedSource === source.id ? 'bg-accent-soft text-accent' : 'text-muted'}`}><button type="button" className="min-w-0 flex-1 truncate text-left" onClick={() => void selectSource(source)} title={source.relativePath}>{source.displayName}<span className="ml-1 text-[10px] opacity-70">{source.extraction === 'ready' ? source.extractedChars ? `${source.extractedChars} 字 · ${source.sectionCount ?? "?"} 片段` : '待提取' : source.extraction === "too-large" ? "超出上限，请拆分" : source.extraction === "unsupported" ? "不支持提取" : "提取失败"}</span></button>{source.extraction === 'ready' && source.extractedChars === undefined && <button type="button" title="提取文本" onClick={() => { if (api.extractInspirationSource) void api.extractInspirationSource(source.id).then(reloadSources).catch((err) => setError(err instanceof Error ? err.message : String(err))) }} className="text-faint hover:text-accent"><FileSearch size={13} /></button>}{source.origin === 'imported' && <button type="button" title="移除资料" onClick={() => void removeSource(source)} className="text-faint hover:text-danger"><Trash2 size={13} /></button>}</div>)}</div>}
             </Card>
           </aside>
           <section className="min-w-0 space-y-4">

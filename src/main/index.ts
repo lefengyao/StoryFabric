@@ -9,11 +9,14 @@ import type { AgentEventEnvelope } from '../shared/api'
 import { MainRuntimeEvents } from './runtimeEvents'
 import { AgentEventBridge } from './agentEventBridge'
 import { SettingsService } from './services/settingsService'
+import { AppUpdateService } from './services/appUpdateService'
+import { electronFetch } from './networkFetch'
 import { UsageService } from '../core/usage/usageService'
 import { isAllowedExternalUrl, isAllowedRendererNavigation } from './navigationPolicy'
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { configureNetworkLogger, configureSystemProxy } from './networkFetch'
 import { AppLogger } from './appLogger'
+import { createDesktopCloudAccountService } from './services/cloudAccountService'
 
 let agentBackgroundActivityActive = false
 let appLogger: AppLogger | undefined
@@ -128,6 +131,18 @@ if (!gotLock) {
     const win = createWindow()
 
     const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
+    const cloudAccount = createDesktopCloudAccountService(
+      join(app.getPath('userData'), 'trailblazer-refresh.enc'),
+      undefined,
+      () => {
+        if (win.isDestroyed()) return
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+        win.moveTop()
+      },
+      appLogger
+    )
     const usage = new UsageService(join(app.getPath('userData'), 'usage.json'))
     const runtimeEvents = new MainRuntimeEvents()
     const agentEventBridge = new AgentEventBridge((envelope, workspaceId) => {
@@ -162,10 +177,19 @@ if (!gotLock) {
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed()) window.webContents.setBackgroundThrottling(!active)
         }
-      }
+      },
+      cloudAccount
     )
 
-    const ctx: AppContext = { win: () => win, settings, agent, usage, runtimeEvents }
+    const appUpdates = new AppUpdateService({
+      directory: join(app.getPath('userData'), 'updates'),
+      currentVersion: app.getVersion(),
+      platform: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
+      preferences: async () => (await settings.load()).updatePreferences,
+      fetchImpl: electronFetch,
+      launch: (path) => shell.openPath(path)
+    })
+    const ctx: AppContext = { win: () => win, settings, agent, usage, runtimeEvents, appUpdates, cloudAccount }
     registerIpc(ctx)
 
     app.on('activate', () => {

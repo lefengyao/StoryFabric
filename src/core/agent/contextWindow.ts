@@ -107,7 +107,7 @@ export function planContextCompression(options: {
 
   const oldMessages = active.slice(0, keepStart)
   const recentMessages = active.slice(keepStart)
-  const throughMessageId = oldMessages.at(-1)?.id
+  const throughMessageId = oldMessages[oldMessages.length - 1]?.id
   if (!throughMessageId) return null
 
   return {

@@ -42,7 +42,16 @@ await cp(join(root, 'scripts', 'docker-entrypoint.sh'), join(stage, 'docker-entr
 await writeFile(join(stage, 'VERSION'), `${version}\n`, 'utf-8')
 
 const sums = []
-for (const entry of ['dist-server/index.mjs', 'Dockerfile.runtime', 'docker-entrypoint.sh', 'compose.runtime.yml', 'VERSION']) {
+async function bundleFiles(dir) {
+  const files = []
+  for (const entry of await readdir(join(stage, dir), { withFileTypes: true })) {
+    const path = `${dir}/${entry.name}`
+    if (entry.isDirectory()) files.push(...await bundleFiles(path))
+    else if (entry.isFile()) files.push(path)
+  }
+  return files.sort()
+}
+for (const entry of [...await bundleFiles('dist-server'), ...await bundleFiles('web'), 'Dockerfile.runtime', 'docker-entrypoint.sh', 'compose.runtime.yml', 'VERSION']) {
   const hash = createHash('sha256').update(await readFile(join(stage, entry))).digest('hex')
   sums.push(`${hash}  ${entry}`)
 }

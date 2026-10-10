@@ -98,7 +98,7 @@ interface ChatState {
   resetWorkspace: () => void
 
   send: (text: string, req: Omit<RunAgentRequest, 'message' | 'sessionId' | 'attachments'> & { creative?: CreativePreferences }) => Promise<void>
-  confirmChange: (approved: boolean) => Promise<void>
+  confirmChange: (approved: boolean, decision?: import('../../../shared/api').AgentChangeDecision) => Promise<void>
   answerQuestion: (answer: AgentQuestionAnswer) => Promise<void>
   resolveSkillCandidate: (candidateId: string, action: SkillCandidateAction) => Promise<void>
   compressContext: () => Promise<void>
@@ -182,6 +182,14 @@ function runIndicatorPatch(activeId: string | null): Pick<ChatState, 'runningSes
     backgroundAttentionSessionId: backgroundAttentionSessionIds.find((id) => id !== activeId) ?? null,
     streaming: Boolean(activeId && runningSessions.has(activeId))
   }
+}
+
+function publishRunIndicators(set: SetFn, state: ChatState, activeId = state.activeId): void {
+  const patch = runIndicatorPatch(activeId)
+  if (state.runningSessionId === patch.runningSessionId && state.backgroundAttentionSessionId === patch.backgroundAttentionSessionId && state.streaming === patch.streaming &&
+    state.runningSessionIds.length === patch.runningSessionIds.length && state.runningSessionIds.every((id, index) => id === patch.runningSessionIds[index]) &&
+    state.backgroundAttentionSessionIds.length === patch.backgroundAttentionSessionIds.length && state.backgroundAttentionSessionIds.every((id, index) => id === patch.backgroundAttentionSessionIds[index])) return
+  set(patch)
 }
 
 function hasActiveRun(sessionId: string | null, state: ChatState): boolean {
@@ -496,14 +504,27 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  confirmChange: async (approved) => {
+  confirmChange: async (approved, decision) => {
     const change = get().pendingChange
     if (!change) return
-    set({ pendingChange: null })
+    if (approved && change.historyEligible && typeof decision?.saveHistory !== 'boolean') throw new Error('请选择是否保存为长期历史版本')
+    if (approved && change.historyRequired && decision?.saveHistory !== true) throw new Error('恢复必须保留恢复前保护版本与恢复结果')
     const sessionId = get().activeId
     if (!sessionId) throw new Error('当前没有可确认的会话')
-    await getPlatformApi().agentConfirm(sessionId, change.id, approved)
-    saveRunView(sessionId, get())
+    try {
+      if (decision) await getPlatformApi().agentConfirm(sessionId, change.id, approved, decision)
+      else await getPlatformApi().agentConfirm(sessionId, change.id, approved)
+      if (get().activeId === sessionId && get().pendingChange?.id === change.id) {
+        set({ pendingChange: null, error: null })
+        saveRunView(sessionId, get())
+      } else {
+        const view = runViews.get(sessionId)
+        if (view?.pendingChange?.id === change.id) runViews.set(sessionId, { ...view, pendingChange: null })
+      }
+    } catch (error) {
+      if (get().activeId === sessionId) set({ error: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
   },
 
   answerQuestion: async (answer) => {
@@ -673,11 +694,12 @@ async function flushAppliedWorkspaceRefresh(set: SetFn): Promise<void> {
  */
 const streamingBatchers = new Map<string, ReturnType<typeof createRafBatcher<{ messageId: string; delta: string }>>>()
 const MAX_LIVE_TOOL_ARGS = 12000
+const TOOL_ARGS_OMITTED = '\n…工具参数过长，已省略…'
 const toolArgsBatchers = new Map<string, ReturnType<typeof createRafBatcher<{ callId: string; delta: string }>>>()
 
 function clipLiveToolArgs(value: string): string {
   if (value.length <= MAX_LIVE_TOOL_ARGS) return value
-  return `${value.slice(0, MAX_LIVE_TOOL_ARGS - 24)}\n…工具参数过长，已省略…`
+  return `${value.slice(0, MAX_LIVE_TOOL_ARGS - TOOL_ARGS_OMITTED.length)}${TOOL_ARGS_OMITTED}`
 }
 
 function appendLiveToolArgs(current: string, delta: string): string {
@@ -725,6 +747,10 @@ function flushStreamingDelta(sessionId: string): void {
 }
 
 function pushToolArgsDelta(set: SetFn, sessionId: string, callId: string, delta: string): void {
+  const current = useChat.getState()
+  const view = current.activeId === sessionId ? current : runViews.get(sessionId)
+  const row = latestToolRow(view?.liveTools ?? [], callId)
+  if (!delta || !row || row.argsJson.length >= MAX_LIVE_TOOL_ARGS) return
   let batcher = toolArgsBatchers.get(sessionId)
   if (!batcher) {
     batcher = createRafBatcher<{ callId: string; delta: string }>((chunks) => {
@@ -736,8 +762,8 @@ function pushToolArgsDelta(set: SetFn, sessionId: string, callId: string, delta:
         let timeline = stored.liveTimeline
         let liveTools = stored.liveTools
         for (const [id, value] of grouped) {
-          timeline = timeline.map((item) => item.kind === 'tool' && item.callId === id ? { ...item, argsJson: appendLiveToolArgs(item.argsJson, value) } : item)
-          liveTools = liveTools.map((item) => item.callId === id ? { ...item, argsJson: appendLiveToolArgs(item.argsJson, value) } : item)
+          timeline = appendToolArgsToRows(timeline, id, value)
+          liveTools = appendToolArgsToRows(liveTools, id, value)
         }
         runViews.set(sessionId, { ...stored, liveTimeline: timeline, liveTools })
         return
@@ -746,15 +772,92 @@ function pushToolArgsDelta(set: SetFn, sessionId: string, callId: string, delta:
         let timeline = p.liveTimeline
         let liveTools = p.liveTools
         for (const [id, value] of grouped) {
-          timeline = timeline.map((item) => item.kind === 'tool' && item.callId === id ? { ...item, argsJson: appendLiveToolArgs(item.argsJson, value) } : item)
-          liveTools = liveTools.map((item) => item.callId === id ? { ...item, argsJson: appendLiveToolArgs(item.argsJson, value) } : item)
+          timeline = appendToolArgsToRows(timeline, id, value)
+          liveTools = appendToolArgsToRows(liveTools, id, value)
         }
-        return { liveTimeline: timeline, liveTools }
+        return timeline === p.liveTimeline && liveTools === p.liveTools ? p : { liveTimeline: timeline, liveTools }
       })
     })
     toolArgsBatchers.set(sessionId, batcher)
   }
   batcher.push({ callId, delta })
+}
+
+function appendToolArgsToRows<T extends LiveToolRun | LiveTurnItem>(rows: T[], callId: string, delta: string): T[] {
+  let index = -1
+  for (let cursor = rows.length - 1; cursor >= 0; cursor -= 1) {
+    const item = rows[cursor]
+    if ('callId' in item && item.callId === callId) {
+      index = cursor
+      break
+    }
+  }
+  if (index < 0) return rows
+  const item = rows[index]
+  if (!('callId' in item) || (item.status !== 'running' && item.status !== 'pending')) return rows
+  const argsJson = appendLiveToolArgs(item.argsJson, delta)
+  if (argsJson === item.argsJson) return rows
+  const next = rows.slice()
+  next[index] = { ...item, argsJson }
+  return next
+}
+
+function latestToolRow<T extends LiveToolRun | LiveTurnItem>(rows: readonly T[], callId: string): T | undefined {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]
+    if ('callId' in item && item.callId === callId) return item
+  }
+  return undefined
+}
+
+function upsertTimelineTool(rows: LiveTurnItem[], callId: string, name: string, argsJson: string): LiveTurnItem[] {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]
+    if (item.kind !== 'tool' || item.callId !== callId) continue
+    if (item.status === 'running' || item.status === 'pending') {
+      const next = rows.slice()
+      next[index] = { ...item, name, argsJson: argsJson ? clipLiveToolArgs(argsJson) : item.argsJson }
+      return next
+    }
+    break
+  }
+  return [...rows, { kind: 'tool', callId, name, argsJson: clipLiveToolArgs(argsJson), status: 'running' }]
+}
+
+function upsertLiveTool(rows: LiveToolRun[], callId: string, name: string, argsJson: string): LiveToolRun[] {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]
+    if (item.callId !== callId) continue
+    if (item.status === 'running' || item.status === 'pending') {
+      const next = rows.slice()
+      next[index] = { ...item, name, argsJson: argsJson ? clipLiveToolArgs(argsJson) : item.argsJson }
+      return next
+    }
+    break
+  }
+  return [...rows, { callId, name, argsJson: clipLiveToolArgs(argsJson), status: 'running' }]
+}
+
+function updateLatestTimelineTool(rows: LiveTurnItem[], callId: string, update: (item: Extract<LiveTurnItem, { kind: 'tool' }>) => Extract<LiveTurnItem, { kind: 'tool' }>): LiveTurnItem[] {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]
+    if (item.kind !== 'tool' || item.callId !== callId) continue
+    const next = rows.slice()
+    next[index] = update(item)
+    return next
+  }
+  return rows
+}
+
+function updateLatestLiveTool(rows: LiveToolRun[], callId: string, update: (item: LiveToolRun) => LiveToolRun): LiveToolRun[] {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]
+    if (item.callId !== callId) continue
+    const next = rows.slice()
+    next[index] = update(item)
+    return next
+  }
+  return rows
 }
 
 function flushToolArgsDelta(sessionId: string): void {
@@ -772,7 +875,7 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
   const isBackgroundEvent = envelope.sessionId !== actualState.activeId
   if (isBackgroundEvent && (envelope.event.type === 'pending-change' || envelope.event.type === 'agent-question' || envelope.event.type === 'skill-candidate' || envelope.event.type === 'waiting-user' || envelope.event.type === 'error')) {
     backgroundAttentionSessions.add(envelope.sessionId)
-    set(runIndicatorPatch(actualState.activeId))
+    publishRunIndicators(set, actualState)
   }
   if (envelope.sessionId !== actualState.activeId && runningSessions.has(envelope.sessionId)) {
     const sessionId = envelope.sessionId
@@ -793,7 +896,7 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       saveRunView(sessionId, scopedState)
       if ('sessions' in patch) set({ sessions: patch.sessions })
       if (patch.error) backgroundAttentionSessions.add(sessionId)
-      set(runIndicatorPatch(actualState.activeId))
+      publishRunIndicators(set, get(), actualState.activeId)
     }
     const scopedGet = (): ChatState => scopedState
     handleEvent(envelope, scopedSet, scopedGet)
@@ -878,12 +981,8 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
     case 'tool-start':
       flushStreamingDelta(envelope.sessionId)
       set((p) => ({
-        liveTimeline: p.liveTimeline.some((item) => item.kind === 'tool' && item.callId === ev.callId)
-          ? p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, name: ev.name, argsJson: ev.argsJson ? clipLiveToolArgs(ev.argsJson) : item.argsJson } : item)
-          : [...p.liveTimeline, { kind: 'tool', callId: ev.callId, name: ev.name, argsJson: clipLiveToolArgs(ev.argsJson), status: 'running' }],
-        liveTools: p.liveTools.some((item) => item.callId === ev.callId)
-          ? p.liveTools.map((item) => item.callId === ev.callId ? { ...item, name: ev.name, argsJson: ev.argsJson ? clipLiveToolArgs(ev.argsJson) : item.argsJson } : item)
-          : [...p.liveTools, { callId: ev.callId, name: ev.name, argsJson: clipLiveToolArgs(ev.argsJson), status: 'running' }]
+        liveTimeline: upsertTimelineTool(p.liveTimeline, ev.callId, ev.name, ev.argsJson),
+        liveTools: upsertLiveTool(p.liveTools, ev.callId, ev.name, ev.argsJson)
       }))
       break
     case 'tool-args-delta':
@@ -891,8 +990,8 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       break
     case 'tool-preview':
       set((p) => ({
-        liveTimeline: p.liveTimeline.map((item) => item.kind === 'tool' && item.callId === ev.callId ? { ...item, preview: clipLiveToolArgs(ev.preview) } : item),
-        liveTools: p.liveTools.map((item) => item.callId === ev.callId ? { ...item, preview: clipLiveToolArgs(ev.preview) } : item)
+        liveTimeline: updateLatestTimelineTool(p.liveTimeline, ev.callId, (item) => ({ ...item, preview: clipLiveToolArgs(ev.preview) })),
+        liveTools: updateLatestLiveTool(p.liveTools, ev.callId, (item) => ({ ...item, preview: clipLiveToolArgs(ev.preview) }))
       }))
       break
     case 'budget':
@@ -900,29 +999,24 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       break
     case 'tool-done':
       set((p) => ({
-        liveTimeline: p.liveTimeline.map((item) =>
-          item.kind === 'tool' && item.callId === ev.callId
-            ? { ...item, status: ev.ok ? ('ok' as const) : ('error' as const), preview: ev.resultPreview }
-            : item
-        ),
-        liveTools: p.liveTools.map((t) =>
-          t.callId === ev.callId ? { ...t, status: ev.ok ? ('ok' as const) : ('error' as const), preview: ev.resultPreview } : t
-        )
+        liveTimeline: updateLatestTimelineTool(p.liveTimeline, ev.callId, (item) => ({ ...item, status: ev.ok ? 'ok' : 'error', preview: ev.resultPreview })),
+        liveTools: updateLatestLiveTool(p.liveTools, ev.callId, (item) => ({ ...item, status: ev.ok ? 'ok' : 'error', preview: ev.resultPreview }))
       }))
       break
     case 'pending-change':
       set((p) => {
-        const lastToolIndex = p.liveTimeline.findLastIndex((item) => item.kind === 'tool')
+        let lastToolIndex = p.liveTimeline.length - 1
+        while (lastToolIndex >= 0 && p.liveTimeline[lastToolIndex].kind !== 'tool') lastToolIndex -= 1
+        const lastTool = p.liveTimeline[lastToolIndex]
         return {
           pendingChange: ev.change,
           lastPendingChange: ev.change,
-          liveTimeline: lastToolIndex < 0
-            ? p.liveTimeline
-            : p.liveTimeline.map((item, index) =>
-                index === lastToolIndex && item.kind === 'tool'
-                  ? { ...item, status: 'pending' as const, preview: '等待你确认写回' }
-                  : item
-              )
+          liveTimeline: lastTool?.kind === 'tool'
+            ? updateLatestTimelineTool(p.liveTimeline, lastTool.callId, (item) => ({ ...item, status: 'pending', preview: '等待你确认写回' }))
+            : p.liveTimeline,
+          liveTools: lastTool?.kind === 'tool'
+            ? updateLatestLiveTool(p.liveTools, lastTool.callId, (item) => ({ ...item, status: 'pending', preview: '等待你确认写回' }))
+            : p.liveTools
         }
       })
       break
@@ -991,7 +1085,7 @@ function handleEvent(envelope: AgentEventEnvelope, set: SetFn, get: () => ChatSt
       break
   }
   if (runningSessions.has(envelope.sessionId)) saveRunView(envelope.sessionId, get())
-  set(runIndicatorPatch(get().activeId))
+  publishRunIndicators(set, get())
 }
 
 async function finishRun(
@@ -1047,6 +1141,7 @@ async function finishRun(
 }
 
 export function toolArgsPreview(argsJson: string, max = 60): string {
+  if (argsJson.length > 12000) return argsJson.slice(0, max) + '…'
   try {
     const obj = JSON.parse(argsJson || '{}') as Record<string, unknown>
     const parts = Object.entries(obj).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)

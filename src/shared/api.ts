@@ -38,7 +38,11 @@ import type { InspirationArtifactInput, InspirationImport, InspirationSource } f
 import type { AgentQuestionAnswer, SkillCandidateAction } from './agentQuestions'
 import type { RuleLayer } from '../core/rules/types'
 import type { ContentPackage } from './skillPackage'
+import type { WritingToolsPreferences } from './writingTools'
 import type { MemoryScope, MemorySnapshot, MemoryUpdate } from './memory'
+import type { DocumentKind, DocumentSnapshot, DocumentWriteOptions, HistorySaveOptions, HistoryVersion, HistoryVersionPatch, HistoryVersionRecord } from './documentHistory'
+
+export interface AgentChangeDecision { saveHistory?: boolean }
 
 export interface AgentEventEnvelope {
   sessionId: string
@@ -53,6 +57,7 @@ export type SettingsPatch = Partial<
   Pick<
     PublicAppSettings,
     | 'theme'
+    | 'updatePreferences'
     | 'defaultChatModel'
     | 'orchestrationDefaults'
     | 'agentGeneration'
@@ -88,6 +93,8 @@ export interface WorkspaceImportTarget {
 
 export interface WorkspaceRequestOptions {
   signal?: AbortSignal
+  /** Explicit user consent to back up and upgrade a format-4 workspace. */
+  upgradeLegacy?: boolean
   /** Electron uses this opaque ID to cancel work already handed to the main process. */
   requestId?: string
 }
@@ -100,6 +107,7 @@ export function throwIfWorkspaceRequestAborted(signal?: AbortSignal): void {
 }
 
 export interface StoryFabricApi {
+  cloudAccount?: import('./cloudAccount').CloudAccountApi
   getMemory(scope: MemoryScope): Promise<MemorySnapshot>
   updateMemory(scope: MemoryScope, patch: MemoryUpdate): Promise<MemorySnapshot>
   getCapabilities?(): Promise<PlatformCapabilities>
@@ -133,20 +141,30 @@ export interface StoryFabricApi {
   importWorkspace(bytes: Uint8Array, fileName: string, target?: WorkspaceImportTarget, options?: WorkspaceRequestOptions): Promise<WorkspaceSummary>
   cancelWorkspaceRequest?(requestId: string): Promise<void>
   getChapterBody(id: string): Promise<string | null>
+  getDocumentSnapshot(kind: DocumentKind, id: string): Promise<DocumentSnapshot>
+  saveHistoryVersion(kind: DocumentKind, id: string, options: HistorySaveOptions): Promise<HistoryVersionRecord>
+  listHistoryVersions(kind: DocumentKind, id?: string): Promise<HistoryVersion[]>
+  getHistoryVersion(kind: DocumentKind, id: string, versionId: string): Promise<HistoryVersionRecord>
+  updateHistoryVersion(kind: DocumentKind, id: string, versionId: string, patch: HistoryVersionPatch): Promise<HistoryVersion>
+  deleteHistoryVersion(kind: DocumentKind, id: string, versionId: string, allowPinned?: boolean): Promise<void>
+  restoreHistoryVersion(kind: DocumentKind, id: string, versionId: string, baseRevision: string, baseText?: string): Promise<DocumentSnapshot>
+  saveImageFile?(fileName: string, bytes: Uint8Array): Promise<void>
   searchProject(query: string): Promise<SearchHit[]>
   /** 关系图谱节点坐标（按人物 id） */
   getGraphLayout(): Promise<Record<string, { x: number; y: number }>>
   saveGraphLayout(layout: Record<string, { x: number; y: number }>): Promise<void>
+  getWritingTools(): Promise<WritingToolsPreferences>
+  saveWritingTools(preferences: WritingToolsPreferences): Promise<void>
 
   /* 实体 */
   saveCharacter(doc: Partial<CharacterDoc>): Promise<CharacterDoc>
   deleteCharacter(id: string): Promise<void>
   saveRelationships(list: Relationship[]): Promise<void>
-  saveOutlineDoc(doc: Partial<OutlineDoc>): Promise<OutlineDoc>
+  saveOutlineDoc(doc: Partial<OutlineDoc>, options?: DocumentWriteOptions): Promise<OutlineDoc>
   deleteOutlineDoc(id: string): Promise<void>
   saveEvent(doc: Partial<StoryEvent>): Promise<StoryEvent>
   deleteEvent(id: string): Promise<void>
-  saveChapter(doc: Partial<ChapterDoc>): Promise<ChapterMeta>
+  saveChapter(doc: Partial<ChapterDoc>, options?: DocumentWriteOptions): Promise<ChapterMeta>
   deleteChapter(id: string): Promise<void>
   listVolumes(): Promise<VolumeMeta[]>
   saveVolume(input: Partial<VolumeMeta> & { id?: string }): Promise<VolumeMeta>
@@ -167,6 +185,11 @@ export interface StoryFabricApi {
   /* 设置与供应商 */
   getSettings(): Promise<PublicAppSettings>
   updateSettings(patch: SettingsPatch): Promise<PublicAppSettings>
+  checkAppUpdate?(): Promise<import('./updates').UpdateCheckResult>
+  getUpdateDownloadState?(): Promise<import('./updates').UpdateDownloadState>
+  downloadAppUpdate?(): Promise<import('./updates').UpdateDownloadState>
+  cancelAppUpdateDownload?(): Promise<import('./updates').UpdateDownloadState>
+  installAppUpdate?(): Promise<void>
   /** 模型用量记录（最近若干次调用，按时间升序） */
   getUsageRecords(): Promise<UsageRecord[]>
   getUsageBuckets(): Promise<UsageBucket[]>
@@ -199,7 +222,7 @@ export interface StoryFabricApi {
   continueGoal(id: string): Promise<{ goalId: string; runId?: string; status?: GoalRun['status'] }>
   stopGoal(id: string): Promise<void>
   replanGoal(id: string): Promise<{ goalId: string; planVersion?: number; status?: GoalRun['status'] }>
-  agentConfirm(sessionId: string, changeId: string, approved: boolean): Promise<void>
+  agentConfirm(sessionId: string, changeId: string, approved: boolean, decision?: AgentChangeDecision): Promise<void>
   agentAbort(sessionId: string): Promise<void>
   /** Optional until each platform bridge wires the corresponding IPC handlers. */
   agentAnswerQuestion?(answer: AgentQuestionAnswer): Promise<void>

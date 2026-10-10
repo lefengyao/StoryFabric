@@ -2,6 +2,7 @@ import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { MAX_INSPIRATION_SOURCE_BYTES, MAX_INSPIRATION_TOTAL_BYTES, SourceCatalog } from '../sourceCatalog'
+import { epubFixture } from '../../../shared/__tests__/fixtures/documentFixtures'
 
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
@@ -14,6 +15,16 @@ async function docxBytes(xml: string): Promise<Uint8Array> {
 }
 
 describe('SourceCatalog', () => {
+  it('imports, extracts and reads EPUB evidence while preserving original bytes', async () => {
+    const store = new MemoryFileStore()
+    const catalog = new SourceCatalog(store)
+    const bytes = await epubFixture()
+    const source = await catalog.importBytes({ name: '参考.epub', bytes })
+    expect(await catalog.extract(source.id)).toMatchObject({ extraction: 'ready', extractedChars: expect.any(Number) })
+    expect(await catalog.readExtracted(source.id)).toContain('第一章')
+    expect(await store.readBytes(source.relativePath)).toEqual(bytes)
+  })
+
   it('discovers hand-placed library files without rewriting them', async () => {
     const store = new MemoryFileStore()
     const original = new Uint8Array([0xef, 0xbb, 0xbf, 0xe5, 0x8f, 0x82])
@@ -133,10 +144,10 @@ describe('SourceCatalog', () => {
     await expect(catalog.readExtracted(source.id, { maxChars: 80_001 })).rejects.toSatisfy((error: unknown) => errorCode(error) === 'TOO_LARGE')
   })
 
-  it('does not cache extracted text above the 500,000 character cap', async () => {
+  it('does not cache extracted text above the 10,000,000 character index cap', async () => {
     const store = new MemoryFileStore()
     const catalog = new SourceCatalog(store)
-    const source = await catalog.importBytes({ name: 'oversized.md', bytes: new TextEncoder().encode('x'.repeat(500_001)) })
+    const source = await catalog.importBytes({ name: 'oversized.md', bytes: new TextEncoder().encode('x'.repeat(10_000_001)) })
 
     await expect(catalog.extract(source.id)).resolves.toMatchObject({ extraction: 'too-large' })
     expect(await store.readText(`.storyfabric/inspiration/extracted/${source.id}.json`)).toBeNull()

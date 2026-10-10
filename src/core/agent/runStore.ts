@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import type { RunEventEnvelope } from '../../shared/agentRuntime'
 import { normalizeAgentMode, normalizeApprovalPolicy } from '../../shared/creative'
 import type { AgentMode, ApprovalPolicy } from '../../shared/types'
@@ -51,13 +52,13 @@ export interface RunStore {
 }
 
 function clone(snapshot: RuntimeRunSnapshot): RuntimeRunSnapshot {
-  return structuredClone({
+  return cloneValue({
     ...snapshot,
     mode: normalizeAgentMode(snapshot.mode),
     approvalPolicy: normalizeApprovalPolicy(snapshot.approvalPolicy),
     approvalAudit: snapshot.approvalAudit ? [...snapshot.approvalAudit] : [],
     completedStages: [...(snapshot.completedStages ?? [])],
-    ...(snapshot.waitingQuestion ? { waitingQuestion: structuredClone(snapshot.waitingQuestion) } : {})
+    ...(snapshot.waitingQuestion ? { waitingQuestion: cloneValue(snapshot.waitingQuestion) } : {})
   })
 }
 

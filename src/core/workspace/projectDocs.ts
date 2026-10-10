@@ -1,6 +1,8 @@
 import type { FileStore } from '../storage/fileStore'
 import { bytesContentRevision, contentRevision } from './resourceRevision'
-import { extractTextFromBytes, supportsTextExtraction, TextExtractionError } from '../inspiration/textExtractors'
+import { supportsTextExtraction, TextExtractionError } from '../inspiration/textExtractors'
+import { extractIndexedDocument, validDocumentIndex, sliceDocumentText, type RevisionedDocument } from '../inspiration/documentIndex'
+import { isPlainTextDocument } from '../inspiration/documentFormats'
 
 export const PROJECT_DOC_MAX_BYTES = 100 * 1024 * 1024
 export const PROJECT_DOC_DEFAULT_CHARS = 20_000
@@ -15,7 +17,7 @@ export interface ProjectDocEntry {
   path: string
   size: number
   readable: boolean
-  format: 'text' | 'docx' | 'pdf' | 'unsupported'
+  format: 'text' | 'docx' | 'pdf' | 'epub' | 'unsupported'
 }
 export interface ProjectDocList { files: ProjectDocEntry[]; nextOffset?: number }
 export interface ProjectDocRead { sourcePath: string; writeRevision: string; revision: string; fileRevision: string; content: string; nextOffset?: number; truncated: boolean }
@@ -31,6 +33,7 @@ function formatOf(path: string): ProjectDocEntry['format'] {
   const extension = extensionOf(path)
   if (extension === 'docx') return 'docx'
   if (extension === 'pdf') return 'pdf'
+  if (extension === 'epub') return 'epub'
   return supportsTextExtraction(path) ? 'text' : 'unsupported'
 }
 
@@ -51,20 +54,20 @@ function safeSegments(value: string): string[] {
 export function normalizeProjectDocPath(value: unknown, options: { readable?: boolean } = {}): string {
   if (typeof value !== 'string' || !value || value !== value.trim()) fail('path 必须是 docs 目录下的文件路径')
   const path = safeSegments(value.trim()).join('/')
-  if (options.readable && !supportsTextExtraction(path)) fail('项目文档暂不支持此文件类型；请使用常见文本、DOCX 或 PDF 文件')
+  if (options.readable && !supportsTextExtraction(path)) fail('项目文档暂不支持此文件类型；请使用常见文本、EPUB、DOCX 或 PDF 文件')
   return path
 }
 
 async function listDocPaths(store: FileStore, dir = 'docs'): Promise<string[]> {
   const paths = (await store.listFiles(dir)).map((name) => `${dir}/${name}`)
   for (const child of await store.listDirs(dir)) paths.push(...await listDocPaths(store, `${dir}/${child}`))
-  return paths.map((path) => path.slice('docs/'.length)).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  return paths
 }
 
 export async function listProjectDocs(store: FileStore, offset = 0, limit = PROJECT_DOC_DEFAULT_LIMIT): Promise<ProjectDocList> {
   if (!Number.isInteger(offset) || offset < 0) fail('offset 必须是非负整数')
   if (!Number.isInteger(limit) || limit < 1 || limit > PROJECT_DOC_MAX_LIMIT) fail(`limit 必须在 1-${PROJECT_DOC_MAX_LIMIT} 之间`)
-  const names = await listDocPaths(store)
+  const names = (await listDocPaths(store)).map((path) => path.slice('docs/'.length)).sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const files: ProjectDocEntry[] = []
   for (const name of names.slice(offset, offset + limit)) {
     const path = textPath(name)
@@ -81,24 +84,48 @@ export async function readProjectDoc(store: FileStore, rawPath: unknown, offset 
   const path = normalizeProjectDocPath(rawPath, { readable: true })
   if (!Number.isInteger(offset) || offset < 0) fail('offset 必须是非负整数')
   if (!Number.isInteger(maxChars) || maxChars < 1 || maxChars > PROJECT_DOC_MAX_CHARS) fail(`maxChars 必须在 1-${PROJECT_DOC_MAX_CHARS} 之间`)
+  const document = await indexedProjectDoc(store, path)
+  const content = document.text
+  const slice = sliceDocumentText(content, offset, maxChars)
+  const nextOffset = offset + slice.length < content.length ? offset + slice.length : undefined
+  const writeRevision = contentRevision(content)
+  const fileRevision = formatOf(path) === 'text' ? writeRevision : document.revision
+  return { sourcePath: path, writeRevision, revision: writeRevision, fileRevision, content: slice, ...(nextOffset === undefined ? {} : { nextOffset }), truncated: nextOffset !== undefined }
+}
+
+/** Revision-bound extraction cache shared by offset reads and section tools. */
+export async function indexedProjectDoc(store: FileStore, rawPath: unknown, expectedRevision?: unknown): Promise<RevisionedDocument> {
+  const path = normalizeProjectDocPath(rawPath, { readable: true })
   const source = textPath(path)
   const size = await store.fileSize(source)
   if (size === null) fail(`未找到项目文档：${path}`)
   if (size > PROJECT_DOC_MAX_BYTES) fail(`项目文档超过 ${PROJECT_DOC_MAX_BYTES} 字节限制：${path}`)
   const raw = await store.readBytes(source)
   if (raw === null) fail(`未找到项目文档：${path}`)
-  let content: string
+  if (raw.byteLength > PROJECT_DOC_MAX_BYTES) fail(`项目文档超过 ${PROJECT_DOC_MAX_BYTES} 字节限制：${path}`)
+  const revision = bytesContentRevision(raw)
+  if (expectedRevision !== undefined && expectedRevision !== revision) fail('项目文档版本已变化，请重新查询目录')
+  const cachePath = `.storyfabric/documents/${contentRevision(path)}.json`
+  let document: RevisionedDocument | undefined
   try {
-    content = await extractTextFromBytes(path, raw)
+    const cached = JSON.parse(await store.readText(cachePath) ?? 'null')
+    if (cached?.version === 1 && cached.path === path && cached.revision === revision && validDocumentIndex(cached)) document = { ...cached, revision }
+  } catch { /* Rebuild missing or invalid cache from original source bytes. */ }
+  try {
+    if (!document) {
+      document = { ...await extractIndexedDocument(path, raw), revision }
+      await store.writeText(cachePath, JSON.stringify({ version: 1, path, ...document }))
+    }
   } catch (error) {
     if (error instanceof TextExtractionError) fail(error.message)
     throw error
   }
-  const slice = content.slice(offset, offset + maxChars)
-  const nextOffset = offset + slice.length < content.length ? offset + slice.length : undefined
-  const writeRevision = contentRevision(content)
-  const fileRevision = formatOf(path) === 'text' ? writeRevision : bytesContentRevision(raw)
-  return { sourcePath: path, writeRevision, revision: writeRevision, fileRevision, content: slice, ...(nextOffset === undefined ? {} : { nextOffset }), truncated: nextOffset !== undefined }
+  const rechecked = await store.readBytes(source)
+  if (rechecked === null || bytesContentRevision(rechecked) !== revision) {
+    await store.removeFile(cachePath)
+    fail('项目文档在读取期间已变化，请重新查询目录')
+  }
+  return document
 }
 
 export interface ProjectDocSnapshot { path: string; beforeText: string; afterText: string; existed: boolean }
@@ -156,6 +183,7 @@ export function validateProjectDocContent(content: unknown): string {
 
 export async function snapshotProjectDoc(store: FileStore, rawPath: unknown, rawContent: unknown): Promise<ProjectDocSnapshot> {
   const path = normalizeProjectDocPath(rawPath)
+  if (!isPlainTextDocument(path)) fail('只有纯文本项目文档可以保存；EPUB、DOCX 和 PDF 只可读取')
   const afterText = validateProjectDocContent(rawContent)
   const before = await store.readText(textPath(path))
   if (before !== null && encoder.encode(before).byteLength > PROJECT_DOC_MAX_BYTES) fail(`现有项目文档超过 ${PROJECT_DOC_MAX_BYTES} 字节限制：${path}`)

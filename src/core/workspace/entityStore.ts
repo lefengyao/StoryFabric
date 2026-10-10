@@ -28,6 +28,7 @@ import { normalizeChapterContent } from './chapterFormatting'
 import { removeEventFromGraph } from './eventGraph'
 import { commitTextChanges, type JournalTextChange } from './mutationJournal'
 import { normalizeChapterStatus, resolveChapterPlacement } from '../../shared/chapterPlacement'
+import { newWriteRevision } from './resourceRevision'
 
 export function genId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8)
@@ -214,6 +215,8 @@ export async function saveOutlineDoc(store: FileStore, input: Partial<OutlineDoc
   doc.chapterId = doc.kind === 'chapter' && typeof doc.chapterId === 'string' && doc.chapterId.trim()
     ? doc.chapterId.trim()
     : undefined
+  doc.writeRevision = newWriteRevision()
+  doc.updatedAt = new Date().toISOString()
   const folder = doc.kind === 'chapter'
     ? doc.chapterId ? `outline/chapters/${doc.chapterId}` : 'outline/unassigned'
     : 'outline/total'
@@ -539,6 +542,8 @@ export async function saveChapterInPlace(store: FileStore, fileName: string, inp
   doc.box = doc.box === 'draft' ? 'draft' : 'main'
   doc.volumeId = doc.volumeId ?? 'vol_default'
   doc.terms = doc.terms ?? []
+  doc.writeRevision = newWriteRevision()
+  doc.updatedAt = new Date().toISOString()
   await store.writeText(`chapters/${existing.fileName}`, serializeChapter(doc))
   const totalAfter = needsBaseline ? (await loadChapters(store)).reduce((sum, chapter) => sum + chapter.doc.wordCount, 0) : undefined
   await recordChapterWriting(store, existing.doc.content, doc.content, totalAfter)
@@ -562,6 +567,8 @@ export async function saveChapter(store: FileStore, input: Partial<ChapterDoc> &
   doc.box = doc.box === 'draft' ? 'draft' : 'main'
   doc.volumeId = doc.volumeId ?? 'vol_default'
   doc.terms = doc.terms ?? []
+  doc.writeRevision = newWriteRevision()
+  doc.updatedAt = new Date().toISOString()
   const base = `${padOrder(doc.order)}-${sanitizeFileName(doc.title)}.md`
   const folder = doc.box === 'draft' ? 'draft' : `main/${doc.volumeId}`
   const relativeBase = `${folder}/${base}`

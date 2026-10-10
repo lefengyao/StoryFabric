@@ -1,3 +1,4 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import type { AgentBudgetSnapshot } from '../../shared/types'
 import type { RuntimeRunSnapshot } from './runStore'
 
@@ -21,7 +22,7 @@ export class RunController {
   }
 
   budget(value: AgentBudgetSnapshot): void {
-    this.snapshot.budget = structuredClone(value)
+    this.snapshot.budget = cloneValue(value)
     this.touch()
   }
 

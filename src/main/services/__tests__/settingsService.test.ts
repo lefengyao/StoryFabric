@@ -16,7 +16,24 @@ async function withService(run: (service: SettingsService, file: string) => Prom
 
 const provider = { name: '测试供应商', protocol: 'openai' as const, baseUrl: 'https://api.test/v1', apiKey: 'sk-test', models: ['gpt-4o', 'claude-x'] }
 
+it('migrates update preferences and persists custom sources and automatic detection', async () => {
+  await withService(async (service, file) => {
+    await writeFile(file, JSON.stringify({ theme: 'dark' }))
+    expect((await service.load()).updatePreferences?.sources).toEqual(['https://storyfabric.fengyao.xin:10048/download', 'https://github.com/lefengyao/StoryFabric'])
+    await service.update({ updatePreferences: { automatic: false, sources: ['https://example.org/download'] } })
+    expect((await new SettingsService(file).load()).updatePreferences).toEqual({ automatic: false, sources: ['https://example.org/download'] })
+  })
+})
+
 describe('SettingsService 每模型参数', () => {
+  it('persists managed Trailblazer model preferences separately from editable providers', async () => {
+    await withService(async (service) => {
+      await service.saveTrailblazerProvider({ models: ['managed-model'], modelSettings: { 'managed-model': { reasoning: 'high' } }, modelScope: 'a'.repeat(64) })
+      expect((await service.load()).trailblazerProvider).toEqual({ models: ['managed-model'], modelSettings: { 'managed-model': { reasoning: 'high' } }, modelScope: 'a'.repeat(64) })
+      expect((await service.load()).providers).toEqual([])
+    })
+  })
+
   it('保存后能读回，并按模型列表清理失效项', async () => {
     await withService(async (service) => {
       await service.saveProvider({

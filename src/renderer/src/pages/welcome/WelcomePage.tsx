@@ -1,12 +1,15 @@
 import { BookOpen, FolderOpen, FolderPlus, History } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrandMark } from '../../components/icons/BrandMark'
+import { AppVersion } from '../../components/layout/AppVersion'
+import { useWorkspaceUpgradeConfirmation } from '../../components/layout/WorkspaceUpgradeDialog'
 import { Button, Card, Field, Input } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { RecentWorkspaceList } from './RecentWorkspaceList'
 import { api } from '../../lib/api'
 import { useWorkspace } from '../../stores/workspaceStore'
-import { getPlatformApi, isWebPlatform } from '../../platform/platformApi'
+import { getPlatformApi, getPlatformUiSource, isWebPlatform } from '../../platform/platformApi'
+import { createWorkspaceUpgradeRetryOptions, openWorkspaceWithUpgrade } from '../../lib/workspaceUpgrade'
 import { readWorkspaceArchiveFile, WORKSPACE_ARCHIVE_ACCEPT } from '../../lib/workspaceArchiveFile'
 import type { WorkspaceImportTarget } from '../../../../shared/api'
 import type { WorkspaceListItem } from '../../../../shared/types'
@@ -83,12 +86,12 @@ export function shouldCloseWorkspacePicker(
 
 export async function openRecentWorkspaceThenRefresh(
   path: string,
-  openWorkspace: (path: string) => Promise<void>,
+  openWorkspace: (path: string) => Promise<void | boolean>,
   refreshRecent: () => void | Promise<void>,
   isCurrent: () => boolean = () => true
 ): Promise<void> {
   if (!isCurrent()) return
-  await openWorkspace(path)
+  if (await openWorkspace(path) === false) return
   if (!isCurrent()) return
   void Promise.resolve(refreshRecent()).catch(() => undefined)
 }
@@ -97,6 +100,7 @@ export function WelcomePage(): React.ReactElement {
   const open = useWorkspace((s) => s.open)
   const createAndOpen = useWorkspace((s) => s.createAndOpen)
   const error = useWorkspace((s) => s.error)
+  const { confirmUpgrade, cancelUpgrade, upgradeDialog } = useWorkspaceUpgradeConfirmation()
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState('')
   const [parentDir, setParentDir] = useState('')
@@ -115,6 +119,7 @@ export function WelcomePage(): React.ReactElement {
   const workspaceLoadingRequest = useRef<{ loadId: number; configKey: string } | null>(null)
   const workspaceRequestSequence = useRef(0)
   const workspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
+  const directWorkspaceRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
   const archiveInput = useRef<HTMLInputElement>(null)
   const isWeb = isWebPlatform()
   const [recentItems, setRecentItems] = useState<WorkspaceListItem[]>([])
@@ -138,6 +143,9 @@ export function WelcomePage(): React.ReactElement {
       workspaceLoadId.current += 1
       recentLoadId.current += 1
       recentOpeningRequestId.current += 1
+      const directRequestId = directWorkspaceRequest.current?.requestId
+      directWorkspaceRequest.current?.controller.abort()
+      if (directRequestId) void getPlatformApi().cancelWorkspaceRequest?.(directRequestId)?.catch(() => undefined)
       workspaceRequest.current?.controller.abort()
       const requestId = workspaceRequest.current?.requestId
       if (requestId) void getPlatformApi().cancelWorkspaceRequest?.(requestId)?.catch(() => undefined)
@@ -185,6 +193,12 @@ export function WelcomePage(): React.ReactElement {
 
   useEffect(() => {
     const request = recentWorkspaceRequest.current
+    cancelUpgrade()
+    const directRequest = directWorkspaceRequest.current
+    directRequest?.controller.abort()
+    if (directRequest) void getPlatformApi().cancelWorkspaceRequest?.(directRequest.requestId)?.catch(() => undefined)
+    directWorkspaceRequest.current = null
+    setBusy(false)
     request?.controller.abort()
     if (request) void getPlatformApi().cancelWorkspaceRequest?.(request.requestId)?.catch(() => undefined)
     recentWorkspaceRequest.current = null
@@ -197,7 +211,7 @@ export function WelcomePage(): React.ReactElement {
       setRecentLoading(false)
       setRecentError(null)
     }
-  }, [currentConfigKey])
+  }, [currentConfigKey, cancelUpgrade])
 
   const pickParent = async (): Promise<void> => {
     const dir = await api.pickFolder()
@@ -222,13 +236,26 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const doOpen = async (path: string): Promise<void> => {
+    const expectedConfigKey = currentConfigKey
+    const request = { requestId: `welcome-open-${Date.now().toString(36)}-${++workspaceRequestSequence.current}`, controller: new AbortController() }
+    directWorkspaceRequest.current = request
+    const isCurrent = (): boolean => mountedRef.current && directWorkspaceRequest.current === request && currentConfigKeyRef.current === expectedConfigKey
     setBusy(true)
     try {
-      await open(path)
+      await openWorkspaceWithUpgrade(path, (selectedPath, options) => open(selectedPath, isCurrent, options), {
+        options: { signal: request.controller.signal, requestId: request.requestId },
+        isCurrent,
+        confirmUpgrade: (selectedPath, signal) => { useWorkspace.setState({ error: null }); return confirmUpgrade(selectedPath, signal) },
+        createRetryOptions: () => {
+          const options = createWorkspaceUpgradeRetryOptions({ signal: request.controller.signal })
+          request.requestId = options.requestId!
+          return options
+        }
+      })
     } catch {
       /* 错误已写入 store，由界面展示 */
     } finally {
-      setBusy(false)
+      if (isCurrent()) { directWorkspaceRequest.current = null; setBusy(false) }
     }
   }
 
@@ -253,7 +280,19 @@ export function WelcomePage(): React.ReactElement {
     try {
       await openRecentWorkspaceThenRefresh(
         path,
-        (workspacePath) => open(workspacePath, requestGuard.isCurrent, { signal: request.controller.signal, requestId: request.requestId }),
+        async (workspacePath) => {
+          const result = await openWorkspaceWithUpgrade(workspacePath, (selectedPath, options) => open(selectedPath, requestGuard.isCurrent, options), {
+            options: { signal: request.controller.signal, requestId: request.requestId },
+            isCurrent: requestGuard.isCurrent,
+            confirmUpgrade: (selectedPath, signal) => { useWorkspace.setState({ error: null }); return confirmUpgrade(selectedPath, signal) },
+            createRetryOptions: () => {
+              const options = createWorkspaceUpgradeRetryOptions({ signal: request.controller.signal })
+              request.requestId = options.requestId!
+              return options
+            }
+          })
+          return result.status === 'opened'
+        },
         loadRecentWorkspaces,
         requestGuard.isCurrent
       )
@@ -284,6 +323,7 @@ export function WelcomePage(): React.ReactElement {
   }
 
   const resetWorkspacePicker = (): void => {
+    cancelUpgrade()
     const request = workspaceRequest.current
     request?.controller.abort()
     if (request) void getPlatformApi().cancelWorkspaceRequest?.(request.requestId)?.catch(() => undefined)
@@ -347,9 +387,19 @@ export function WelcomePage(): React.ReactElement {
       if (!requestGuard.isCurrent()) return
       const platform = getPlatformApi()
       if (!requestGuard.isCurrent()) return
-      const summary = options ? await platform.openWorkspaceByPath(path, options) : await platform.openWorkspaceByPath(path)
+      const result = await openWorkspaceWithUpgrade(path, (selectedPath, requestOptions) => platform.openWorkspaceByPath(selectedPath, requestOptions), {
+        options,
+        isCurrent: requestGuard.isCurrent,
+        confirmUpgrade: (selectedPath, signal) => { useWorkspace.setState({ error: null }); return confirmUpgrade(selectedPath, signal) },
+        createRetryOptions: () => {
+          const retryOptions = createWorkspaceUpgradeRetryOptions(options)
+          if (request) request.requestId = retryOptions.requestId!
+          return retryOptions
+        }
+      })
+      if (result.status === 'cancelled') return
       if (!requestGuard.isCurrent()) return
-      useWorkspace.setState({ status: 'ready', summary, error: null })
+      useWorkspace.setState({ status: 'ready', summary: result.value, uiSource: getPlatformUiSource(platform), error: null })
       closeWorkspacePicker()
     } catch (err) {
       if (requestGuard.isCurrent()) setWorkspacePickerFailure(err)
@@ -384,8 +434,17 @@ export function WelcomePage(): React.ReactElement {
         target = { parentDir, name: archiveName.trim() || undefined }
       }
       if (!isCurrent()) return
-      if (options) await useWorkspace.getState().importArchive(bytes, file.name, target, isCurrent, options)
-      else await useWorkspace.getState().importArchive(bytes, file.name, target, isCurrent)
+      const result = await openWorkspaceWithUpgrade(file.name, (_selectedFile, requestOptions) => useWorkspace.getState().importArchive(bytes, file.name, target, isCurrent, requestOptions), {
+        options,
+        isCurrent,
+        confirmUpgrade: (selectedFile, signal) => { useWorkspace.setState({ error: null }); return confirmUpgrade(selectedFile, signal) },
+        createRetryOptions: () => {
+          const retryOptions = createWorkspaceUpgradeRetryOptions(options)
+          if (request) request.requestId = retryOptions.requestId!
+          return retryOptions
+        }
+      })
+      if (result.status === 'cancelled') return
       if (!isCurrent()) return
       closeWorkspacePicker()
     } catch (err) {
@@ -448,20 +507,21 @@ export function WelcomePage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto bg-app p-4 sm:p-8">
-      <div className="w-full max-w-6xl">
+    <div className="flex h-full justify-center overflow-y-auto bg-app p-4 sm:p-8">
+      <div className="my-auto w-full max-w-6xl">
         <div className="mx-auto mb-6 flex min-w-0 max-w-5xl items-center justify-center gap-4 sm:mb-10 sm:gap-5">
           <BrandMark variant="flat" size={56} className="shrink-0 rounded-[14px] drop-shadow-lg shadow-accent/25 sm:h-16 sm:w-16" />
           <div className="min-w-0 max-w-3xl">
-            <div className="flex min-w-0 items-baseline gap-3">
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="truncate text-2xl font-bold tracking-wide sm:text-3xl">织章</h1>
               <p className="truncate text-xs font-medium tracking-[0.16em] text-muted sm:text-sm sm:tracking-[0.2em]">STORYFABRIC</p>
+              <AppVersion />
             </div>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">依托智能体的小说创作工作台 —— 人物、关系、大纲、事件脉络与正文，一个工作区全部搞定</p>
           </div>
         </div>
 
-        <Card className="grid min-w-0 gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:p-6">
+        <Card className="min-w-0 space-y-6 p-5 lg:p-6">
           <div className="min-w-0">
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button variant="primary" className="flex-1 justify-center" onClick={() => void openWorkspacePicker()} loading={busy || workspaceLoading}>
@@ -475,7 +535,7 @@ export function WelcomePage(): React.ReactElement {
             {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
           </div>
-          <div className="min-w-0 border-t border-line pt-6 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+          <div className="min-w-0 border-t border-line pt-6">
             <RecentWorkspaceList
               items={recentItemsConfigKey === currentConfigKey ? recentItems : []}
               loading={recentItemsConfigKey === currentConfigKey ? recentLoading : false}
@@ -584,6 +644,7 @@ export function WelcomePage(): React.ReactElement {
           </div>
         </div>
       </Modal>
+      {upgradeDialog}
     </div>
   )
 }

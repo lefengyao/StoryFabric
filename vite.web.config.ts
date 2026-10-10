@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { vendorManualChunks } from './vite.chunking'
 
 export default defineConfig({
+  worker: { format: 'es' },
   root: resolve(__dirname, 'src/renderer'),
   plugins: [react(), tailwindcss()],
   resolve: {

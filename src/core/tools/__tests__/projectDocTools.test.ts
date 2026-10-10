@@ -2,8 +2,40 @@ import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
 import { executeProjectDocTool } from '../projectDocTools'
 import { contentRevision } from '../../workspace/resourceRevision'
+import { epubFixture } from '../../../shared/__tests__/fixtures/documentFixtures'
 
 describe('project docs tools', () => {
+  it('lists EPUB format and reads paginated book text with a binary rename revision', async () => {
+    const store = new MemoryFileStore()
+    const bytes = await epubFixture()
+    await store.writeBytes('docs/nested/book.epub', bytes)
+    const list = await executeProjectDocTool(store, 'list_project_docs', {})
+    if (list.kind !== 'result') throw new Error('expected list')
+    expect(JSON.parse(list.text).files).toContainEqual({ path: 'nested/book.epub', format: 'epub', size: bytes.byteLength, readable: true })
+    const read = await executeProjectDocTool(store, 'read_project_doc', { path: 'nested/book.epub', maxChars: 3 })
+    if (read.kind !== 'result') throw new Error('expected read')
+    const page = JSON.parse(read.text)
+    expect(page).toMatchObject({ content: '第一章', truncated: true, nextOffset: 3 })
+    expect(page.fileRevision).not.toBe(page.writeRevision)
+    const next = await executeProjectDocTool(store, 'read_project_doc', { path: 'nested/book.epub', offset: page.nextOffset })
+    if (next.kind !== 'result') throw new Error('expected read')
+    expect(JSON.parse(next.text).content).toContain('第二章')
+    const rename = await executeProjectDocTool(store, 'rename_project_doc', { fromPath: 'nested/book.epub', toPath: 'book.epub', baseRevision: page.fileRevision })
+    if (rename.kind !== 'pending') throw new Error('expected pending')
+    expect((await rename.apply()).ok).toBe(true)
+    expect(await store.readBytes('docs/book.epub')).toEqual(bytes)
+  })
+
+  it('cannot save text over or create a binary document', async () => {
+    const store = new MemoryFileStore()
+    const bytes = await epubFixture()
+    await store.writeBytes('docs/book.epub', bytes)
+    for (const path of ['book.epub', 'new.epub', 'new.pdf', 'new.docx']) {
+      await expect(executeProjectDocTool(store, 'save_project_doc', { path, content: 'replacement' })).rejects.toThrow(/纯文本/)
+    }
+    expect(await store.readBytes('docs/book.epub')).toEqual(bytes)
+  })
+
   it('lists, reads and only writes after confirmation', async () => {
     const store = new MemoryFileStore()
     await store.ensureDir('docs')

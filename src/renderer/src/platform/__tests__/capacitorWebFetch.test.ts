@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { createCapacitorWebFetch } from '../capacitorWebFetch'
 
 describe('Capacitor web search transport', () => {
+  it('supports bodyless HEAD responses when checking an update package', async () => {
+    const request = vi.fn(async () => ({ status: 204, data: '', headers: {}, url: 'https://example.org/app.apk' }))
+    const response = await createCapacitorWebFetch(request as never)('https://example.org/app.apk', { method: 'HEAD' })
+    expect(response.status).toBe(204)
+    expect(response.body).toBeNull()
+  })
   it('passes JSON-RPC requests to native HTTP and returns a Fetch response', async () => {
     const request = vi.fn(async (_options: unknown) => ({ status: 200, data: '{"ok":true}', headers: { 'content-type': 'application/json' }, url: 'https://api.example/mcp' }))
     const fetcher = createCapacitorWebFetch(request as never)

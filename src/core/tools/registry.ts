@@ -3,10 +3,11 @@ import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, 
 import type { FileStore } from '../storage/fileStore'
 import { getChapterContext, invalidateProjectIndex, lookupTerm, readChapterSlice, readOutlineSlice, searchProjectPage } from '../retrieval'
 import { listTrash, restoreFromTrash } from '../workspace/trash'
-import { listVolumes, moveChapter, saveVolume } from '../workspace/workspaceService'
+import { listVolumes, saveVolume } from '../workspace/workspaceService'
 import { validateAgentChapterEdit, validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from './writeValidation'
-import { AGENT_CHAPTER_EDIT_SCHEMA, AGENT_CHAPTER_SCHEMA, AGENT_CHARACTER_SCHEMA, AGENT_EVENT_SCHEMA, AGENT_NOTE_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA, AGENT_RELATIONSHIP_SCHEMA, AGENT_SETTING_SCHEMA } from './writeSchemas'
+import { AGENT_CHAPTER_EDIT_SCHEMA, AGENT_CHAPTER_SCHEMA, AGENT_CHARACTER_SCHEMA, AGENT_EVENT_SCHEMA, AGENT_NOTE_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA, AGENT_RELATIONSHIP_SCHEMA, AGENT_SETTING_SCHEMA, DOCUMENT_READ_BASELINE_SCHEMA } from './writeSchemas'
 import { executeProjectDocTool, PROJECT_DOC_TOOL_DEFS } from './projectDocTools'
+import { executeDocumentTool, DOCUMENT_TOOL_DEFS } from './documentTools'
 import { CONTENT_EDIT_TOOL_DEFS, executeContentEditTool } from './contentEditTools'
 import { executeDeleteEntityTool } from './deleteEntityTool'
 import { parseToolArguments, validateToolArguments } from './toolArguments'
@@ -17,10 +18,15 @@ import { commitTextChanges } from '../workspace/mutationJournal'
 import { webSearch } from '../search/webSearchService'
 import { webExtract } from '../search/webExtractService'
 import { resolveChapterPlacement } from '../../shared/chapterPlacement'
+import type { AgentChangeDecision } from '../../shared/api'
+import { parseFrontMatter } from '../workspace/frontMatter'
+import { getDocumentSnapshot, readCurrentDocument, saveDocument } from '../workspace/documentWrites'
+import { DOCUMENT_HISTORY_TOOL_DEFS, executeDocumentHistoryTool } from './documentHistoryTools'
+import { assertDocumentReadSourceUnchanged, checkDocumentReadRevision, rememberDocumentReadRevision } from '../retrieval/documentReadRevision'
 
 export type ToolOutcome =
   | { kind: 'result'; text: string; ok: boolean; preview: string }
-  | { kind: 'pending'; change: PendingChange; apply: () => Promise<{ ok: boolean; text: string }> }
+  | { kind: 'pending'; change: PendingChange; apply: (decision?: AgentChangeDecision) => Promise<{ ok: boolean; text: string }> }
 
 const clip = (text: string, max = 120): string => (text.length > max ? `${text.slice(0, max)}…` : text)
 const json = (v: unknown): string => JSON.stringify(v)
@@ -77,16 +83,18 @@ export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'save_outline_doc', description: '新建或更新大纲；必须显式指定 kind：total=总纲，chapter=章纲。章纲可暂不关联章节，之后用 chapterId 关联；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { doc: AGENT_OUTLINE_DOC_SCHEMA }, required: ['doc'] } },
   { name: 'save_chapter', description: '新建章节或更新章节结构化字段；必须显式指定 box，且 draft/revised 状态只能在草稿箱 draft，body/final 状态只能在正文箱 main；正文箱还必须指定 volumeId。已有章节禁止通过 content 或 replaceAll 整章覆盖：局部修改用 edit_chapter，末尾续写用 append_chapter。新章节可直接提交完整 content。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
   { name: 'edit_chapter', description: '按唯一片段或精确行范围对章节做局部删改；每次最多修改 12000 字符且不超过章节正文的 25%，整章或大范围覆盖会被工具拒绝；replacement 为空时删除指定行；必须提供 baseRevision，避免整章覆盖。需要用户确认。', parameters: AGENT_CHAPTER_EDIT_SCHEMA },
-  { name: 'append_chapter', description: '续写已有章节时只提交新增正文，不要重新生成或传回原有章节。必须先读取章节取得 baseRevision；在末尾追加并保持已有内容不变。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string', minLength: 1 }, baseRevision: { type: 'string', minLength: 1, description: '来自 get_chapter 或 search_project 的 writeRevision' }, appendText: { type: 'string', minLength: 1, maxLength: 30000, description: '仅新增的正文，不包含已有章节内容' } }, required: ['chapterId', 'baseRevision', 'appendText'] } },
+  { name: 'append_chapter', description: '续写已有章节时只提交新增正文，不要重新生成或传回原有章节。必须先读取章节取得 baseRevision 和 baseReadRevision；在末尾追加并保持已有内容不变。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string', minLength: 1 }, baseRevision: { type: 'string', minLength: 1, description: '来自 get_chapter 或 search_project 的 writeRevision' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA, appendText: { type: 'string', minLength: 1, maxLength: 30000, description: '仅新增的正文，不包含已有章节内容' } }, required: ['chapterId', 'baseRevision', 'appendText'] } },
   { name: 'save_setting', description: '新建或更新设定。title、summary、content 是设定节点的标题、简述、详情；tagDetails 给每个标签保存简述和详情。tags 与 tagParents 构成多级树，parentId 连接父设定。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { setting: AGENT_SETTING_SCHEMA }, required: ['setting'] } },
   { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { note: AGENT_NOTE_SCHEMA }, required: ['note'] } },
   { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { noteId: { type: 'string', description: '要删除的便签 id' }, baseRevision: { type: 'string' } }, required: ['noteId'] } }
-  ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷，并自动将不兼容状态改为草稿或正文；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['chapterId', 'box'] } }
+  ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷，并自动将不兼容状态改为草稿或正文；读取后传 baseRevision 和 baseReadRevision，需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' }, baseRevision: { type: 'string' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；旧事件无连接快照时必须提供 placement；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, baseRevision: { type: 'string' }, placement: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['mainline-tail', 'after'] }, previousId: { type: 'string' }, branchFromId: { type: 'string' } }, required: ['kind'] } }, required: ['id'] } }
   ,{ name: 'delete_event', description: '删除一条事件；必须先由用户明确同意；只会生成待确认变更，确认后将事件移入回收站并自动修复主线或分支连接。', parameters: { type: 'object', additionalProperties: false, properties: { eventId: { type: 'string', description: '要删除的事件 id' }, baseRevision: { type: 'string' } }, required: ['eventId'] } }
-  ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['kind', 'id'] } }
+  ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。章节/大纲读取后传 baseRevision 和 baseReadRevision。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' }, baseRevision: { type: 'string' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA }, required: ['kind', 'id'] } }
   ,...PROJECT_DOC_TOOL_DEFS
+  ,...DOCUMENT_TOOL_DEFS
   ,...CONTENT_EDIT_TOOL_DEFS
+  ,...DOCUMENT_HISTORY_TOOL_DEFS
 ]
 
 const TOOL_DEF_BY_NAME = new Map(TOOL_DEFS.map((definition) => [definition.name, definition]))
@@ -99,7 +107,9 @@ async function readTool(store: FileStore, name: string, a: Record<string, any>):
   switch (name) {
     case 'list_characters': return ok(json((await listCharacters(store)).map(({ id, name, aliases, role, faction, tags, summary }) => ({ id, name, aliases, role, faction, tags, summary }))))
     case 'get_character': { const c = await findCharacter(store, { id: a.characterId, name: a.name }); return c ? ok(json({ ...c, writeRevision: contentRevision(serializeCharacter(c)), revision: contentRevision(serializeCharacter(c)) })) : fail(`未找到人物：${a.name ?? a.characterId}`) }
-    case 'search_project': return a.query ? ok(json(await searchProjectPage(store, {
+    case 'search_project': {
+      if (!a.query) return fail('query 不能为空')
+      const result = await searchProjectPage(store, {
       query: String(a.query),
       kinds: Array.isArray(a.kinds) ? a.kinds as import('../retrieval/projectCorpus').CorpusKind[] : undefined,
       // Project docs are the user's temporary reference shelf. Include them by
@@ -108,8 +118,16 @@ async function readTool(store: FileStore, name: string, a: Record<string, any>):
       caseSensitive: Boolean(a.caseSensitive),
       limit: typeof a.limit === 'number' ? a.limit : undefined,
       cursor: typeof a.cursor === 'string' ? a.cursor : undefined
-    }))) : fail('query 不能为空')
-    case 'get_outline': return ok(json((await listOutline(store)).filter((doc) => (doc.kind ?? 'total') === 'total').map((doc) => ({ id: doc.id, title: doc.title, order: doc.order, summary: clip(doc.content, 400), writeRevision: contentRevision(serializeOutlineDoc(doc)), revision: contentRevision(serializeOutlineDoc(doc)) }))))
+      })
+      for (const hit of result.hits) if ((hit.kind === 'chapter' || hit.kind === 'outline') && hit.readRevision) rememberDocumentReadRevision(store, hit.kind, hit.id, hit.writeRevision, hit.readRevision)
+      return ok(json(result))
+    }
+    case 'get_outline': return ok(json(await Promise.all((await listOutline(store)).filter((doc) => (doc.kind ?? 'total') === 'total').map(async (listed) => {
+      const snapshot = await getDocumentSnapshot(store, 'outline', listed.id)
+      const doc = snapshot.document
+      const { readRevision } = checkDocumentReadRevision(store, 'outline', doc.id, snapshot.sourceText, snapshot.writeRevision)
+      return { id: doc.id, title: doc.title, order: doc.order, summary: clip(doc.content, 400), writeRevision: snapshot.writeRevision, readRevision, revision: readRevision }
+    }))))
     case 'get_outline_doc': return ok(json(await readOutlineSlice(store, { outlineId: String(a.outlineId) }, {
       offset: typeof a.offset === 'number' ? a.offset : undefined,
       maxChars: typeof a.maxChars === 'number' ? a.maxChars : undefined,
@@ -167,6 +185,7 @@ function requireBaseRevision(id: string | undefined, value: unknown, label: stri
 function cleanRevision<T extends Record<string, any>>(value: T): T {
   const next = { ...value }
   delete next.baseRevision
+  delete next.baseReadRevision
   return next
 }
 
@@ -242,6 +261,7 @@ function kindOfTool(name: string): EntityKind | 'relationship' {
 
 async function writeTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   let sim: Simulated
+  let sourcePath: string | undefined
   if (name === 'create_volume') {
     const title = String(a.title ?? '').trim()
     if (!title) throw new Error('分卷标题不能为空')
@@ -345,10 +365,12 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const patch = a.doc as Partial<OutlineDoc> & { id?: string; baseRevision?: string }
     validateAgentOutlineWrite(patch)
     const all = await listOutline(store)
-    const old = patch.id ? all.find((outline) => outline.id === patch.id) : null
-    if (patch.id && !old) throw new Error(`未找到大纲：${patch.id}。请重新读取后再更新。`)
+    const listed = patch.id ? all.find((outline) => outline.id === patch.id) : null
+    if (patch.id && !listed) throw new Error(`未找到大纲：${patch.id}。请重新读取后再更新。`)
+    const snapshot = listed ? await getDocumentSnapshot(store, 'outline', listed.id) : undefined
+    const old = snapshot?.document ?? null
     const baseRevision = requireBaseRevision(patch.id, patch.baseRevision, '大纲')
-    const beforeText = old ? serializeOutlineDoc(old) : ''
+    const beforeText = snapshot?.sourceText ?? ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('大纲版本已变化，请重新读取')
     if (patch.kind === 'chapter' && patch.chapterId?.trim() && !(await listChapters(store)).some((chapter) => chapter.id === patch.chapterId)) throw new Error(`未找到章纲关联的章节：${patch.chapterId}`)
     const clean = cleanRevision(patch)
@@ -378,11 +400,13 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     if (patch.box === 'main' && !(await listVolumes(store)).some((volume) => volume.id === patch.volumeId)) throw new Error(`未找到目标卷：${patch.volumeId}`)
     const storedChapters = await loadChapterDocuments(store)
     const stored = patch.id ? storedChapters.find((chapter) => chapter.doc.id === patch.id) : null
+    if (stored) sourcePath = `chapters/${stored.fileName}`
     if (patch.id && !stored) throw new Error(`未找到章节：${patch.id}。请重新读取后再更新。`)
     const metas = storedChapters.map(({ doc: { content: _content, ...meta } }) => meta)
-    const old = stored?.doc ?? null
+    const snapshot = stored ? await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath) : undefined
+    const old = snapshot?.document ?? null
     const baseRevision = requireBaseRevision(patch.id, patch.baseRevision, '章节')
-    const beforeText = old ? serializeChapter(old) : ''
+    const beforeText = snapshot?.sourceText ?? ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('章节版本已变化，请重新读取')
     const clean = cleanRevision(patch)
     const hasContent = Object.prototype.hasOwnProperty.call(clean, 'content')
@@ -430,8 +454,10 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const edit = a as { chapterId: string; baseRevision: string; expectedText?: string; lineStart?: number; lineEnd?: number; replacement: string }
     const stored = (await loadChapterDocuments(store)).find((item) => item.doc.id === edit.chapterId)
     if (!stored) throw new Error(`未找到章节：${edit.chapterId}。请重新读取后再编辑。`)
-    const old = stored.doc
-    const beforeText = serializeChapter(old)
+    sourcePath = `chapters/${stored.fileName}`
+    const snapshot = await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath)
+    const old = snapshot.document
+    const beforeText = snapshot.sourceText
     if (contentRevision(beforeText) !== edit.baseRevision) throw new Error('章节版本已变化，请重新读取后再编辑')
     const located = locateChapterEdit(old.content, edit)
     const after = { ...old, content: located.content, wordCount: countWords(located.content) }
@@ -463,14 +489,16 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const input = a as { chapterId: string; baseRevision: string; appendText: string }
     const stored = (await loadChapterDocuments(store)).find((item) => item.doc.id === input.chapterId)
     if (!stored) throw new Error(`未找到章节：${input.chapterId}。请重新读取后再续写。`)
-    const beforeText = serializeChapter(stored.doc)
+    sourcePath = `chapters/${stored.fileName}`
+    const snapshot = await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath)
+    const beforeText = snapshot.sourceText
     if (contentRevision(beforeText) !== input.baseRevision) throw new Error('章节版本已变化，请重新读取后再续写')
-    const content = appendChapterContent(stored.doc.content, input.appendText)
-    const after = { ...stored.doc, content, wordCount: countWords(content) }
+    const content = appendChapterContent(snapshot.document.content, input.appendText)
+    const after = { ...snapshot.document, content, wordCount: countWords(content) }
     sim = {
       entityId: stored.doc.id,
       entityKind: 'chapter',
-      title: `续写章节：${stored.doc.title}`,
+      title: `续写章节：${snapshot.document.title}`,
       beforeText,
       afterText: serializeChapter(after),
       commit: () => coordinatorFor(store).run(`chapter:${stored.doc.id}`, async () => {
@@ -584,29 +612,18 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const current = (await listChapters(store)).find((chapter) => chapter.id === chapterId); if (!current) throw new Error(`未找到章节：${chapterId}`)
     const target = { box, ...(a.volumeId ? { volumeId: String(a.volumeId) } : {}) } as { box: 'draft' | 'main'; volumeId?: string }
     if (target.box === 'main' && target.volumeId && !(await listVolumes(store)).some((volume) => volume.id === target.volumeId)) throw new Error(`未找到目标卷：${target.volumeId}`)
-    const currentWithBody = { ...current, content: (await getChapterBody(store, chapterId)) ?? '' }
-    const beforeText = serializeChapter(currentWithBody)
+    const snapshot = await getDocumentSnapshot(store, 'chapter', chapterId)
+    const beforeText = snapshot.sourceText
     if (typeof a.baseRevision === 'string' && contentRevision(beforeText) !== a.baseRevision) throw new Error('章节版本已变化，请重新读取')
     sim = {
       entityId: chapterId,
-      title: `移动章节：${current.title}`,
+      title: `移动章节：${snapshot.document.title}`,
       beforeText,
-      afterText: JSON.stringify({ ...current, ...target, ...resolveChapterPlacement(current, { box: target.box }) }, null, 2),
-      commit: () => applyUnchanged(
-        store,
-        `chapter:${chapterId}`,
-        '章节',
-        beforeText,
-        async () => {
-          const latestMeta = (await listChapters(store)).find((chapter) => chapter.id === chapterId)
-          const latest = latestMeta ? { ...latestMeta, content: (await getChapterBody(store, chapterId)) ?? '' } : null
-          return latest ? serializeChapter(latest) : null
-        },
-        async () => {
-          await moveChapter(store, chapterId, target)
-          return `已移动章节「${current.title}」`
-        }
-      )
+      afterText: serializeChapter({ ...snapshot.document, ...target, ...resolveChapterPlacement(snapshot.document, { box: target.box }) }),
+      commit: async () => {
+        await saveDocument(store, 'chapter', { id: chapterId, ...target, ...resolveChapterPlacement(snapshot.document, { box: target.box }) }, { baseRevision: snapshot.writeRevision, baseText: beforeText })
+        return { ok: true, text: `已移动章节「${current.title}」` }
+      }
     }
   } else if (name === 'restore_from_trash') {
     const id = String(a.id ?? ''); const entry = (await listTrash(store)).find((item) => item.id === id); if (!entry) throw new Error(`回收站中未找到实体：${id}`)
@@ -661,6 +678,26 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     }
   }
   const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: sim.entityKind ?? kindOfTool(name), entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
+  if (['save_chapter', 'edit_chapter', 'append_chapter', 'save_outline_doc', 'move_chapter'].includes(name)) {
+    const readOptions = name === 'save_chapter' ? a.chapter : name === 'save_outline_doc' ? a.doc : a
+    if (change.beforeText) assertDocumentReadSourceUnchanged(store, change.entityKind, change.entityId, change.beforeText, contentRevision(change.beforeText), readOptions.baseReadRevision)
+    change.historyEligible = true
+    return { kind: 'pending', change, apply: async (decision) => {
+      if (typeof decision?.saveHistory !== 'boolean') throw new Error('请选择是否保存为长期历史版本')
+      const parsed = parseFrontMatter(change.afterText)
+      const documentKind = change.entityKind === 'chapter' ? 'chapter' : 'outline'
+      try {
+      const saved = await saveDocument(store, documentKind, { ...parsed.data, id: change.entityId, content: parsed.content.replace(/^\n+/, '') }, {
+        sourcePath,
+        ...(change.beforeText ? { baseRevision: contentRevision(change.beforeText), baseText: change.beforeText } : {}),
+        ...(decision.saveHistory ? { history: { source: 'agent' as const } } : {})
+      })
+      return { ok: true, text: `已保存${documentKind === 'chapter' ? '章节' : '大纲'}「${saved.title}」${decision.saveHistory ? '并保存为新版本' : ''}` }
+      } catch (error) {
+        return { ok: false, text: `提交失败，请重新读取：${error instanceof Error ? error.message : String(error)}` }
+      }
+    } }
+  }
   return { kind: 'pending', change, apply: sim.commit }
 }
 
@@ -677,7 +714,9 @@ export async function executeTool(store: FileStore, name: string, argsJson: stri
         : outcome
     }
     if (name === 'delete_entity') return await executeDeleteEntityTool(store, args)
+    if (DOCUMENT_HISTORY_TOOL_DEFS.some((def) => def.name === name)) return await executeDocumentHistoryTool(store, name, args)
     if (name === 'read_content_lines' || name === 'edit_content') return await executeContentEditTool(store, name, args)
+    if (DOCUMENT_TOOL_DEFS.some((def) => def.name === name)) return await executeDocumentTool(store, name, args)
     if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc' || name === 'rename_project_doc') return await executeProjectDocTool(store, name, args)
     return WRITE_TOOLS.has(name) ? await writeTool(store, name, args) : await readTool(store, name, args)
   } catch (err) {

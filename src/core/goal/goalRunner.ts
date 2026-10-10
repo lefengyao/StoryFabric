@@ -1,9 +1,10 @@
+import { cloneValue } from '../../shared/runtimeCompatibility'
 import type { GoalRun, GoalTask } from '../../shared/types'
 import { topologicalGoalTasks } from './goalPlanner'
 import type { GoalRunnerDeps } from './goalTypes'
 
 function cloneGoal(goal: GoalRun): GoalRun {
-  return structuredClone(goal)
+  return cloneValue(goal)
 }
 
 function isAbortError(error: unknown): boolean {
@@ -75,7 +76,7 @@ export class GoalRunner {
       }
       next.status = 'running'
       next.attempts += 1
-      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: structuredClone(next) })
+      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: cloneValue(next) })
       await this.deps.save(goal)
       let execution
       try {
@@ -84,7 +85,7 @@ export class GoalRunner {
         if (isAbortError(error) || signal.aborted || this.stopped) throw error
         next.status = next.attempts >= 2 ? 'failed' : 'pending'
         next.validationReason = error instanceof Error ? error.message : '任务执行失败'
-        this.deps.emit({ type: 'goal-task', goalId: goal.id, task: structuredClone(next) })
+        this.deps.emit({ type: 'goal-task', goalId: goal.id, task: cloneValue(next) })
         await this.deps.save(goal)
         if (next.status === 'failed') {
           goal.status = 'needs-attention'
@@ -97,7 +98,7 @@ export class GoalRunner {
       next.resultSummary = execution.summary
       next.status = 'validating'
       goal.status = 'validating'
-      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: structuredClone(next) })
+      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: cloneValue(next) })
       await this.deps.save(goal)
       const validation = await this.deps.validate(goal, next, signal)
       this.deps.emit({ type: 'goal-validation', goalId: goal.id, taskId: next.id, validation })
@@ -114,7 +115,7 @@ export class GoalRunner {
         goal.needsAttentionReason = `${next.title}：${validation.reason}`
       }
       if (goal.status === 'validating') goal.status = 'running'
-      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: structuredClone(next) })
+      this.deps.emit({ type: 'goal-task', goalId: goal.id, task: cloneValue(next) })
       await this.deps.save(goal)
       if (goal.status === 'needs-attention') return
     }

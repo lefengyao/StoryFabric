@@ -34,6 +34,7 @@ import { buildEventGraph, eventNextId } from '../../../../core/workspace/eventGr
 import type { StoryEvent } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
 import { layoutEventGraph } from './eventLayout'
+import { EventImageExport } from '../../features/imageExport/GraphImageExport'
 
 interface EventNodeData extends Record<string, unknown> {
   title: string
@@ -326,6 +327,15 @@ export function EventsPage(): React.ReactElement {
           </div>
           <Button size="sm" variant="ghost" onClick={() => void flow?.zoomOut()} title="缩小"><ZoomOut size={13} /></Button>
           <Button size="sm" variant="ghost" onClick={() => void flow?.zoomIn()} title="放大"><ZoomIn size={13} /></Button>
+          <EventImageExport events={events} volumes={volumes} workspaceName={summary?.name ?? ''} beforeExport={async () => {
+            const edited = editing && { ...editing, tags: splitDelimitedText(tagsText) }
+            if (edited && (isNew || JSON.stringify(edited) !== JSON.stringify(events.find((event) => event.id === edited.id)))) {
+              if (!window.confirm('当前事件有未保存修改。保存后选择导出范围？取消将保留编辑内容。')) return false
+              if (!edited.title.trim()) throw new Error('请先填写事件标题')
+              await save()
+            }
+            return true
+          }} />
           <Button data-android-inspector-return="events" size="sm" variant="primary" onClick={startNew}><Plus size={13} /> 新增事件</Button>
         </div>
 

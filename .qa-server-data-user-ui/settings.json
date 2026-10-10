@@ -1,0 +1,55 @@
+{
+  "updatePreferences": {
+    "automatic": true,
+    "sources": [
+      "https://storyfabric.fengyao.xin:10048/download",
+      "https://github.com/lefengyao/StoryFabric"
+    ]
+  },
+  "providers": [],
+  "trailblazerProvider": {
+    "models": [],
+    "modelSettings": {}
+  },
+  "orchestrationDefaults": {
+    "mode": "multi",
+    "enabled": false,
+    "subagentsEnabled": false,
+    "enabledStageIds": [
+      "plan",
+      "setting",
+      "prompt",
+      "anti-ai",
+      "write",
+      "polish",
+      "review"
+    ],
+    "modelByStage": {},
+    "maxCalls": 24,
+    "maxEstimatedTokens": 300000
+  },
+  "agentGeneration": {
+    "agentTemperature": 70,
+    "proseAlternativesEnabled": false,
+    "maxToolRounds": 100
+  },
+  "theme": "system",
+  "recentWorkspaces": [
+    "ws_23a542131397"
+  ],
+  "recentWorkspaceOpenedAt": {
+    "ws_23a542131397": "2026-10-05T03:32:29.237Z"
+  },
+  "customPrompt": "",
+  "showSessionLength": false,
+  "completionSound": false,
+  "accentColorLight": "#6366f1",
+  "accentColorDark": "#818cf8",
+  "editorFontSize": 14,
+  "editorLineHeight": 1.75,
+  "editorFontFamily": "sans",
+  "autosaveSeconds": 0,
+  "sendShortcut": "enter",
+  "chatDensity": "comfortable",
+  "chatFontSize": 14
+}

@@ -71,28 +71,15 @@ public class DocumentTreePlugin extends Plugin {
         throw new IOException("外部目录授权已失效，请重新选择项目文件夹");
     }
 
-    private List<String> segments(String path, boolean root) throws IOException {
-        if (path == null) throw new IOException("路径不能为空");
-        if (path.startsWith("/") || path.startsWith("\\") || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0) throw new IOException("无效的工作区相对路径");
-        List<String> parts = new ArrayList<>();
-        if (!root && path.isEmpty()) throw new IOException("路径不能为空");
-        for (String part : path.split("/", -1)) {
-            if (part.isEmpty()) {
-                if (!path.isEmpty()) throw new IOException("无效的工作区相对路径");
-                continue;
-            }
-            if (part.equals(".") || part.equals("..")) throw new IOException("禁止访问工作区外的路径");
-            parts.add(part);
-        }
-        if (root && parts.size() > 1) throw new IOException("工作区根目录只能有一层");
-        return parts;
+    private List<String> segments(String path, boolean allowEmpty) throws IOException {
+        return DocumentTreePath.segments(path, allowEmpty, false);
     }
 
     private DocumentFile resolve(PluginCall call, String path, boolean createDirectories) throws IOException {
         Uri uri = authorizedTree(call);
         DocumentFile current = DocumentFile.fromTreeUri(getContext(), uri);
         if (current == null || !current.isDirectory()) throw new IOException("外部目录不可访问");
-        List<String> all = new ArrayList<>(segments(call.getString("root", ""), true));
+        List<String> all = new ArrayList<>(DocumentTreePath.segments(call.getString("root", ""), true, true));
         all.addAll(segments(path, true));
         for (int index = 0; index < all.size(); index++) {
             String part = all.get(index);

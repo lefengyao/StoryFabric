@@ -8,6 +8,8 @@ import { listTrash } from '../../workspace/trash'
 import { CoreSessionStore } from '../../workspace/sessionStore'
 import { CoreAgentService } from '../agentLoop'
 import { searchProjectPage } from '../../retrieval/projectIndex'
+import { SourceCatalog } from '../../inspiration/sourceCatalog'
+import { documentReference } from '../../inspiration/documentReference'
 
 const providerId = 'prov_openai'
 
@@ -72,6 +74,29 @@ async function loadSession(store: MemoryFileStore, sessionId: string): Promise<C
 }
 
 describe('CoreAgentService', () => {
+  it('lets the inspiration agent retrieve the end of an indexed long attachment through read-only tools', async () => {
+    const store = await createStore()
+    const catalog = new SourceCatalog(store)
+    const source = await catalog.importBytes({ name: 'long.txt', bytes: new TextEncoder().encode(`第一章\n${'甲'.repeat(510_000)}\n第二章\n末尾线索`) })
+    const indexed = await catalog.extract(source.id)
+    const document = await catalog.document(source.id)
+    const section = document.sections.at(-1)!
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [
+      call('dir', 'list_document_sections', { sourceId: source.id, limit: 2 }),
+      call('search', 'search_document', { sourceId: source.id, query: '末尾线索', revision: document.revision }),
+      call('read', 'read_document_section', { sourceId: source.id, sectionId: section.id, revision: document.revision }),
+      text('已读取第二章中的末尾线索。')
+    ], events)
+    await service.run({ mode: 'inspiration', message: documentReference(indexed), providerId, model: 'mock-model' })
+    expect(requests[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['list_document_sections', 'search_document', 'read_document_section']))
+    expect(requests[0].tools.some((tool) => tool.name === 'save_project_doc')).toBe(false)
+    const messages = JSON.stringify(requests.at(-1)?.messages)
+    expect(messages).toContain('末尾线索')
+    expect(messages).not.toContain('甲'.repeat(10_000))
+    expect(events.some((event) => event.type === 'error')).toBe(false)
+  })
+
   it('only exposes and executes bundled webpage extraction when the selected search mode allows it', async () => {
     const store = await createStore()
     const events: AgentEvent[] = []

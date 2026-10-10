@@ -121,17 +121,19 @@ describe('writing structure', () => {
     expect(await store.readText(`.storyfabric/trash/chapter/${chapter.id}.md`)).toBeNull()
   })
 
-  it('reads legacy flat chapter metadata with v2 defaults', async () => {
+  it('preserves legacy flat chapter metadata when initialization requires format-5 rewriting', async () => {
     const store = new MemoryFileStore()
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 1, name: '旧项目' }))
     await store.writeText('chapters/0001-开端.md', stringifyFrontMatter('正文', { id: 'cha_1', title: '开端', order: 1, volume: '第一卷' }))
-    await initializeWorkspace(store, '旧项目')
+    await expect(initializeWorkspace(store, '旧项目')).rejects.toThrow('格式 5')
     const chapter = (await listChapters(store))[0]
     expect(chapter.box).toBe('main')
     expect(chapter.volumeId).toBe('vol_default')
+    expect(await store.readText('chapters/0001-开端.md')).toContain('正文')
+    expect(await store.exists('chapters/main')).toBe(false)
   })
 
-  it('migrates legacy events into the first workspace volume', async () => {
+  it('preserves legacy event files when initialization requires format-5 rewriting', async () => {
     const store = new MemoryFileStore()
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '旧事件项目' }))
     await store.writeText('chapters/volumes.json', JSON.stringify([{ id: 'vol_two', title: '第二卷', order: 2 }]))
@@ -143,11 +145,13 @@ describe('writing structure', () => {
       nextIds: []
     }))
 
-    await initializeWorkspace(store, '旧事件项目')
+    const original = await store.readText('events/旧事件.md')
+    await expect(initializeWorkspace(store, '旧事件项目')).rejects.toThrow('格式 5')
 
     const migrated = (await listEvents(store))[0]
-    expect(migrated.volumeId).toBe('vol_two')
+    expect(migrated.volumeId).toBe('vol_default')
     expect(migrated.branchIds).toEqual([])
+    expect(await store.readText('events/旧事件.md')).toBe(original)
   })
 
   it('persists a new primary character under the primary tier', async () => {

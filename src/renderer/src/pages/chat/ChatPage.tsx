@@ -1,3 +1,4 @@
+import { useChatScroll } from "../../lib/useChatScroll"
 import {
   Archive,
   ArchiveRestore,
@@ -20,43 +21,43 @@ import {
   Waypoints,
   X
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentMode, ApprovalPolicy, Attachment, ChatDensity, ChatMessage, MessageFile, ReasoningPreference, RunAgentRequest, SessionMeta } from '../../../../shared/types'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
+import type { AgentMode, ApprovalPolicy, Attachment, ChatDensity, ChatMessage, MessageFile, OrchestrationRunRecord, ReasoningPreference, RunAgentRequest, SessionMeta } from '../../../../shared/types'
 import { Markdown } from '../../components/markdown/Markdown'
 import { PendingChangeDialog } from '../../components/chat/PendingChangeDialog'
 import { AgentQuestionDialog } from '../../components/chat/AgentQuestionDialog'
 import { SkillCandidateDialog } from '../../components/chat/SkillCandidateDialog'
-import { ContextUsageMeter, shouldShowThinking, ThinkingRow, ToolRunRow } from '../../components/chat/AgentActivity'
+import { ContextUsageMeter } from '../../components/chat/AgentActivity'
+import { AgentRunActivity } from '../../components/chat/AgentRunActivity'
 import { Badge, Button, EmptyState, Input } from '../../components/ui/primitives'
 import { CopyButton } from '../../components/ui/CopyButton'
 import { chatDensityClasses } from '../../lib/chatDensity'
 import { resolveCapability, resolveContextWindow } from '../../lib/modelCapability'
 import { shouldSendOnKey } from '../../lib/sendShortcut'
 import { cn, ENTITY_KIND_LABEL, formatTime } from '../../lib/utils'
-import { useChat } from '../../stores/chatStore'
+import { useChat, type LiveTurnItem } from '../../stores/chatStore'
 import { useSettings } from '../../stores/settingsStore'
 import { useWorkspace } from '../../stores/workspaceStore'
 import { bytesToBase64 } from '../../platform/archiveTransfer'
 import { getPlatformApi } from '../../platform/platformApi'
-import { prepareMessageFiles } from '../../lib/prepareMessageFiles'
+import { prepareWorkspaceMessageFiles } from '../../lib/prepareMessageFiles'
 import { AttachmentMenu } from '../../components/chat/AttachmentMenu'
 import { WebSearchModeMenu } from '../../components/chat/WebSearchModeMenu'
 import { estimateTextTokens, resolveContextUsage } from '../../../../core/agent/contextWindow'
 import { SYSTEM_PROMPT } from '../../../../core/agent/prompts'
-import { chatDraftScope, useChatDraft } from '../../stores/chatDraftStore'
+import { chatDraftScope, chatDraftStore, useChatDraft } from '../../stores/chatDraftStore'
 import { OrchestrationResults } from '../../components/chat/OrchestrationResults'
 import { OrchestrationPanel } from '../../components/chat/OrchestrationPanel'
 import { ChatWorkbenchIdentity } from '../../components/chat/ChatWorkbenchIdentity'
 import { workbenchColumnsClass, workbenchShellClass, workbenchTopbarClass } from '../../lib/layoutPresentation'
 import { normalizeOrchestrationPreferences } from '../../../../shared/creative'
 import { creativePreferencesForMode } from '../../lib/creativePreferences'
-import { agentStageLabel, agentThinkingLabel, isOrdinaryChapterAgentStage } from '../../lib/agentStagePresentation'
+import { agentThinkingLabel } from '../../lib/agentStagePresentation'
 import { approvalPolicyPickerDisabled } from '../../stores/chatScope'
 import { parseProseAlternatives } from '../../lib/proseAlternatives'
-import { SkillActivity } from '../../components/chat/SkillActivity'
-import { RuleActivity } from '../../components/chat/RuleActivity'
-import { RunActivityDetails } from '../../components/chat/RunActivityDetails'
 import { useChatInputAutosize } from '../../components/chat/useChatInputAutosize'
+import { buildChatActivityGroups, mergeLiveActivityTools, type ChatActivityGroup } from '../../components/chat/chatActivityGroups'
 
 const QUICK_ACTIONS = [
   '请先查阅大纲和事件脉络，然后指出当前故事线中尚未解决的伏笔与矛盾。',
@@ -74,7 +75,51 @@ const ATTACH_ICONS: Record<string, React.ReactElement> = {
 }
 
 export function ChatPage(): React.ReactElement {
-  const chat = useChat()
+  const chat = useChat(useShallow((state) => ({
+    sessions: state.sessions,
+    activeId: state.activeId,
+    messages: state.messages,
+    approvalPolicy: state.approvalPolicy,
+    creativePreferences: state.creativePreferences,
+    modelPreferences: state.modelPreferences,
+    orchestrationRuns: state.orchestrationRuns,
+    budget: state.budget,
+    streaming: state.streaming,
+    runningSessionId: state.runningSessionId,
+    runningSessionIds: state.runningSessionIds,
+    backgroundAttentionSessionIds: state.backgroundAttentionSessionIds,
+    contextSummary: state.contextSummary,
+    contextSummaryThrough: state.contextSummaryThrough,
+    contextCompressing: state.contextCompressing,
+    contextCompression: state.contextCompression,
+    pendingQuestion: state.pendingQuestion,
+    pendingSkillCandidate: state.pendingSkillCandidate,
+    pendingChange: state.pendingChange,
+    attachments: state.attachments,
+    messageFiles: state.messageFiles,
+    error: state.error,
+    abort: state.abort,
+    answerQuestion: state.answerQuestion,
+    confirmChange: state.confirmChange,
+    compressContext: state.compressContext,
+    initSessions: state.initSessions,
+    newSession: state.newSession,
+    openSession: state.openSession,
+    removeSession: state.removeSession,
+    renameSession: state.renameSession,
+    resolveSkillCandidate: state.resolveSkillCandidate,
+    send: state.send,
+    setArchived: state.setArchived,
+    setAttachments: state.setAttachments,
+    setMessageFiles: state.setMessageFiles,
+    stopSession: state.stopSession,
+    updateApprovalPolicy: state.updateApprovalPolicy,
+    updateCreativePreferences: state.updateCreativePreferences,
+    updateModelPreference: state.updateModelPreference
+  })))
+  const liveStageItems = useChat(useShallow((state) => state.liveTimeline.filter(
+    (item): item is Extract<LiveTurnItem, { kind: 'stage' }> => item.kind === 'stage'
+  )))
   const summary = useWorkspace((s) => s.summary)
   const uiSource = useWorkspace((s) => s.uiSource)
   const settings = useSettings((s) => s.settings)
@@ -84,7 +129,8 @@ export function ChatPage(): React.ReactElement {
   const [sessionListOpen, setSessionListOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const conversationRef = useRef<ConversationScrollHandle | null>(null)
+  const [conversationUnseen, setConversationUnseen] = useState(false)
   const sessionImportRef = useRef<HTMLInputElement | null>(null)
   const isAndroid = typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
 
@@ -102,6 +148,8 @@ export function ChatPage(): React.ReactElement {
   }, [isAndroid])
   const [sessionTransferBusy, setSessionTransferBusy] = useState(false)
   const [questionDialogOpen, setQuestionDialogOpen] = useState(false)
+  const [changeDialogOpen, setChangeDialogOpen] = useState(false)
+  useEffect(() => { setChangeDialogOpen(Boolean(chat.pendingChange)) }, [chat.pendingChange?.id])
   const [skillCandidateDialogOpen, setSkillCandidateDialogOpen] = useState(false)
   const latestQuestionId = useRef<string | null>(null)
   const latestCandidateId = useRef<string | null>(null)
@@ -109,14 +157,17 @@ export function ChatPage(): React.ReactElement {
   const [webSearchMode, setWebSearchMode] = useState<NonNullable<RunAgentRequest['webSearchMode']>>('off')
   const [modeSwitching, setModeSwitching] = useState(false)
   const modeSwitchingRef = useRef(false)
-  const draftScope = chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId)
+  const draftScope = useMemo(() => chatDraftScope({ source: uiSource ?? 'electron-local', path: summary?.path ?? '' }, chat.activeId), [uiSource, summary?.path, chat.activeId])
   const input = useChatDraft(draftScope)
+  const chooseAlternative = useCallback((content: string) => {
+    chatDraftStore.setText(draftScope, `请采用以下正文方案继续处理：\n\n${content}`)
+  }, [draftScope])
+  const chooseQuickAction = useCallback((text: string) => chatDraftStore.setText(draftScope, text), [draftScope])
   const composerRef = useChatInputAutosize(input.text, isAndroid, settings?.chatFontSize)
 
-  const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0), [settings])
+  const providerOptions = useMemo(() => (settings?.providers ?? []).filter((p) => p.models.length > 0 && p.active !== false), [settings])
   const defaultModel = settings?.defaultChatModel
   const density = settings?.chatDensity ?? 'comfortable'
-  const densityClasses = chatDensityClasses(density)
   const selectedProvider = providerOptions.find((provider) => provider.id === defaultModel?.providerId)
   const selectedModelSettings = selectedProvider && defaultModel ? selectedProvider.modelSettings?.[defaultModel.model] : undefined
   const selectedCapability = defaultModel ? resolveCapability(defaultModel.model, selectedModelSettings) : { reasoning: false, vision: false }
@@ -132,12 +183,10 @@ export function ChatPage(): React.ReactElement {
   const latestOrchestrationRun = chat.orchestrationRuns.at(-1)
   const activeStreaming = Boolean(chat.activeId && chat.runningSessionIds.includes(chat.activeId)) || (chat.streaming && (!chat.runningSessionId || chat.runningSessionId === chat.activeId))
   const backgroundStreaming = chat.runningSessionIds.some((id) => id !== chat.activeId) || (chat.streaming && !!chat.runningSessionId && chat.runningSessionId !== chat.activeId)
-  const activeLiveStage = [...chat.liveTimeline].reverse().find((item): item is Extract<typeof item, { kind: 'stage' }> => item.kind === 'stage' && item.status === 'running')?.stageId
+  const activeLiveStage = [...liveStageItems].reverse().find((item) => item.status === 'running')?.stageId
   const liveOrchestrationStages = useMemo(
-    () => chat.liveTimeline
-      .filter((item): item is Extract<typeof item, { kind: 'stage' }> => item.kind === 'stage')
-      .map((item) => ({ stageId: item.stageId, status: item.status })),
-    [chat.liveTimeline]
+    () => liveStageItems.map((item) => ({ stageId: item.stageId, status: item.status })),
+    [liveStageItems]
   )
 
   useEffect(() => {
@@ -173,10 +222,6 @@ export function ChatPage(): React.ReactElement {
   }, [defaultModel, providerOptions])
 
   /* 自动滚动到底部 */
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [chat.messages.length, chat.liveTimeline.length])
 
   const visibleSessions = useMemo(
     () => chat.sessions.filter((s) => (tab === 'archived' ? s.archived : !s.archived)),
@@ -417,71 +462,20 @@ export function ChatPage(): React.ReactElement {
       {/* 对话区 */}
       <div data-chat-column className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 消息列表 */}
-        <div data-chat-conversation ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-app/70 px-3 py-4 sm:px-6 sm:py-6">
-          {chat.messages.length === 0 && !activeStreaming && (
-            <div data-chat-empty className="mx-auto max-w-xl">
-              <EmptyState
-                icon={<Bot size={36} />}
-                title="让智能体成为你的创作搭档"
-                hint="它会在需要时自行查阅人物卡、关系、大纲、事件与正文；修改项目资料前都会先请你确认。"
-              />
-              <div data-chat-quick-actions className="mt-4 space-y-2">
-                {QUICK_ACTIONS.map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => input.setText(q)}
-                    className="chat-text-body w-full cursor-pointer rounded-lg border border-line bg-panel px-4 py-2.5 text-left text-muted transition hover:border-accent hover:text-fg"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className={cn('mx-auto w-full max-w-6xl', densityClasses.list)}>
-            <OrchestrationResults runs={chat.orchestrationRuns ?? []} />
-            {activeStreaming && <SkillActivity events={chat.liveSkillEvents} />}
-            {activeStreaming && <RuleActivity events={chat.liveRuleEvents} />}
-            {chat.messages.map((m) => (
-              <MessageItem key={m.id} msg={m} density={density} alternativesEnabled={settings?.agentGeneration.proseAlternativesEnabled === true} onChooseAlternative={(content) => input.setText(`请采用以下正文方案继续处理：\n\n${content}`)} />
-            ))}
-
-            {chat.liveTimeline.map((item) => item.kind === 'text'
-              ? (
-                  <div key={item.id} className="flex gap-3">
-                    <Avatar icon={<Bot size={15} />} accent />
-                    <div className="min-w-0 flex-1">
-                      <div className={cn('rounded-xl border border-line bg-panel', densityClasses.assistantBubble)}>
-                        <Markdown text={item.text} />
-                      </div>
-                      {item.text && <div className="mt-1"><CopyButton text={item.text} label="复制AI回复" /></div>}
-                    </div>
-                  </div>
-                )
-              : item.kind === 'stage' ? (
-                  <div key={item.id} className="chat-text-meta flex min-w-0 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-muted">
-                    <span className={cn('h-2 w-2 shrink-0 rounded-full', item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'completed' ? 'bg-ok' : 'bg-danger')} />
-                    <span className="min-w-0 flex-1 truncate">{isOrdinaryChapterAgentStage(item.stageId) ? '智能体' : '阶段'}：{agentStageLabel(item.stageId)}</span>
-                    <span className="chat-text-micro ml-auto shrink-0 whitespace-nowrap text-faint">{item.status === 'running' ? '进行中' : item.status === 'completed' ? '已完成' : '失败'}</span>
-                  </div>
-                ) : (
-                  <ToolRunRow
-                    key={item.callId}
-                    name={item.name}
-                    argsJson={item.argsJson}
-                    status={item.status}
-                    preview={item.preview}
-                  />
-                ))}
-
-            {activeStreaming && shouldShowThinking(chat.liveTimeline) && (
-              <ThinkingRow label={agentThinkingLabel(activeLiveStage, defaultModel?.model ?? '模型')} />
-            )}
-
-            {chat.error && <div className="chat-text-meta rounded-lg bg-danger-soft px-4 py-2.5 text-danger">{chat.error}</div>}
-          </div>
-        </div>
+        <ConversationTranscript
+          ref={conversationRef}
+          activeId={chat.activeId}
+          activeStreaming={activeStreaming}
+          messages={chat.messages}
+          runs={chat.orchestrationRuns}
+          density={density}
+          alternativesEnabled={settings?.agentGeneration.proseAlternativesEnabled === true}
+          error={chat.error}
+          thinkingLabel={agentThinkingLabel(activeLiveStage, defaultModel?.model ?? '模型')}
+          onChooseAlternative={chooseAlternative}
+          onQuickAction={chooseQuickAction}
+          onUnseenChange={setConversationUnseen}
+        />
 
         {/* 输入区 */}
         <div className="chat-composer shrink-0 border-t border-line bg-panel/[0.94] px-3 py-3 backdrop-blur-xl sm:p-4">
@@ -507,6 +501,8 @@ export function ChatPage(): React.ReactElement {
               </div>
             )}
             <div className="relative rounded-xl border border-line bg-panel focus-within:border-accent transition">
+              {conversationUnseen && <Button variant="outline" size="sm" onClick={() => conversationRef.current?.toLatest()}>回到最新</Button>}
+              {chat.pendingChange && !changeDialogOpen && <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-line p-2 text-xs"><span>文件变更等待审查</span><Button variant="outline" size="sm" onClick={() => setChangeDialogOpen(true)}>继续审查</Button></div>}
               {((chat.pendingQuestion && !questionDialogOpen) || (chat.pendingSkillCandidate && !skillCandidateDialogOpen)) && (
                 <div className="flex items-center justify-between gap-2 border-b border-line/70 bg-gold-soft px-3 py-2 text-xs text-gold">
                   <span>{chat.pendingQuestion ? '智能体正在等待你的回答' : '智能体正在等待 Skill 候选决定'}</span>
@@ -553,7 +549,7 @@ export function ChatPage(): React.ReactElement {
                   onAgentModeChange={setAgentMode}
                   onFiles={async (files) => {
                     try {
-                      const prepared = await prepareMessageFiles(files)
+                      const prepared = await prepareWorkspaceMessageFiles(getPlatformApi(), files)
                       const existing = chat.messageFiles
                       const next = [...existing]
                       for (const file of prepared) {
@@ -669,7 +665,7 @@ export function ChatPage(): React.ReactElement {
 
       </div>
       {/* 写确认 */}
-      {chat.pendingChange && <PendingChangeDialog change={chat.pendingChange} onConfirm={(ok) => void chat.confirmChange(ok)} />}
+      {chat.pendingChange && <PendingChangeDialog change={chat.pendingChange} open={changeDialogOpen} onDefer={() => setChangeDialogOpen(false)} onConfirm={(ok) => chat.confirmChange(ok)} />}
       <AgentQuestionDialog
         question={chat.pendingQuestion}
         open={questionDialogOpen}
@@ -684,6 +680,173 @@ export function ChatPage(): React.ReactElement {
       />
     </div>
   )
+}
+
+interface ConversationScrollHandle {
+  toLatest: () => void
+}
+
+interface ConversationTranscriptProps {
+  activeId: string | null
+  activeStreaming: boolean
+  messages: ChatMessage[]
+  runs: OrchestrationRunRecord[]
+  density: ChatDensity
+  alternativesEnabled: boolean
+  error: string | null
+  thinkingLabel: string
+  onChooseAlternative: (content: string) => void
+  onQuickAction: (text: string) => void
+  onUnseenChange: (unseen: boolean) => void
+}
+
+const ConversationTranscript = forwardRef<ConversationScrollHandle, ConversationTranscriptProps>(function ConversationTranscript({
+  activeId,
+  activeStreaming,
+  messages,
+  runs,
+  density,
+  alternativesEnabled,
+  error,
+  thinkingLabel,
+  onChooseAlternative,
+  onQuickAction,
+  onUnseenChange
+}, ref) {
+  const live = useChat(useShallow((state) => ({
+    liveTimeline: state.liveTimeline,
+    liveSkillEvents: state.liveSkillEvents,
+    liveRuleEvents: state.liveRuleEvents
+  })))
+  const scrollContent = useMemo(() => [messages, live.liveTimeline, live.liveSkillEvents, live.liveRuleEvents, activeStreaming], [messages, live.liveTimeline, live.liveSkillEvents, live.liveRuleEvents, activeStreaming])
+  const conversationScroll = useChatScroll(activeId, scrollContent)
+  useImperativeHandle(ref, () => ({ toLatest: conversationScroll.toLatest }), [conversationScroll.toLatest])
+  useEffect(() => onUnseenChange(conversationScroll.unseen), [conversationScroll.unseen, onUnseenChange])
+
+  const densityClasses = chatDensityClasses(density)
+  const activityGroups = useMemo(() => buildChatActivityGroups(messages), [messages])
+  const latestUserId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') return messages[index].id
+    }
+    return 'initial'
+  }, [messages])
+  const liveActivityId = `activity:${latestUserId}`
+  const hasLiveActivity = activeStreaming || live.liveTimeline.some((item) => item.kind !== 'text') || live.liveSkillEvents.length > 0 || live.liveRuleEvents.length > 0
+  const renderGroups = useMemo<ChatActivityGroup[]>(() => hasLiveActivity && !activityGroups.some((group) => group.kind === 'activity' && group.id === liveActivityId)
+    ? [...activityGroups, { kind: 'activity', id: liveActivityId, tools: [] }]
+    : activityGroups, [activityGroups, hasLiveActivity, liveActivityId])
+  const groupElements = useMemo(() => renderGroups.map((group) => {
+    if (group.kind === 'activity') {
+      const isLiveGroup = hasLiveActivity && group.id === liveActivityId
+      return isLiveGroup
+        ? <LiveAgentActivity
+            key={`${activeId ?? 'none'}:${group.id}`}
+            group={group}
+            activeStreaming={activeStreaming}
+            error={error}
+            thinkingLabel={thinkingLabel}
+          />
+        : <AgentRunActivity
+            key={`${activeId ?? 'none'}:${group.id}`}
+            tools={group.tools}
+            activity={group.activity}
+            failed={group.failed}
+          />
+    }
+    return <MessageItem key={group.message.id} msg={group.message} density={density} alternativesEnabled={alternativesEnabled} onChooseAlternative={onChooseAlternative} />
+  }), [renderGroups, hasLiveActivity, liveActivityId, activeId, activeStreaming, error, thinkingLabel, density, alternativesEnabled, onChooseAlternative])
+  const liveTextItems = useMemo(() => live.liveTimeline.filter((item): item is Extract<LiveTurnItem, { kind: 'text' }> => item.kind === 'text'), [live.liveTimeline])
+  const resultsElement = useMemo(() => <OrchestrationResults runs={runs} />, [runs])
+
+  return (
+    <div data-chat-conversation onScroll={conversationScroll.onScroll} ref={conversationScroll.scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-app/70 px-3 py-4 sm:px-6 sm:py-6">
+      {messages.length === 0 && !activeStreaming && (
+        <div data-chat-empty className="mx-auto max-w-xl">
+          <EmptyState
+            icon={<Bot size={36} />}
+            title="让智能体成为你的创作搭档"
+            hint="它会在需要时自行查阅人物卡、关系、大纲、事件与正文；修改项目资料前都会先请你确认。"
+          />
+          <div data-chat-quick-actions className="mt-4 space-y-2">
+            {QUICK_ACTIONS.map((quickAction) => (
+              <button
+                key={quickAction}
+                onClick={() => onQuickAction(quickAction)}
+                className="chat-text-body w-full cursor-pointer rounded-lg border border-line bg-panel px-4 py-2.5 text-left text-muted transition hover:border-accent hover:text-fg"
+              >
+                {quickAction}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className={cn('mx-auto w-full max-w-6xl', densityClasses.list)}>
+        {resultsElement}
+        {groupElements}
+        {liveTextItems.map((item) => (
+          <div key={item.id} className="flex gap-3">
+            <Avatar icon={<Bot size={15} />} accent />
+            <div className="min-w-0 flex-1">
+                  <StreamingReply
+                    text={item.text}
+                    streaming={activeStreaming}
+                    bubbleClassName={cn('rounded-xl border border-line bg-panel', densityClasses.assistantBubble)}
+                  />
+            </div>
+          </div>
+        ))}
+
+        {error && <div className="chat-text-meta rounded-lg bg-danger-soft px-4 py-2.5 text-danger">{error}</div>}
+      </div>
+    </div>
+  )
+})
+
+const LiveAgentActivity = memo(function LiveAgentActivity({ group, activeStreaming, error, thinkingLabel }: {
+  group: Extract<ChatActivityGroup, { kind: 'activity' }>
+  activeStreaming: boolean
+  error: string | null
+  thinkingLabel: string
+}): React.ReactElement {
+  const live = useChat(useShallow((state) => ({
+    liveTimeline: state.liveTimeline,
+    liveSkillEvents: state.liveSkillEvents,
+    liveRuleEvents: state.liveRuleEvents
+  })))
+  return <AgentRunActivity
+    tools={mergeLiveActivityTools(group.tools, live.liveTimeline)}
+    activity={group.activity}
+    timeline={live.liveTimeline}
+    skillEvents={live.liveSkillEvents}
+    ruleEvents={live.liveRuleEvents}
+    running={activeStreaming}
+    failed={group.failed || Boolean(error)}
+    thinkingLabel={thinkingLabel}
+  />
+})
+
+function StreamingReply({ text, streaming, bubbleClassName }: { text: string; streaming: boolean; bubbleClassName: string }): React.ReactElement {
+  const latestText = useRef(text)
+  const [displayedText, setDisplayedText] = useState(text)
+  latestText.current = text
+
+  useEffect(() => {
+    if (!streaming) return
+    const timer = window.setInterval(() => setDisplayedText(latestText.current), 50)
+    return () => window.clearInterval(timer)
+  }, [streaming])
+
+  useEffect(() => {
+    if (!streaming) setDisplayedText(text)
+  }, [streaming, text])
+
+  const visibleText = streaming ? displayedText : text
+  return <>
+    <div className={bubbleClassName}><Markdown text={visibleText} /></div>
+    {visibleText && <div className="mt-1"><CopyButton text={visibleText} label="复制AI回复" /></div>}
+  </>
 }
 
 function FileChip({ file, onRemove }: { file: MessageFile; onRemove: () => void }): React.ReactElement {
@@ -714,16 +877,8 @@ function MessageItemInner({ msg, density, alternativesEnabled, onChooseAlternati
       </div>
     )
   }
-  if (msg.role === 'tool') {
-    return (
-      <ToolRunRow
-        name={msg.toolName ?? 'tool'}
-        status={msg.isError ? 'error' : 'ok'}
-        resultText={msg.text}
-      />
-    )
-  }
-  if (!msg.text && msg.toolCalls?.length) return <></>
+  if (msg.role === 'tool') return <></>
+  if (!msg.text && msg.toolCalls?.length && !msg.files?.length) return <></>
   return (
     <div className="flex gap-3">
       <Avatar icon={<Bot size={15} />} accent />
@@ -734,7 +889,6 @@ function MessageItemInner({ msg, density, alternativesEnabled, onChooseAlternati
           {msg.files && <MessageFiles files={msg.files} />}
         </div>
         {msg.text && <div className="mt-1"><CopyButton text={msg.text} label="复制AI回复" /></div>}
-        <RunActivityDetails activity={msg.runActivity} />
         {alternativesEnabled && msg.text && <AlternativePicker text={msg.text} onChoose={onChooseAlternative} />}
       </div>
     </div>

@@ -1,17 +1,11 @@
 import type { MessageFile } from '../../shared/types'
+import { documentMimeType } from '../inspiration/documentFormats'
 
 export const MAX_IMAGE_BYTES = 100 * 1024 * 1024
 export const MAX_TEXT_BYTES = 100 * 1024 * 1024
 export const MAX_FILES_PER_MESSAGE = 8
 export const MAX_MESSAGE_BYTES = 100 * 1024 * 1024
 export const MAX_SESSION_IMAGE_BYTES = 100 * 1024 * 1024
-
-const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.csv': 'text/csv',
-  '.json': 'application/json'
-}
 
 function decodeBase64(value: unknown): Uint8Array {
   if (typeof value !== 'string' || !value || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('附件 base64 编码无效')
@@ -20,11 +14,6 @@ function decodeBase64(value: unknown): Uint8Array {
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
-}
-
-function extensionOf(name: string): string {
-  const dot = name.lastIndexOf('.')
-  return dot >= 0 ? name.slice(dot).toLowerCase() : ''
 }
 
 function isPng(bytes: Uint8Array): boolean {
@@ -75,8 +64,7 @@ export function validateMessageFiles(files: unknown, options: { sessionImageByte
       sessionImageBytes += bytes.byteLength
       output.push({ kind: 'image', id, name, mimeType, size: bytes.byteLength, base64: file.base64 as string })
     } else if (kind === 'text') {
-      const extension = extensionOf(name)
-      const expectedMime = TEXT_MIME_BY_EXTENSION[extension]
+      const expectedMime = documentMimeType(name)
       if (!expectedMime || file.mimeType !== expectedMime) throw new Error('文本附件格式不支持')
       if (typeof file.text !== 'string' || file.text.includes('\0') || file.text.includes('\ufffd')) throw new Error('文本附件必须是有效 UTF-8 文本')
       const bytes = new TextEncoder().encode(file.text)
