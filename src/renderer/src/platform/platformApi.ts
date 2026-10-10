@@ -26,13 +26,6 @@ export function getPlatformUiSource(api: StoryFabricApi = getPlatformApi()): str
   return 'http:same-origin'
 }
 
-/** Returns the native/local implementation even after a remote API was installed. */
-export function getLocalPlatformApi(): StoryFabricApi {
-  if (typeof window !== 'undefined' && window.api) return window.api
-  if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.()) return getAndroidApi()
-  return getPlatformApi()
-}
-
 export function getPlatformApi(): StoryFabricApi {
   if (installedApi) return installedApi
   if (typeof window !== 'undefined' && window.api) return window.api

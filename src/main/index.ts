@@ -6,23 +6,32 @@ import { AgentService } from './agent/agentLoop'
 import { registerIpc, type AppContext } from './ipc'
 import { IPC } from '../shared/ipc'
 import type { AgentEventEnvelope } from '../shared/api'
+import { MainRuntimeEvents } from './runtimeEvents'
+import { AgentEventBridge } from './agentEventBridge'
 import { SettingsService } from './services/settingsService'
+import { AppUpdateService } from './services/appUpdateService'
+import { electronFetch } from './networkFetch'
 import { UsageService } from '../core/usage/usageService'
-import { DeployService } from './services/deployService'
-import { DeployTargetsStore } from './services/deployTargetsStore'
-import { Ssh2Transport } from './services/ssh2Transport'
 import { isAllowedExternalUrl, isAllowedRendererNavigation } from './navigationPolicy'
+import { NodeFileStore } from '../core/storage/nodeFileStore'
+import { configureNetworkLogger, configureSystemProxy } from './networkFetch'
+import { AppLogger } from './appLogger'
+import { createDesktopCloudAccountService } from './services/cloudAccountService'
+
+let agentBackgroundActivityActive = false
+let appLogger: AppLogger | undefined
+
+function reportProcessError(kind: string, error: unknown): void {
+  console.error(`[storyfabric] ${kind}`, error)
+  void appLogger?.error(kind, { error: error instanceof Error ? error.message : String(error) }).catch(() => {})
+}
+
+process.on('uncaughtException', (error) => reportProcessError('uncaught exception', error))
+process.on('unhandledRejection', (reason) => reportProcessError('unhandled rejection', reason))
 
 function resolveIconPath(): string {
   // 开发态取项目 resources/；打包后 extraResources 会把 icon.ico 放到 resources 根目录
   return app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(app.getAppPath(), 'resources', 'icon.ico')
-}
-
-function resolveServerBundlePath(): string {
-  // 打包后由 extraResources 放到 resources 根目录；开发态用当前版本目录里的包，便于本地联调
-  return app.isPackaged
-    ? join(process.resourcesPath, 'server-bundle.tar.gz')
-    : join(app.getAppPath(), 'release', app.getVersion(), `storyfabric-server-${app.getVersion()}.tar.gz`)
 }
 
 function createWindow(): BrowserWindow {
@@ -44,6 +53,7 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false
     }
   })
+  win.webContents.setBackgroundThrottling(!agentBackgroundActivityActive)
 
   win.on('ready-to-show', () => {
     win.show()
@@ -61,6 +71,17 @@ function createWindow(): BrowserWindow {
     if (isAllowedExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  // Keep the desktop shell recoverable when Chromium's renderer exits while a
+  // long-running agent is still active. The main process remains alive so the
+  // in-flight run can finish and the renderer can reconnect to its event log.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    reportProcessError(`renderer exited (${details.reason})`, details.exitCode)
+    if (details.reason !== 'clean-exit' && !win.isDestroyed()) {
+      setTimeout(() => { if (!win.isDestroyed()) void win.webContents.reload() }, 250)
+    }
+  })
+  win.on('unresponsive', () => reportProcessError('window unresponsive', new Error('renderer did not respond')))
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -85,32 +106,90 @@ if (!gotLock) {
     }
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // 与 electron-builder appId 一致，保证任务栏分组/图标行为正确
     app.setAppUserModelId('com.storyfabric.app')
+    const logger = new AppLogger({ directory: join(app.getPath('userData'), 'logs') })
+    appLogger = logger
+    configureNetworkLogger(logger)
+    try {
+      await logger.cleanup()
+    } catch (error) {
+      reportProcessError('log cleanup failed', error)
+    }
+    await logger.info('app.start', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    const logCleanupTimer = setInterval(() => {
+      void logger.cleanup().catch((error) => reportProcessError('log cleanup failed', error))
+    }, 6 * 60 * 60 * 1000)
+    logCleanupTimer.unref?.()
+    try {
+      await configureSystemProxy()
+      void logger.info('network.proxy.configured', { mode: 'system' })
+    } catch (error) {
+      reportProcessError('system proxy setup failed', error)
+    }
     const win = createWindow()
 
     const settings = new SettingsService(join(app.getPath('userData'), 'settings.json'))
+    const cloudAccount = createDesktopCloudAccountService(
+      join(app.getPath('userData'), 'trailblazer-refresh.enc'),
+      undefined,
+      () => {
+        if (win.isDestroyed()) return
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+        win.moveTop()
+      },
+      appLogger
+    )
     const usage = new UsageService(join(app.getPath('userData'), 'usage.json'))
-    const deploy = new DeployService({
-      store: new DeployTargetsStore(join(app.getPath('userData'), 'deploy-targets.json')),
-      createTransport: () => new Ssh2Transport(),
-      bundlePath: resolveServerBundlePath(),
-      version: app.getVersion()
+    const runtimeEvents = new MainRuntimeEvents()
+    const agentEventBridge = new AgentEventBridge((envelope, workspaceId) => {
+      const runtimeEnvelope = envelope.runId && workspaceId
+        ? runtimeEvents.append(workspaceId, envelope.sessionId, envelope.runId, envelope.event)
+        : null
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(IPC.AgentEvent, envelope)
+        if (runtimeEnvelope) window.webContents.send(IPC.RuntimeAgentEvent, runtimeEnvelope)
+      }
+    })
+    let quitFlushStarted = false
+    app.on('before-quit', (event) => {
+      if (quitFlushStarted) return
+      quitFlushStarted = true
+      event.preventDefault()
+      clearInterval(logCleanupTimer)
+      agentEventBridge.flush()
+      void logger.flush().finally(() => app.quit())
     })
 
     const agent = new AgentService(
       settings,
-      (sessionId, event) => {
-        const envelope: AgentEventEnvelope = { sessionId, event }
-        for (const w of BrowserWindow.getAllWindows()) {
-          w.webContents.send(IPC.AgentEvent, envelope)
+      (sessionId, event, runId, workspaceId) => {
+        const envelope: AgentEventEnvelope = { sessionId, ...(runId ? { runId } : {}), event }
+        agentEventBridge.push(envelope, workspaceId)
+      },
+      (record) => void usage.append(record).catch(() => {}),
+      new NodeFileStore(app.getPath('userData')),
+      (active) => {
+        agentBackgroundActivityActive = active
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) window.webContents.setBackgroundThrottling(!active)
         }
       },
-      (record) => void usage.append(record).catch(() => {})
+      cloudAccount
     )
 
-    const ctx: AppContext = { win: () => win, settings, agent, usage, deploy }
+    const appUpdates = new AppUpdateService({
+      directory: join(app.getPath('userData'), 'updates'),
+      currentVersion: app.getVersion(),
+      platform: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
+      preferences: async () => (await settings.load()).updatePreferences,
+      fetchImpl: electronFetch,
+      launch: (path) => shell.openPath(path)
+    })
+    const ctx: AppContext = { win: () => win, settings, agent, usage, runtimeEvents, appUpdates, cloudAccount }
     registerIpc(ctx)
 
     app.on('activate', () => {

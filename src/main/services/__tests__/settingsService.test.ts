@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SettingsService } from '../settingsService'
 
 async function withService(run: (service: SettingsService, file: string) => Promise<void>): Promise<void> {
@@ -16,7 +16,24 @@ async function withService(run: (service: SettingsService, file: string) => Prom
 
 const provider = { name: '测试供应商', protocol: 'openai' as const, baseUrl: 'https://api.test/v1', apiKey: 'sk-test', models: ['gpt-4o', 'claude-x'] }
 
+it('migrates update preferences and persists custom sources and automatic detection', async () => {
+  await withService(async (service, file) => {
+    await writeFile(file, JSON.stringify({ theme: 'dark' }))
+    expect((await service.load()).updatePreferences?.sources).toEqual(['https://storyfabric.fengyao.xin:10048/download', 'https://github.com/lefengyao/StoryFabric'])
+    await service.update({ updatePreferences: { automatic: false, sources: ['https://example.org/download'] } })
+    expect((await new SettingsService(file).load()).updatePreferences).toEqual({ automatic: false, sources: ['https://example.org/download'] })
+  })
+})
+
 describe('SettingsService 每模型参数', () => {
+  it('persists managed Trailblazer model preferences separately from editable providers', async () => {
+    await withService(async (service) => {
+      await service.saveTrailblazerProvider({ models: ['managed-model'], modelSettings: { 'managed-model': { reasoning: 'high' } }, modelScope: 'a'.repeat(64) })
+      expect((await service.load()).trailblazerProvider).toEqual({ models: ['managed-model'], modelSettings: { 'managed-model': { reasoning: 'high' } }, modelScope: 'a'.repeat(64) })
+      expect((await service.load()).providers).toEqual([])
+    })
+  })
+
   it('保存后能读回，并按模型列表清理失效项', async () => {
     await withService(async (service) => {
       await service.saveProvider({
@@ -245,6 +262,67 @@ describe('SettingsService 每模型参数', () => {
         baseUrl: 'https://attacker.example/v1',
         apiKey: 'attacker-key'
       })).resolves.toEqual({ protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', apiKey: 'attacker-key' })
+    })
+  })
+
+  it('旧设置文件缺少 chatFontSize 时使用 14px', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], theme: 'system', recentWorkspaces: [] }), 'utf-8')
+      expect((await service.load()).chatFontSize).toBe(14)
+    })
+  })
+
+  it.each([
+    ['过小', 1, 13],
+    ['过大', 99, 20],
+    ['非数字', '18', 14],
+    ['空值', null, 14]
+  ])('chatFontSize %s 时回退或夹紧为 %s', async (_label, value, expected) => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ chatFontSize: value }), 'utf-8')
+      expect((await service.load()).chatFontSize).toBe(expected)
+    })
+  })
+
+  it('adds generation preferences to legacy settings', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], customPrompt: 'legacy' }), 'utf-8')
+
+      expect((await service.load()).agentGeneration).toEqual({ agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 })
+    })
+  })
+
+  it('consumes the legacy global prompt once after migrating it to a project', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, JSON.stringify({ providers: [], customPrompt: 'legacy project voice' }), 'utf-8')
+      const migrate = vi.fn(async () => undefined)
+
+      await expect(service.consumeLegacyCustomPrompt(migrate)).resolves.toBe('legacy project voice')
+      await expect(service.consumeLegacyCustomPrompt(migrate)).resolves.toBeUndefined()
+      expect(migrate).toHaveBeenCalledOnce()
+      expect((await service.load()).customPrompt).toBe('')
+    })
+  })
+
+  it('persists normalized generation preferences', async () => {
+    await withService(async (service) => {
+      await service.update({ agentGeneration: { agentTemperature: -1, proseAlternativesEnabled: true, maxToolRounds: 250 } })
+
+      expect((await service.load()).agentGeneration).toEqual({ agentTemperature: 0, proseAlternativesEnabled: true, maxToolRounds: 250 })
+    })
+  })
+
+  it('returns isolated generation defaults after a malformed settings fallback', async () => {
+    await withService(async (service, file) => {
+      await writeFile(file, '{', 'utf-8')
+      const first = service.toPublic(await service.load())
+      try {
+        first.agentGeneration.agentTemperature = 0
+
+        expect(service.toPublic(await service.load()).agentGeneration).toEqual({ agentTemperature: 70, proseAlternativesEnabled: false, maxToolRounds: 100 })
+      } finally {
+        first.agentGeneration.agentTemperature = 70
+      }
     })
   })
 })

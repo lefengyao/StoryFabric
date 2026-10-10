@@ -12,6 +12,7 @@ export function countWords(text: string): number {
 export const CHAPTER_STATUS_LABEL: Record<ChapterStatus, string> = {
   draft: '草稿',
   revised: '修订',
+  body: '正文',
   final: '定稿'
 }
 

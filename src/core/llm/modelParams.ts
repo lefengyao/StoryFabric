@@ -68,5 +68,18 @@ export function buildModelParams(protocol: Protocol, model: string, params: Reso
     }
   }
 
+  if (params.temperature !== undefined) {
+    if (protocol === 'gemini') {
+      const generationConfig = body.generationConfig
+      if (typeof generationConfig === 'object' && generationConfig !== null && !Array.isArray(generationConfig)) {
+        ;(generationConfig as Record<string, unknown>).temperature = params.temperature
+      } else {
+        body.generationConfig = { maxOutputTokens: params.maxOutputTokens, temperature: params.temperature }
+      }
+    } else {
+      body.temperature = params.temperature
+    }
+  }
+
   return body
 }

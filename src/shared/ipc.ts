@@ -1,10 +1,21 @@
 /** IPC 通道名常量（主进程注册与 preload 调用共用，避免拼写漂移） */
 
 export const IPC = {
+  CloudState: 'cloud:state', CloudLogin: 'cloud:login', CloudCancel: 'cloud:cancel', CloudLogout: 'cloud:logout',
+  CloudOnboard: 'cloud:onboard', CloudAccount: 'cloud:account', CloudUsage: 'cloud:usage', CloudChannels: 'cloud:channels',
+  CloudGroups: 'cloud:groups', CloudSupplierLobby: 'cloud:supplier-lobby', CloudRedeem: 'cloud:redeem', CloudRedeemHistory: 'cloud:redeem-history', CloudGroup: 'cloud:group', CloudRotate: 'cloud:rotate',
+  CloudConfig: 'cloud:config', CloudConfigUpdate: 'cloud:config:update',
+  CheckAppUpdate: 'app:update:check',
+  GetUpdateDownloadState: 'app:update:state',
+  DownloadAppUpdate: 'app:update:download',
+  CancelAppUpdateDownload: 'app:update:cancel',
+  InstallAppUpdate: 'app:update:install',
   /* 工作区 */
   PickFolder: 'workspace:pick-folder',
   ListWorkspaces: 'workspace:list',
   ListRecentWorkspaces: 'workspace:recent-list',
+  RenameWorkspace: 'workspace:rename',
+  ForgetRecentWorkspace: 'workspace:recent-forget',
   GetDefaultDir: 'workspace:default-dir',
   CreateWorkspace: 'workspace:create',
   OpenWorkspace: 'workspace:open',
@@ -16,9 +27,19 @@ export const IPC = {
   ExportWorkspace: 'workspace:export',
   ImportWorkspace: 'workspace:import',
   GetChapterBody: 'workspace:chapter-body',
+  GetDocumentSnapshot: 'document:snapshot',
+  SaveHistoryVersion: 'history:save',
+  ListHistoryVersions: 'history:list',
+  GetHistoryVersion: 'history:get',
+  UpdateHistoryVersion: 'history:update',
+  DeleteHistoryVersion: 'history:delete',
+  RestoreHistoryVersion: 'history:restore',
+  SaveImageFile: 'export:save-image',
   SearchProject: 'workspace:search',
   GetGraphLayout: 'workspace:graph-layout:get',
   SaveGraphLayout: 'workspace:graph-layout:save',
+  GetWritingTools: 'workspace:writing-tools:get',
+  SaveWritingTools: 'workspace:writing-tools:save',
 
   /* 实体保存 */
   SaveCharacter: 'entity:save-character',
@@ -49,9 +70,26 @@ export const IPC = {
   /* 设置 */
   GetSettings: 'settings:get',
   UpdateSettings: 'settings:update',
+  GetMemory: 'memory:get',
+  UpdateMemory: 'memory:update',
   SaveProvider: 'settings:save-provider',
   DeleteProvider: 'settings:delete-provider',
   FetchModels: 'settings:fetch-models',
+  GetCapabilities: 'runtime:capabilities',
+  ListCreativePackages: 'creative:packages:list',
+  InstallCreativePackage: 'creative:packages:install',
+  SetCreativePackageEnabled: 'creative:packages:enabled',
+  ListCreativeRules: 'creative:rules:list',
+  SaveCreativeRules: 'creative:rules:save',
+  ListInspirationSources: 'inspiration:sources:list',
+  ImportInspirationSource: 'inspiration:sources:import',
+  ImportInspirationPath: 'inspiration:sources:import-path',
+  RemoveInspirationSource: 'inspiration:sources:remove',
+  ExtractInspirationSource: 'inspiration:sources:extract',
+  ReadInspirationSource: 'inspiration:sources:read',
+  ReadInspirationDoc: 'inspiration:docs:read',
+  SaveInspirationDoc: 'inspiration:docs:save',
+  SaveInspirationArtifact: 'inspiration:artifact:save',
 
   /* 剪贴板 */
   ClipboardReadText: 'clipboard:read-text',
@@ -59,11 +97,21 @@ export const IPC = {
 
   /* 用量 */
   GetUsageRecords: 'usage:list',
+  GetUsageBuckets: 'usage:buckets',
+  GetWritingDays: 'writing:days',
 
   /* 智能体 */
   AgentRun: 'agent:run',
+  CompressSessionContext: 'agent:context:compress',
   AgentConfirm: 'agent:confirm',
   AgentAbort: 'agent:abort',
+  AgentAnswerQuestion: 'agent:answer-question',
+  AgentResolveSkillCandidate: 'agent:resolve-skill-candidate',
+  ListGoals: 'agent:goals:list',
+  GetGoal: 'agent:goals:get',
+  ContinueGoal: 'agent:goals:continue',
+  StopGoal: 'agent:goals:stop',
+  ReplanGoal: 'agent:goals:replan',
   ListSessions: 'agent:sessions:list',
   CreateSession: 'agent:sessions:create',
   ExportSession: 'agent:sessions:export',
@@ -73,16 +121,6 @@ export const IPC = {
   UpdateSession: 'agent:sessions:update',
   UpdateSessionModelPreference: 'agent:sessions:model-preference:update',
   AgentEvent: 'agent:event',
-
-  /* 远程部署（仅桌面端） */
-  DeployTestConnection: 'deploy:test',
-  DeployInstall: 'deploy:install',
-  DeployUpdate: 'deploy:update',
-  DeployCancel: 'deploy:cancel',
-  DeployLogs: 'deploy:logs',
-  DeployUninstall: 'deploy:uninstall',
-  DeployListTargets: 'deploy:targets:list',
-  DeploySaveTarget: 'deploy:targets:save',
-  DeployDeleteTarget: 'deploy:targets:delete',
-  DeployEvent: 'deploy:event'
+  RuntimeAgentEvent: 'agent:runtime-event',
+  RecoverRunEvents: 'agent:runtime-events:recover',
 } as const

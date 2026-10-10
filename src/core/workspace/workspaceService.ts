@@ -1,7 +1,9 @@
 import type { FileStore } from '../storage/fileStore'
-import type { ChapterBox, ChapterDoc, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
-import { getChapterBody, listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveChapter } from './entityStore'
-import { CURRENT_WORKSPACE_VERSION, migrateWorkspace } from './migration'
+import type { ChapterBox, VolumeMeta, WorkspaceListItem, WorkspaceSummary } from '../../shared/types'
+import { resolveChapterPlacement } from '../../shared/chapterPlacement'
+import { listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships, saveOutlineDoc } from './entityStore'
+import { getDocumentSnapshot, saveDocument } from './documentWrites'
+import { CURRENT_WORKSPACE_VERSION, migrateWorkspace, type WorkspaceMigrationOptions } from './migration'
 import { cleanupWorkspace } from './housekeeping'
 import { listTrash } from './trash'
 import { buildProjectIndex } from '../retrieval/projectIndex'
@@ -20,7 +22,7 @@ export async function initializeWorkspace(store: FileStore, name: string): Promi
   await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: CURRENT_WORKSPACE_VERSION, name, createdAt: new Date().toISOString() }, null, 2))
   await store.writeText('relationships.json', '[]')
   if (!(await store.exists('outline/total/故事大纲.md'))) {
-    await store.writeText('outline/total/故事大纲.md', ['---', 'id: out_core', 'title: 故事大纲', 'order: 1', 'kind: total', '---', '', '# 故事大纲', '', '在这里写下你的核心创意、主题与整体走向……', ''].join('\n'))
+    if (!(await listOutline(store)).some((outline) => outline.id === 'out_core')) await saveOutlineDoc(store, { id: 'out_core', title: '故事大纲', order: 1, kind: 'total', content: '# 故事大纲\n\n在这里写下你的核心创意、主题与整体走向……\n' })
   }
 }
 
@@ -64,15 +66,19 @@ export async function loadWorkspaceListItem(store: FileStore, fallbackName: stri
 }
 
 export async function setWorkspaceName(store: FileStore, name: string): Promise<void> {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('项目名称不能为空')
   const raw = await store.readText('storyfabric.json')
   if (!raw) throw new Error('工作区元数据缺失')
+  let metadata: Record<string, unknown>
   try {
-    const metadata = JSON.parse(raw) as Record<string, unknown>
-    metadata.name = name
-    await store.writeText('storyfabric.json', JSON.stringify(metadata, null, 2))
+    metadata = JSON.parse(raw) as Record<string, unknown>
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('invalid')
   } catch {
     throw new Error('工作区元数据无效')
   }
+  metadata.name = trimmed
+  await store.writeText('storyfabric.json', JSON.stringify(metadata, null, 2))
 }
 
 export async function listVolumes(store: FileStore): Promise<VolumeMeta[]> {
@@ -109,22 +115,21 @@ export async function deleteVolume(store: FileStore, id: string): Promise<void> 
 }
 
 export async function moveChapter(store: FileStore, id: string, target: { box: Exclude<ChapterBox, 'trash'>; volumeId?: string }): Promise<void> {
-  const meta = (await listChapters(store)).find((chapter) => chapter.id === id)
-  if (!meta) throw new Error(`未找到章节：${id}`)
+  const snapshot = await getDocumentSnapshot(store, 'chapter', id)
+  const meta = snapshot.document
+  const options = { baseRevision: snapshot.writeRevision, baseText: snapshot.sourceText }
   if (target.box === 'main') {
     const volumeId = target.volumeId ?? meta.volumeId ?? 'vol_default'
     const volume = (await listVolumes(store)).find((item) => item.id === volumeId)
     if (!volume) throw new Error(`未找到目标卷：${volumeId}`)
-    const content = await getChapterBody(store, id)
-    await saveChapter(store, { ...meta, box: 'main', volumeId, volume: volume.title, content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
+    await saveDocument(store, 'chapter', { id, ...resolveChapterPlacement(meta, { box: 'main' }), volumeId, volume: volume.title }, options)
   } else {
-    const content = await getChapterBody(store, id)
-    await saveChapter(store, { ...meta, box: 'draft', content: content ?? '' } satisfies Partial<ChapterDoc> & { id: string })
+    await saveDocument(store, 'chapter', { id, ...resolveChapterPlacement(meta, { box: 'draft' }) }, options)
   }
 }
 
-export async function loadSummary(store: FileStore, fallbackName: string, path: string): Promise<WorkspaceSummary> {
-  await migrateWorkspace(store)
+export async function loadSummary(store: FileStore, fallbackName: string, path: string, options: WorkspaceMigrationOptions = {}): Promise<WorkspaceSummary> {
+  await migrateWorkspace(store, options)
   try {
     await cleanupWorkspace(store)
   } catch {

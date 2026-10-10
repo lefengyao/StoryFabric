@@ -1,6 +1,6 @@
 /**
  * 生成随安装包分发的服务端部署包：release/<version>/storyfabric-server-<version>.tar.gz
- * 内容见 src/core/deploy/bundle.ts 的 BUNDLE_ENTRIES。
+ * 内容清单在本脚本中明确列出，供手动 Docker 部署使用。
  */
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
@@ -42,7 +42,16 @@ await cp(join(root, 'scripts', 'docker-entrypoint.sh'), join(stage, 'docker-entr
 await writeFile(join(stage, 'VERSION'), `${version}\n`, 'utf-8')
 
 const sums = []
-for (const entry of ['dist-server/index.mjs', 'Dockerfile.runtime', 'docker-entrypoint.sh', 'compose.runtime.yml', 'VERSION']) {
+async function bundleFiles(dir) {
+  const files = []
+  for (const entry of await readdir(join(stage, dir), { withFileTypes: true })) {
+    const path = `${dir}/${entry.name}`
+    if (entry.isDirectory()) files.push(...await bundleFiles(path))
+    else if (entry.isFile()) files.push(path)
+  }
+  return files.sort()
+}
+for (const entry of [...await bundleFiles('dist-server'), ...await bundleFiles('web'), 'Dockerfile.runtime', 'docker-entrypoint.sh', 'compose.runtime.yml', 'VERSION']) {
   const hash = createHash('sha256').update(await readFile(join(stage, entry))).digest('hex')
   sums.push(`${hash}  ${entry}`)
 }

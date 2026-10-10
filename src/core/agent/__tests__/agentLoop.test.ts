@@ -8,6 +8,8 @@ import { listTrash } from '../../workspace/trash'
 import { CoreSessionStore } from '../../workspace/sessionStore'
 import { CoreAgentService } from '../agentLoop'
 import { searchProjectPage } from '../../retrieval/projectIndex'
+import { SourceCatalog } from '../../inspiration/sourceCatalog'
+import { documentReference } from '../../inspiration/documentReference'
 
 const providerId = 'prov_openai'
 
@@ -45,14 +47,18 @@ function makeService(
   results: StreamResult[],
   events: AgentEvent[],
   usage: UsageRecord[] = [],
-  modelSettings?: Record<string, ModelSettings>
+  modelSettings?: Record<string, ModelSettings>,
+  workspaceId?: string,
+  agentGeneration?: Partial<import('../../../shared/agentGeneration').AgentGenerationPreferences>
 ): { service: CoreAgentService; requests: StreamRequest[] } {
   const scripted = scriptedFactory(results)
   const service = new CoreAgentService({
     store,
+    workspaceId,
     sessions: new CoreSessionStore(store),
     settings: async () => ({
-      providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', name: '模拟供应商', modelSettings }]
+      providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test', name: '模拟供应商', modelSettings }],
+      agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false, ...agentGeneration }
     }),
     getAdapter: scripted.factory,
     emit: (_sid, event) => events.push(event),
@@ -68,6 +74,102 @@ async function loadSession(store: MemoryFileStore, sessionId: string): Promise<C
 }
 
 describe('CoreAgentService', () => {
+  it('lets the inspiration agent retrieve the end of an indexed long attachment through read-only tools', async () => {
+    const store = await createStore()
+    const catalog = new SourceCatalog(store)
+    const source = await catalog.importBytes({ name: 'long.txt', bytes: new TextEncoder().encode(`第一章\n${'甲'.repeat(510_000)}\n第二章\n末尾线索`) })
+    const indexed = await catalog.extract(source.id)
+    const document = await catalog.document(source.id)
+    const section = document.sections.at(-1)!
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [
+      call('dir', 'list_document_sections', { sourceId: source.id, limit: 2 }),
+      call('search', 'search_document', { sourceId: source.id, query: '末尾线索', revision: document.revision }),
+      call('read', 'read_document_section', { sourceId: source.id, sectionId: section.id, revision: document.revision }),
+      text('已读取第二章中的末尾线索。')
+    ], events)
+    await service.run({ mode: 'inspiration', message: documentReference(indexed), providerId, model: 'mock-model' })
+    expect(requests[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['list_document_sections', 'search_document', 'read_document_section']))
+    expect(requests[0].tools.some((tool) => tool.name === 'save_project_doc')).toBe(false)
+    const messages = JSON.stringify(requests.at(-1)?.messages)
+    expect(messages).toContain('末尾线索')
+    expect(messages).not.toContain('甲'.repeat(10_000))
+    expect(events.some((event) => event.type === 'error')).toBe(false)
+  })
+
+  it('only exposes and executes bundled webpage extraction when the selected search mode allows it', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const off = makeService(store, [text('未联网')], events)
+    await off.service.run({ message: '读取网页', providerId, model: 'mock-model', webSearchMode: 'off' })
+    expect(off.requests[0].tools.some((tool) => tool.name === 'web_extract')).toBe(false)
+
+    const scripted = scriptedFactory([call('extract-1', 'web_extract', { url: 'https://example.com' }), text('已读取网页')])
+    const webFetch = vi.fn(async (_input: unknown) => new Response(JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      result: { content: [{ type: 'text', text: JSON.stringify({ content: '# Example Domain' }) }] }
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const service = new CoreAgentService({
+      store,
+      sessions: new CoreSessionStore(store),
+      settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+      getAdapter: scripted.factory,
+      emit: (_sid, event) => events.push(event),
+      webFetch: webFetch as typeof fetch
+    })
+    const { sessionId } = await service.run({ message: '读取网页', providerId, model: 'mock-model', webSearchMode: 'free' })
+    const session = await loadSession(store, sessionId)
+    expect(scripted.requests[0].tools.some((tool) => tool.name === 'web_extract')).toBe(true)
+    expect(session.messages.find((item) => item.toolCallId === 'extract-1')?.text).toContain('# Example Domain')
+    expect(webFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not finish after a placeholder that promises to verify workspace state', async () => {
+    const store = await createStore()
+    await saveNote(store, { title: '落盘状态', content: '正文已处理' })
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [
+      text('我核实一下实际落盘状态，不凭记忆说。'),
+      call('verify-1', 'list_notes', {}),
+      text('已核实：正文已经处理。')
+    ], events)
+
+    const { sessionId } = await service.run({ message: '正文有做处理吗', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests).toHaveLength(3)
+    expect(session.messages.some((message) => message.role === 'tool' && message.toolCallId === 'verify-1')).toBe(true)
+    expect(session.messages.at(-1)?.text).toBe('已核实：正文已经处理。')
+  })
+
+  it('retries one empty model response and does not persist a blank assistant message', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [text(''), text('空响应后已恢复。')], events)
+
+    const { sessionId } = await service.run({ message: '继续检查', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests).toHaveLength(2)
+    expect(requests[1].system).toContain('空响应')
+    expect(session.messages.filter((message) => message.role === 'assistant' && !message.text?.trim())).toHaveLength(0)
+    expect(session.messages.at(-1)?.text).toBe('空响应后已恢复。')
+  })
+
+  it('surfaces an explicit recoverable message after two empty model responses', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [text(''), text('')], events)
+
+    const { sessionId } = await service.run({ message: '继续检查', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests).toHaveLength(2)
+    expect(session.messages.filter((message) => message.role === 'assistant' && !message.text?.trim())).toHaveLength(0)
+    expect(session.messages.at(-1)?.text).toContain('模型返回了空响应')
+    expect(session.messages.at(-1)?.isError).toBe(true)
+  })
+
   it('读工具自动执行并把结果回注给模型', async () => {
     const store = await createStore()
     await saveNote(store, { title: '林晚的设定', content: '主角' })
@@ -86,6 +188,45 @@ describe('CoreAgentService', () => {
     expect(requests[1].messages.some((m) => m.role === 'tool' && m.text?.includes('林晚的设定'))).toBe(true)
     expect(requests[1].tools.length).toBeGreaterThan(0)
     expect(requests[1].system).toContain('save_chapter')
+    expect(session.messages.at(-1)?.runActivity?.tools).toEqual([{ name: 'list_notes', count: 1, failed: 0 }])
+    expect(session.messages.at(-1)?.runActivity?.skills).toEqual([])
+    expect(session.messages.at(-1)?.runActivity?.rules.some((rule) => rule.id === 'planning-first-order')).toBe(true)
+  })
+
+  it('keeps each completed reply activity separate across turns', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service } = makeService(store, [call('c1', 'list_notes', {}), text('第一轮完成'), text('第二轮完成')], events)
+    const { sessionId } = await service.run({ message: '查看便签', providerId, model: 'mock-model' })
+    await service.run({ sessionId, message: '再说一句', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+    const replies = session.messages.filter((message) => message.role === 'assistant' && message.runActivity)
+    expect(replies).toHaveLength(2)
+    expect(replies[0].runActivity?.tools).toEqual([{ name: 'list_notes', count: 1, failed: 0 }])
+    expect(replies[1].runActivity?.tools).toEqual([])
+  })
+
+  it('工具执行器抛错时仍为每个 assistant tool call 回注失败结果', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const scripted = scriptedFactory([call('save-1', 'save_chapter', {}), text('已报告保存失败。')])
+    const service = new CoreAgentService({
+      store,
+      sessions: new CoreSessionStore(store),
+      settings: async () => ({ providers: [{ id: providerId, protocol: 'openai', baseUrl: 'https://mock.local/v1', apiKey: 'sk-test' }] }),
+      getAdapter: scripted.factory,
+      emit: (_sid, event) => events.push(event),
+      executeTool: async () => { throw new Error('保存时发生 I/O 错误') }
+    })
+
+    const result = await service.run({ message: '保存', providerId, model: 'mock-model' })
+    const session = await loadSession(store, result.sessionId)
+    const toolMessage = session.messages.find((message) => message.role === 'tool' && message.toolCallId === 'save-1')
+    expect(toolMessage?.isError).toBe(true)
+    expect(toolMessage?.text).toContain('保存时发生 I/O 错误')
+    expect(scripted.requests).toHaveLength(2)
+    expect(scripted.requests[1].messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'save-1', isError: true }))
+    expect(session.messages.at(-1)?.text).toBe('已报告保存失败。')
   })
 
   it('连续重复调用相同工具时提前停止，而不是依赖十轮上限', async () => {
@@ -102,10 +243,81 @@ describe('CoreAgentService', () => {
     expect(session.messages.at(-1)?.text).not.toContain('上限（10 轮）')
   })
 
+  it('普通模式使用设置的连续工具调用轮次上限', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [
+      call('c1', 'list_notes', {}),
+      call('c2', 'list_characters', {}),
+      text('不应继续请求')
+    ], events, [], undefined, undefined, { maxToolRounds: 2 })
+
+    const { sessionId } = await service.run({ message: '连续调用工具', providerId, model: 'mock-model' })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests).toHaveLength(2)
+    expect(session.messages.at(-1)?.text).toContain('连续工具调用已达上限（2 轮）')
+  })
+
+  it('普通模式可把轮次上限提高到默认值以上', async () => {
+    const store = await createStore()
+    const sessions = new CoreSessionStore(store)
+    const existing = await sessions.create()
+    existing.title = '长会话'
+    existing.messages = Array.from({ length: 90 }, (_, index) => ({
+      id: `old_${index}`,
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `历史第 ${index} 条：${'需要保留的上下文'.repeat(24)}`
+    }))
+    await sessions.save(existing)
+
+    const events: AgentEvent[] = []
+    const maxToolRounds = 101
+    const responses = [
+      text('早期对话摘要第一段。'),
+      text('早期对话摘要第二段。'),
+      ...Array.from({ length: maxToolRounds }, (_, index) =>
+        call(`c${index}`, 'get_chapter', { chapterId: 'missing-chapter', offset: index })
+      )
+    ]
+    const { service, requests } = makeService(
+      store,
+      responses,
+      events,
+      [],
+      { 'mock-model': { contextTokens: 5000, maxOutputTokens: 800 } },
+      undefined,
+      { maxToolRounds }
+    )
+
+    const { sessionId } = await service.run({
+      sessionId: existing.id,
+      message: '继续逐项读取',
+      providerId,
+      model: 'mock-model',
+      mode: 'normal',
+      creative: {
+        mode: 'orchestration',
+        orchestrationEnabled: true,
+        subagentsEnabled: false,
+        intensity: 'standard',
+        selectedSkillIds: [],
+        selectedRuleSetIds: [],
+        orchestration: { mode: 'single', enabled: true, subagentsEnabled: false, enabledStageIds: ['write'], modelByStage: {}, maxCalls: 1, maxEstimatedTokens: 100000000 }
+      }
+    })
+    const session = await loadSession(store, sessionId)
+
+    expect(requests.filter((request) => request.tools.length === 0)).toHaveLength(2)
+    expect(requests.filter((request) => request.tools.length > 0)).toHaveLength(maxToolRounds)
+    expect(session.contextSummary).toContain('早期对话摘要第二段')
+    expect(session.messages.at(-1)?.text).toContain('连续工具调用已达上限（101 轮）')
+  })
+
   it('emits applied only after the write promise resolves', async () => {
     const store = await createStore()
     const events: AgentEvent[] = []
-    const scripted = scriptedFactory([call('w1', 'save_note', { note: { title: '确认', content: 'x' } }), text('完成')])
+    const scripted = scriptedFactory([call('w1', 'save_note', { note: { title: '确认', content: '不应出现在事件中的正文' } }), text('完成')])
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const service = new CoreAgentService({
@@ -142,7 +354,9 @@ describe('CoreAgentService', () => {
     expect(events.some((event) => event.type === 'change-result')).toBe(false)
     release()
     await run
-    expect(events.some((event) => event.type === 'change-result' && event.status === 'applied')).toBe(true)
+    const applied = events.find((event) => event.type === 'change-result' && event.status === 'applied')
+    expect(applied).toMatchObject({ appliedChange: { entityKind: 'note', entityId: 'note_gate' } })
+    expect(JSON.stringify(applied)).not.toContain('不应出现在事件中的正文')
     expect(events.some((event) => event.type === 'change-applied')).toBe(false)
   })
 
@@ -226,6 +440,7 @@ describe('CoreAgentService', () => {
     expect(requests[1].tools).toHaveLength(0)
     expect(requests[2].system).toContain('较早对话的压缩摘要')
     expect(requests[2].messages.length).toBeLessThan(saved.messages.length)
+    expect(requests.map((request) => request.params?.temperature)).toEqual([0.5, 0.5, 0.5])
   })
 
   it('按供应商的每模型设置注入请求参数', async () => {
@@ -238,7 +453,7 @@ describe('CoreAgentService', () => {
     await service.run({ message: '你好', providerId, model: 'mock-model' })
 
     // 上下文未配置 → 取模型档案默认值（未知模型 128K）
-    expect(requests[0].params).toEqual({ reasoning: 'high', contextTokens: 131072, maxOutputTokens: 4096 })
+    expect(requests[0].params).toEqual({ reasoning: 'high', contextTokens: 131072, maxOutputTokens: 4096, temperature: 0.5 })
   })
 
   it('没有每模型设置时用档案默认值', async () => {
@@ -248,7 +463,17 @@ describe('CoreAgentService', () => {
 
     await service.run({ message: '你好', providerId, model: 'mock-model' })
 
-    expect(requests[0].params).toEqual({ reasoning: 'off', contextTokens: 131072, maxOutputTokens: 8192 })
+    expect(requests[0].params).toEqual({ reasoning: 'off', contextTokens: 131072, maxOutputTokens: 8192, temperature: 0.5 })
+  })
+
+  it('maps the default product temperature into normal chat model params', async () => {
+    const store = await createStore()
+    const events: AgentEvent[] = []
+    const { service, requests } = makeService(store, [text('完成')], events)
+
+    await service.run({ message: '你好', providerId, model: 'mock-model' })
+
+    expect(requests[0].params).toMatchObject({ temperature: 0.5 })
   })
 
   it('在 done 事件前持久化最终助手消息', async () => {
@@ -294,13 +519,16 @@ describe('CoreAgentService', () => {
         { ...text('工作区里有 1 条便签。'), usage: { promptTokens: 200, completionTokens: 20, cachedTokens: 0, cacheWriteTokens: 0 } }
       ],
       events,
-      usage
+      usage,
+      undefined,
+      'project-a'
     )
 
     await service.run({ message: '有哪些便签？', providerId, model: 'mock-model' })
 
     expect(usage).toHaveLength(2)
     expect(usage[0]).toMatchObject({
+      workspaceId: 'project-a',
       providerId,
       providerName: '模拟供应商',
       model: 'mock-model',

@@ -5,7 +5,7 @@ import { initializeWorkspace, loadWorkspaceListItem } from '../workspaceService'
 import { migrateWorkspace } from '../migration'
 
 describe('workspace docs directory', () => {
-  it('creates docs for new and legacy workspaces while preserving content', async () => {
+  it('creates docs for new and current workspaces while preserving content', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '新项目')
     expect(await store.exists('docs')).toBe(true)
@@ -13,7 +13,7 @@ describe('workspace docs directory', () => {
     expect(await store.readText('docs/plan.md')).toBe('规划内容')
 
     const legacy = new MemoryFileStore()
-    await legacy.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '旧项目' }))
+    await legacy.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 5, name: '旧项目' }))
     await migrateWorkspace(legacy)
     expect(await legacy.exists('docs')).toBe(true)
   })
@@ -32,7 +32,7 @@ describe('workspace docs directory', () => {
 
   it('does not create docs when loading picker metadata only', async () => {
     const store = new MemoryFileStore()
-    await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '只读' }))
+    await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 5, name: '只读' }))
     await loadWorkspaceListItem(store, '只读', 'memory')
     expect(await store.exists('docs')).toBe(false)
   })

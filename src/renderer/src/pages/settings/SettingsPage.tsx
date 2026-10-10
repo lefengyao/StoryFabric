@@ -1,6 +1,6 @@
-import { KeyRound, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Brain, KeyRound, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, EmptyState, Field, Input, Spinner } from '../../components/ui/primitives'
 import { Modal } from '../../components/ui/modal'
 import { ModelManagerView } from './ModelManagerView'
@@ -8,24 +8,32 @@ import { api } from '../../lib/api'
 import { PROTOCOL_LABEL } from '../../lib/utils'
 import { isValidHexColor } from '../../lib/accent'
 import { EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS } from '../../lib/editorStyle'
+import { CHAT_FONT_SIZES } from '../../lib/chatTypography'
 import { createKeyedDebounce } from '../../lib/pendingCommit'
 import { playCompletionSound } from '../../lib/completionSound'
 import type { ChatDensity, EditorFontFamily, Protocol, ProviderInput, ProviderPublic, SendShortcut } from '../../../../shared/types'
+import { TRAILBLAZER_PROVIDER_ID } from '../../../../shared/cloudAccount'
 import { useSettings } from '../../stores/settingsStore'
+import { OrchestrationSettingsView } from './OrchestrationSettingsView'
+import { useWorkspace } from '../../stores/workspaceStore'
+import { APP_VERSION } from '../../lib/appVersion'
+import { UpdatesView } from './UpdatesView'
 
 const PROTOCOLS: Protocol[] = ['openai', 'anthropic', 'gemini']
 
 const PROTOCOL_HINTS: Record<Protocol, string> = {
-  openai: 'Base URL 通常以 /v1 结尾，如 https://api.deepseek.com/v1',
+  openai: 'Base URL 通常以 /v1 结尾；Gemini 的 OpenAI 兼容模式填写 https://generativelanguage.googleapis.com/v1beta/openai',
   anthropic: 'Base URL 如 https://api.anthropic.com',
-  gemini: 'Base URL 如 https://generativelanguage.googleapis.com'
+  gemini: 'Gemini 原生协议填写 https://generativelanguage.googleapis.com/v1beta；也接受主机根地址'
 }
 
 const TABS = [
   { key: 'models', label: '模型与供应商' },
   { key: 'agent', label: '智能体' },
+  { key: 'orchestration', label: '编排' },
   { key: 'appearance', label: '外观' },
-  { key: 'notifications', label: '通知' }
+  { key: 'notifications', label: '通知' },
+  { key: 'updates', label: '监测更新' }
 ] as const
 
 type TabKey = (typeof TABS)[number]['key']
@@ -36,6 +44,7 @@ export function SettingsPage(): React.ReactElement {
   const settings = useSettings((s) => s.settings)
   const reload = useSettings((s) => s.load)
   const update = useSettings((s) => s.update)
+  const workspace = useWorkspace((s) => s.summary)
   const previewAccent = useSettings((s) => s.previewAccent)
   // 两个取色器各有独立定时器：先改浅色再改深色时不会取消前者；离开页面时让定时器照常落盘。
   const accentCommit = useRef<ReturnType<typeof createKeyedDebounce<'accentColorLight' | 'accentColorDark'>> | null>(null)
@@ -49,6 +58,23 @@ export function SettingsPage(): React.ReactElement {
   const [savingProvider, setSavingProvider] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState<string | null>(null)
+  const [projectPrompt, setProjectPrompt] = useState<string | null>(null)
+
+  useEffect(() => {
+    void reload().catch((cause) => setFormError(cause instanceof Error ? cause.message : '读取供应商状态失败'))
+  }, [reload])
+
+  useEffect(() => {
+    let cancelled = false
+    const workspaceKey = workspace?.path ?? null
+    setPromptDraft(null)
+    setProjectPrompt(null)
+    if (!workspaceKey || !api.readInspirationDoc) return () => { cancelled = true }
+    void api.readInspirationDoc('system-prompt.md').then((content) => {
+      if (!cancelled) setProjectPrompt(content ?? '')
+    }).catch(() => { if (!cancelled) setProjectPrompt('') })
+    return () => { cancelled = true }
+  }, [workspace?.path])
 
   if (!settings) return <div className="flex h-full items-center justify-center"><Spinner /></div>
 
@@ -99,10 +125,10 @@ export function SettingsPage(): React.ReactElement {
   }
 
   /* 模型选择公共数据 */
-  const modelOptions = settings.providers.filter((p) => p.models.length > 0)
+  const modelOptions = settings.providers.filter((p) => p.models.length > 0 && p.active !== false)
   const modelValue = (ref?: { providerId: string; model: string }): string => (ref ? `${ref.providerId}::${ref.model}` : '')
   const modelOnChange =
-    (key: 'defaultChatModel' | 'quickActionModel') =>
+    (key: 'defaultChatModel') =>
     async (v: string): Promise<void> => {
       const [providerId, model] = v.split('::')
       await update({ [key]: { providerId, model } })
@@ -124,7 +150,7 @@ export function SettingsPage(): React.ReactElement {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
+      <div data-android-tab-strip className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -140,7 +166,7 @@ export function SettingsPage(): React.ReactElement {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl space-y-6 p-6">
+        <div data-android-settings-content className="mx-auto max-w-2xl space-y-6 p-6">
           {active === 'models' && (
             <>
               {/* 供应商 */}
@@ -168,20 +194,24 @@ export function SettingsPage(): React.ReactElement {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.name}</span>
                           <Badge tone="accent">{PROTOCOL_LABEL[p.protocol]}</Badge>
-                          {p.hasKey ? <Badge tone={p.keyStorage === 'plain' ? 'danger' : 'ok'}>Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
+                          {p.managed === 'trailblazer'
+                            ? <Badge tone={p.active ? 'ok' : 'danger'}>{p.active ? '已激活' : '登录后激活'}</Badge>
+                            : p.hasKey ? <Badge tone={p.keyStorage === 'plain' ? 'danger' : 'ok'}>Key {p.keyPreview}</Badge> : <Badge tone="danger">未配置密钥</Badge>}
                           {p.keyStorage === 'plain' && <Badge tone="danger">明文降级</Badge>}
                         </div>
-                        <div className="mt-1 truncate text-xs text-faint">{p.baseUrl || '（未填 Base URL）'} · {p.models.length} 个模型</div>
+                        <div className="mt-1 truncate text-xs text-faint">{p.managed === 'trailblazer' ? '官方托管连接 · 登录后按账号权限提供分组' : (p.baseUrl || '（未填 Base URL）')} · {p.models.length} 个模型</div>
                       </div>
                       <Button size="sm" variant="ghost" onClick={() => setManagingId(p.id)} title="管理模型">
                         <Settings2 size={13} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
-                        <Pencil size={13} />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)}>
-                        <Trash2 size={13} />
-                      </Button>
+                      {p.managed !== 'trailblazer' && <>
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(p)} title="编辑供应商">
+                          <Pencil size={13} />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-danger hover:text-danger" onClick={() => void removeProvider(p.id)} title="删除供应商">
+                          <Trash2 size={13} />
+                        </Button>
+                      </>}
                     </Card>
                   ))}
                 </div>
@@ -203,18 +233,6 @@ export function SettingsPage(): React.ReactElement {
                       ))}
                     </select>
                   </Field>
-                  <Field label="快捷操作模型（续写/润色等轻量任务）">
-                    <select value={modelValue(settings.quickActionModel)} onChange={(e) => void modelOnChange('quickActionModel')(e.target.value)} className="set-select">
-                      <option value="">请选择</option>
-                      {modelOptions.map((p) => (
-                        <optgroup key={p.id} label={p.name}>
-                          {p.models.map((m) => (
-                            <option key={m} value={`${p.id}::${m}`}>{m}</option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </Field>
                 </Card>
               </section>
             </>
@@ -225,18 +243,85 @@ export function SettingsPage(): React.ReactElement {
               <h2 className="mb-3 text-sm font-semibold">智能体</h2>
               <Card className="space-y-4 p-4">
                 <Field
+                  label="智能体温度"
+                  hint="数值越高越精准稳定，越低越发散创新。当前值会映射到模型原始 temperature。"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={settings.agentGeneration.agentTemperature}
+                      onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, agentTemperature: Number(e.target.value) } })}
+                      className="min-w-0 flex-1 accent-[var(--accent)]"
+                      aria-label="智能体温度"
+                    />
+                    <output className="w-12 rounded-md border border-line bg-panel px-2 py-1 text-center text-xs tabular-nums">{settings.agentGeneration.agentTemperature}</output>
+                  </div>
+                  <div className="mt-1 flex justify-between text-[11px] text-faint"><span>发散 / 创新</span><span>精准 / 稳定</span></div>
+                </Field>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={settings.agentGeneration.proseAlternativesEnabled}
+                    onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, proseAlternativesEnabled: e.target.checked } })}
+                    className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                  />
+                  <span><span className="block">正文生成提供多种方案</span><span className="mt-0.5 block text-xs text-muted">开启后，智能体在写正文时给出多个候选供你挑选；不会自动覆盖章节。</span></span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input type="checkbox" checked={settings.agentGeneration.polishAgentEnabled !== false} onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, polishAgentEnabled: e.target.checked } })} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" />
+                  <span><span className="block">AI 润色智能体</span><span className="mt-0.5 block text-xs text-muted">普通模式下对选定章节提出润色候选，确认后再写回。</span></span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm">
+                  <input type="checkbox" checked={settings.agentGeneration.deAiAgentEnabled !== false} onChange={(e) => void update({ agentGeneration: { ...settings.agentGeneration, deAiAgentEnabled: e.target.checked } })} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" />
+                  <span><span className="block">去 AI 风格智能体</span><span className="mt-0.5 block text-xs text-muted">普通模式下减少模板化表达，不改变事实和人物关系。</span></span>
+                </label>
+                <Field label="普通模式连续工具调用轮次上限" hint="默认 100，范围 1 至 1000。仅控制普通模式的连续工具循环，与编排模式的模型调用预算分开。">
+                  <Input
+                    key={settings.agentGeneration.maxToolRounds ?? 100}
+                    type="number"
+                    min={1}
+                    max={1000}
+                    step={1}
+                    defaultValue={settings.agentGeneration.maxToolRounds ?? 100}
+                    onBlur={(event) => {
+                      const input = event.currentTarget
+                      const current = settings.agentGeneration.maxToolRounds ?? 100
+                      const raw = input.value.trim()
+                      const value = raw ? Number(raw) : current
+                      const next = Number.isInteger(value) ? Math.max(1, Math.min(1000, value)) : current
+                      input.value = String(next)
+                      if (next !== current) {
+                        void update({ agentGeneration: { ...settings.agentGeneration, maxToolRounds: next } }).catch(() => {
+                          input.value = String(current)
+                        })
+                      }
+                    }}
+                    className="max-w-32"
+                  />
+                </Field>
+                <div className="flex flex-wrap items-center gap-4 text-sm">
+                  <Link to="/memory" className="inline-flex min-h-9 items-center gap-2 text-accent hover:underline">
+                    <Brain size={15} />管理记忆
+                  </Link>
+                </div>
+                <Field
                   label="自定义提示词"
-                  hint="将附加在内置系统提示词之后，用于注入文风偏好、世界观规则等；失焦时自动保存，留空则不附加"
+                  hint={workspace ? '仅保存到当前项目 docs/system-prompt.md；用于注入文风偏好、世界观规则等，失焦时自动保存。' : '请先打开项目；系统提示词按项目分别保存。'}
                 >
                   <textarea
-                    value={promptDraft ?? settings.customPrompt ?? ''}
+                    value={promptDraft ?? projectPrompt ?? ''}
                     onChange={(e) => setPromptDraft(e.target.value)}
                     onBlur={() => {
-                      if (promptDraft !== null) {
-                        void update({ customPrompt: promptDraft })
+                      if (promptDraft !== null && workspace && api.saveInspirationDoc) {
+                        const value = promptDraft
+                        void api.saveInspirationDoc('system-prompt.md', value).then(() => setProjectPrompt(value)).catch(() => undefined)
                         setPromptDraft(null)
                       }
                     }}
+                    disabled={!workspace || !api.saveInspirationDoc}
                     rows={6}
                     className="w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent"
                     placeholder={'例如：\n· 行文偏克制冷峻，少用感叹号\n· 世界中不存在魔法，一切异象源于古科技\n· 人物对话避免现代网络用语'}
@@ -254,6 +339,8 @@ export function SettingsPage(): React.ReactElement {
               </Card>
             </section>
           )}
+
+          {active === 'orchestration' && <OrchestrationSettingsView settings={settings} update={update} />}
 
           {active === 'appearance' && (
             <>
@@ -401,6 +488,17 @@ export function SettingsPage(): React.ReactElement {
                       <option value="spacious">宽松</option>
                     </select>
                   </Field>
+                  <Field label="会话窗口字号" hint="只影响聊天消息、输入框、工具回执、编排信息和智能体活动信息">
+                    <select
+                      value={settings.chatFontSize}
+                      onChange={(e) => void update({ chatFontSize: Number(e.target.value) })}
+                      className="set-select max-w-32"
+                    >
+                      {CHAT_FONT_SIZES.map((size) => (
+                        <option key={size} value={size}>{size}px</option>
+                      ))}
+                    </select>
+                  </Field>
                   <Field label="发送快捷键">
                     <select
                       value={settings.sendShortcut}
@@ -442,7 +540,8 @@ export function SettingsPage(): React.ReactElement {
             </section>
           )}
 
-          <p className="pb-4 text-center text-xs text-faint">StoryFabric v0.1 · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
+          {active === 'updates' && <UpdatesView />}
+          <p className="pb-4 text-center text-xs text-faint">StoryFabric v{APP_VERSION} · 本地优先，所有数据保存在你自己的工作区文件夹中</p>
         </div>
       </div>
 
@@ -450,7 +549,8 @@ export function SettingsPage(): React.ReactElement {
       {editing && (
         <Modal open onOpenChange={() => setEditing(null)} title={editingId ? `编辑供应商：${editing.name}` : '添加供应商'}>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            {editingId === TRAILBLAZER_PROVIDER_ID && <div className="rounded-lg border border-line bg-panel px-3 py-2 text-sm text-muted">官方供应商由 Trailblazer 账户中心托管，登录后自动激活。名称、协议、连接地址和认证方式不可修改；请使用“管理模型”调整模型列表与参数。</div>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <div className="grid grid-cols-2 gap-3">
               <Field label="名称 *">
                 <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="DeepSeek" autoFocus />
               </Field>
@@ -461,13 +561,13 @@ export function SettingsPage(): React.ReactElement {
                   ))}
                 </select>
               </Field>
-            </div>
-            <Field label="Base URL *" hint={PROTOCOL_HINTS[editing.protocol]}>
+            </div>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <Field label="Base URL *" hint={PROTOCOL_HINTS[editing.protocol]}>
               <Input value={editing.baseUrl} onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })} placeholder="https://api.deepseek.com/v1" />
-            </Field>
-            <Field label={editingId ? 'API Key（留空则沿用原密钥）' : 'API Key'}>
+            </Field>}
+            {editingId !== TRAILBLAZER_PROVIDER_ID && <Field label={editingId ? 'API Key（留空则沿用原密钥）' : 'API Key'}>
               <Input type="password" value={editing.apiKey ?? ''} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value || undefined })} placeholder="sk-…" />
-            </Field>
+            </Field>}
             <Field label="模型" hint="模型列表与逐模型能力改到「管理模型」里设置（拉取、勾选、手动添加、思考强度映射）">
               <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
                 <span className="text-muted">已配置 {editing.models.length} 个模型</span>
@@ -484,9 +584,7 @@ export function SettingsPage(): React.ReactElement {
               <Button variant="ghost" onClick={() => setEditing(null)}>
                 取消
               </Button>
-              <Button variant="primary" onClick={() => void saveProvider()} loading={savingProvider} disabled={!editing.name.trim() || !editing.baseUrl.trim()}>
-                保存
-              </Button>
+              {editingId !== TRAILBLAZER_PROVIDER_ID && <Button variant="primary" onClick={() => void saveProvider()} loading={savingProvider} disabled={!editing.name.trim() || !editing.baseUrl.trim()}>保存</Button>}
             </div>
           </div>
         </Modal>

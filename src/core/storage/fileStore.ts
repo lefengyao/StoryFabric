@@ -4,6 +4,8 @@
  * 共享业务层只使用相对路径（统一为 `/`），不感知 Node、Electron 或 Android 文件系统。
  */
 export interface FileStore {
+  /** Stable identity for coordinating writes from multiple adapters for the same storage root. */
+  storageIdentity?(): string
   exists(path: string): Promise<boolean>
   ensureDir(path: string): Promise<void>
   readText(path: string): Promise<string | null>
@@ -14,6 +16,10 @@ export interface FileStore {
   writeBytes(path: string, bytes: Uint8Array): Promise<void>
   move(from: string, to: string): Promise<void>
   remove(path: string): Promise<void>
+  /** 删除单个文件；目标为目录时必须拒绝，不能递归删除。 */
+  removeFile(path: string): Promise<void>
+  /** 文件字节数；目录或不存在时返回 null，供读取前的资源限制使用。 */
+  fileSize(path: string): Promise<number | null>
   /** 文件修改时间；无法提供时返回 null，供清理策略保守跳过。 */
   modifiedAt?(path: string): Promise<number | null>
   listFiles(dir: string, extension?: string): Promise<string[]>
@@ -154,6 +160,22 @@ export class MemoryFileStore implements FileStore {
     for (const d of [...this.dirs]) {
       if (d === p || d.startsWith(`${p}/`)) this.dirs.delete(d)
     }
+  }
+
+  async removeFile(path: string): Promise<void> {
+    const p = normalizeRelativePath(path)
+    if (!this.files.has(p) && !this.binary.has(p)) throw new Error(`目标不是文件：${p}`)
+    this.files.delete(p)
+    this.binary.delete(p)
+    this.mtimes.delete(p)
+  }
+
+  async fileSize(path: string): Promise<number | null> {
+    const p = normalizeRelativePath(path)
+    const bytes = this.binary.get(p)
+    if (bytes) return bytes.byteLength
+    const text = this.files.get(p)
+    return text === undefined ? null : new TextEncoder().encode(text).byteLength
   }
 
   async modifiedAt(path: string): Promise<number | null> {

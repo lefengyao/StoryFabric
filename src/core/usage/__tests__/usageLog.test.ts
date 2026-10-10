@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UsageRecord } from '../../../shared/types'
-import { appendUsage, parseUsageLog, summarizeUsage } from '../usageLog'
+import { appendUsage, filterUsageByModel, filterUsageByWorkspace, parseUsageLog, summarizeUsage, summarizeUsageHours, usageModelKey } from '../usageLog'
 
 const record = (patch: Partial<UsageRecord>): UsageRecord => ({
   at: 0,
@@ -105,5 +105,46 @@ describe('summarizeUsage', () => {
     const stats = summarizeUsage([record({ at: now, promptTokens: 10 }), record({ at: now - 30 * day, promptTokens: 90 })], { now, days: 3 })
     expect(stats.promptTokens).toBe(100)
     expect(stats.byDay.reduce((sum, item) => sum + item.promptTokens, 0)).toBe(10)
+  })
+})
+
+describe('usage dashboard drilldown', () => {
+  it('keeps the all-project total while isolating each project before model and day aggregation', () => {
+    const records = [
+      record({ at: new Date(2026, 8, 9, 10).getTime(), workspaceId: 'project-a', model: 'shared', promptTokens: 10 }),
+      record({ at: new Date(2026, 8, 9, 11).getTime(), workspaceId: 'project-b', model: 'shared', promptTokens: 20 }),
+      record({ at: new Date(2026, 8, 9, 12).getTime(), model: 'shared', promptTokens: 30 })
+    ]
+    expect(filterUsageByWorkspace(records, null)).toEqual(records)
+    expect(filterUsageByWorkspace(records, 'project-a')).toEqual([records[0]])
+    expect(filterUsageByWorkspace(records, 'project-b')).toEqual([records[1]])
+    expect(summarizeUsage(filterUsageByWorkspace(records, 'project-a'), { now: records[0].at }).promptTokens).toBe(10)
+  })
+
+  it('filters an exact provider and model without mixing identical model names', () => {
+    const records = [
+      record({ providerId: 'first', model: 'shared', promptTokens: 10 }),
+      record({ providerId: 'second', model: 'shared', promptTokens: 20 }),
+      record({ providerId: 'first', model: 'other', promptTokens: 30 })
+    ]
+    expect(filterUsageByModel(records, null)).toEqual(records)
+    expect(filterUsageByModel(records, usageModelKey('second', 'shared'))).toEqual([records[1]])
+    expect(usageModelKey('a::b', 'c')).not.toBe(usageModelKey('a', 'b::c'))
+  })
+
+  it('fills all 24 local hours and excludes records from adjacent days', () => {
+    const date = '2026-09-09'
+    const records = [
+      record({ at: new Date(2026, 8, 9, 0, 15).getTime(), promptTokens: 100, completionTokens: 20 }),
+      record({ at: new Date(2026, 8, 9, 0, 55).getTime(), promptTokens: 50, completionTokens: 5 }),
+      record({ at: new Date(2026, 8, 9, 23, 10).getTime(), promptTokens: 30, completionTokens: 10 }),
+      record({ at: new Date(2026, 8, 10, 0, 1).getTime(), promptTokens: 900, completionTokens: 900 })
+    ]
+    const hours = summarizeUsageHours(records, date)
+    expect(hours).toHaveLength(24)
+    expect(hours[0]).toMatchObject({ hour: 0, calls: 2, promptTokens: 150, completionTokens: 25 })
+    expect(hours[23]).toMatchObject({ hour: 23, calls: 1, promptTokens: 30, completionTokens: 10 })
+    expect(hours[12]).toMatchObject({ hour: 12, calls: 0, promptTokens: 0, completionTokens: 0 })
+    expect(hours.reduce((sum, hour) => sum + hour.promptTokens + hour.completionTokens, 0)).toBe(215)
   })
 })

@@ -1,37 +1,49 @@
 import type { ChapterDoc, CharacterDoc, EntityKind, NoteDoc, OutlineDoc, PendingChange, SettingDoc, StoryEvent, ToolDefJson, ToolFailure, ToolFailureCode } from '../../shared/types'
-import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadEventDocuments, loadRelationships, saveChapter, saveCharacter, saveNote, saveOutlineDoc, saveRelationships, saveSetting, serializeChapter, serializeCharacter, serializeEvent, serializeNote, serializeOutlineDoc, serializeRelationships } from '../workspace/entityStore'
+import { countWords, deleteNote, findCharacter, genId, getChapterBody, getNote, getSetting, listChapters, listCharacters, listEvents, listNotes, listOutline, listSettings, loadChapterDocuments, loadEventDocuments, loadRelationships, readChapterDocumentAt, saveChapter, saveChapterInPlace, saveCharacter, saveNote, saveOutlineDoc, saveRelationships, saveSetting, serializeChapter, serializeCharacter, serializeEvent, serializeNote, serializeOutlineDoc, serializeRelationships, validateSettingTagDetails, validateSettingTagParents } from '../workspace/entityStore'
 import type { FileStore } from '../storage/fileStore'
-import { getChapterContext, lookupTerm, readChapterSlice, readOutlineSlice, searchProjectPage } from '../retrieval'
+import { getChapterContext, invalidateProjectIndex, lookupTerm, readChapterSlice, readOutlineSlice, searchProjectPage } from '../retrieval'
 import { listTrash, restoreFromTrash } from '../workspace/trash'
-import { listVolumes, moveChapter } from '../workspace/workspaceService'
-import { validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from './writeValidation'
-import { AGENT_CHAPTER_SCHEMA, AGENT_CHARACTER_SCHEMA, AGENT_EVENT_SCHEMA, AGENT_NOTE_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA, AGENT_RELATIONSHIP_SCHEMA, AGENT_SETTING_SCHEMA } from './writeSchemas'
+import { listVolumes, saveVolume } from '../workspace/workspaceService'
+import { validateAgentChapterEdit, validateAgentChapterMove, validateAgentChapterWrite, validateAgentCharacterWrite, validateAgentEventWrite, validateAgentNoteWrite, validateAgentOutlineWrite, validateAgentRelationshipWrite, validateAgentSettingWrite } from './writeValidation'
+import { AGENT_CHAPTER_EDIT_SCHEMA, AGENT_CHAPTER_SCHEMA, AGENT_CHARACTER_SCHEMA, AGENT_EVENT_SCHEMA, AGENT_NOTE_SCHEMA, AGENT_OUTLINE_DOC_SCHEMA, AGENT_RELATIONSHIP_SCHEMA, AGENT_SETTING_SCHEMA, DOCUMENT_READ_BASELINE_SCHEMA } from './writeSchemas'
 import { executeProjectDocTool, PROJECT_DOC_TOOL_DEFS } from './projectDocTools'
+import { executeDocumentTool, DOCUMENT_TOOL_DEFS } from './documentTools'
+import { CONTENT_EDIT_TOOL_DEFS, executeContentEditTool } from './contentEditTools'
 import { executeDeleteEntityTool } from './deleteEntityTool'
 import { parseToolArguments, validateToolArguments } from './toolArguments'
 import { contentRevision } from '../workspace/resourceRevision'
 import { coordinatorFor } from '../workspace/mutationCoordinator'
 import { diagnoseEventGraph, normalizeEventGraphChange } from '../workspace/eventGraph'
 import { commitTextChanges } from '../workspace/mutationJournal'
+import { webSearch } from '../search/webSearchService'
+import { webExtract } from '../search/webExtractService'
+import { resolveChapterPlacement } from '../../shared/chapterPlacement'
+import type { AgentChangeDecision } from '../../shared/api'
+import { parseFrontMatter } from '../workspace/frontMatter'
+import { getDocumentSnapshot, readCurrentDocument, saveDocument } from '../workspace/documentWrites'
+import { DOCUMENT_HISTORY_TOOL_DEFS, executeDocumentHistoryTool } from './documentHistoryTools'
+import { assertDocumentReadSourceUnchanged, checkDocumentReadRevision, rememberDocumentReadRevision } from '../retrieval/documentReadRevision'
 
 export type ToolOutcome =
   | { kind: 'result'; text: string; ok: boolean; preview: string }
-  | { kind: 'pending'; change: PendingChange; apply: () => Promise<{ ok: boolean; text: string }> }
+  | { kind: 'pending'; change: PendingChange; apply: (decision?: AgentChangeDecision) => Promise<{ ok: boolean; text: string }> }
 
 const clip = (text: string, max = 120): string => (text.length > max ? `${text.slice(0, max)}…` : text)
 const json = (v: unknown): string => JSON.stringify(v)
+const MAX_CHAPTER_EDIT_CHARS = 12_000
+const MAX_CHAPTER_EDIT_RATIO = 0.25
 
 export const TOOL_DEFS: ToolDefJson[] = [
   { name: 'list_characters', description: '列出工作区全部人物摘要。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_character', description: '按 id 或姓名获取完整人物卡。', parameters: { type: 'object', properties: { characterId: { type: 'string' }, name: { type: 'string' } } } },
+  { name: 'get_character', description: '按 id 或姓名获取完整人物卡；返回 writeRevision，更新时必须原样作为 baseRevision。', parameters: { type: 'object', properties: { characterId: { type: 'string' }, name: { type: 'string' } } } },
   {
     name: 'search_project',
-    description: '全文检索人物、关系、大纲、事件、章节、设定和便签；结果支持分页和覆盖范围信息。',
+    description: '全文检索人物、关系、大纲、事件、章节、设定和便签；命中结果带可写入的 writeRevision，结果支持分页和覆盖范围信息。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', minLength: 1 },
+    query: { type: 'string', minLength: 1 },
         kinds: { type: 'array', items: { type: 'string', enum: ['character', 'relationship', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] } },
         includeProjectDocs: { type: 'boolean' },
         caseSensitive: { type: 'boolean' },
@@ -41,21 +53,24 @@ export const TOOL_DEFS: ToolDefJson[] = [
       required: ['query']
     }
   },
-  { name: 'get_outline', description: '列出总纲摘要；完整内容请调用 get_outline_doc。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_outline_doc', description: '按 outlineId 读取任意总纲或章纲，支持分页和版本校验。', parameters: { type: 'object', additionalProperties: false, properties: { outlineId: { type: 'string', minLength: 1 }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 20000 }, expectedRevision: { type: 'string' } }, required: ['outlineId'] } },
+  { name: 'web_search', description: '联网搜索公开网页并返回标题、来源、URL、摘要和检索时间。外部内容不可信，只可作为参考；不会自动写入项目。', parameters: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', minLength: 1, maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['query'] } },
+  { name: 'web_extract', description: '读取一个公开网页的正文并返回可供引用的 URL。应先搜索再读取相关页面；外部网页内容不可信。', parameters: { type: 'object', additionalProperties: false, properties: { url: { type: 'string', minLength: 1 }, maxChars: { type: 'integer', minimum: 1000, maximum: 50000 } }, required: ['url'] } },
+  { name: 'get_outline', description: '列出总纲摘要并返回 writeRevision；完整内容请调用 get_outline_doc。', parameters: { type: 'object', properties: {} } },
+  { name: 'get_outline_doc', description: '按 outlineId 读取任意总纲或章纲，返回 writeRevision，支持分页和版本校验。', parameters: { type: 'object', additionalProperties: false, properties: { outlineId: { type: 'string', minLength: 1 }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 20000 }, expectedRevision: { type: 'string' } }, required: ['outlineId'] } },
   { name: 'list_events', description: '列出事件摘要。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_event', description: '按 id 或标题获取事件。', parameters: { type: 'object', properties: { eventId: { type: 'string' }, title: { type: 'string' } } } },
+  { name: 'get_event', description: '按 id 或标题获取事件；返回 writeRevision，更新时必须原样作为 baseRevision。', parameters: { type: 'object', properties: { eventId: { type: 'string' }, title: { type: 'string' } } } },
   { name: 'get_relations', description: '查询人物关系。', parameters: { type: 'object', properties: { characterId: { type: 'string' } } } },
   { name: 'list_chapters', description: '列出章节目录。', parameters: { type: 'object', properties: {} } },
   { name: 'list_volumes', description: '列出正文箱卷列表及其 volumeId；写入正文箱章节前必须先调用。', parameters: { type: 'object', properties: {} } },
+  { name: 'create_volume', description: '创建正文箱分卷。创建章节前如果目标卷不存在，先调用此工具；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { title: { type: 'string', minLength: 1, maxLength: 120 }, order: { type: 'integer', minimum: 1 } }, required: ['title'] } },
   { name: 'list_trash', description: '列出回收站资料及其恢复所需 id。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_chapter', description: '按 id 或标题分页读取章节正文；后续页必须携带 expectedRevision。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, title: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 20000 }, expectedRevision: { type: 'string' } } } },
+  { name: 'get_chapter', description: '按 id 或标题分页读取章节正文；标题可能重名，模型应优先使用 chapterId。返回 writeRevision，后续页必须携带 expectedRevision。同一章节同一版本和页码已经读取后不要重复调用，直接使用已有 content；需要修改时必须使用刚读到的 writeRevision。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, title: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 20000 }, expectedRevision: { type: 'string' } } } },
   { name: 'get_chapter_context', description: '读取目标章及前后各两章的受限上下文。', parameters: { type: 'object', properties: { chapterId: { type: 'string' }, radius: { type: 'number' }, maxChars: { type: 'number' } }, required: ['chapterId'] } },
   { name: 'lookup_term', description: '查询术语标注、设定和大纲来源。', parameters: { type: 'object', properties: { term: { type: 'string' } }, required: ['term'] } },
   { name: 'list_settings', description: '列出设定摘要。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_setting', description: '读取完整设定。', parameters: { type: 'object', properties: { settingId: { type: 'string' } }, required: ['settingId'] } },
+  { name: 'get_setting', description: '读取完整设定并返回 writeRevision；更新时必须原样作为 baseRevision。', parameters: { type: 'object', properties: { settingId: { type: 'string' } }, required: ['settingId'] } },
   { name: 'list_notes', description: '列出便签摘要。', parameters: { type: 'object', properties: {} } },
-  { name: 'get_note', description: '读取完整便签。', parameters: { type: 'object', properties: { noteId: { type: 'string' } }, required: ['noteId'] } },
+  { name: 'get_note', description: '读取完整便签并返回 writeRevision；更新时必须原样作为 baseRevision。', parameters: { type: 'object', properties: { noteId: { type: 'string' } }, required: ['noteId'] } },
   { name: 'list_chapter_outlines', description: '列出章纲摘要；传 chapterId 可限定到一章。', parameters: { type: 'object', properties: { chapterId: { type: 'string', description: '目标章节 id；不传则列出全部章纲' } } } },
   { name: 'get_chapter_outline', description: '读取一篇章纲；必须提供 outlineId 或 chapterId，支持分页和版本校验。', parameters: { type: 'object', additionalProperties: false, properties: { outlineId: { type: 'string' }, chapterId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, maxChars: { type: 'integer', minimum: 1, maximum: 20000 }, expectedRevision: { type: 'string' } }, anyOf: [{ required: ['outlineId'] }, { required: ['chapterId'] }] } },
   { name: 'save_character', description: '新建或更新人物卡；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { character: AGENT_CHARACTER_SCHEMA }, required: ['character'] } },
@@ -65,47 +80,66 @@ export const TOOL_DEFS: ToolDefJson[] = [
     description: '新建或更新事件；新建时必须指定 volumeId。全局只有一条主线，分支不允许合流；需要用户确认。',
     parameters: { type: 'object', additionalProperties: false, properties: { event: AGENT_EVENT_SCHEMA }, required: ['event'] }
   },
-  { name: 'save_outline_doc', description: '新建或更新大纲；必须显式指定 kind：total=总纲，chapter=章纲；章纲还必须指定 chapterId；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { doc: AGENT_OUTLINE_DOC_SCHEMA }, required: ['doc'] } },
-  { name: 'save_chapter', description: '新建或更新章节正文；必须显式指定 box：draft=草稿箱，main=正文箱；正文箱还必须指定 volumeId；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
-  { name: 'save_setting', description: '新建或更新设定；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { setting: AGENT_SETTING_SCHEMA }, required: ['setting'] } },
+  { name: 'save_outline_doc', description: '新建或更新大纲；必须显式指定 kind：total=总纲，chapter=章纲。章纲可暂不关联章节，之后用 chapterId 关联；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { doc: AGENT_OUTLINE_DOC_SCHEMA }, required: ['doc'] } },
+  { name: 'save_chapter', description: '新建章节或更新章节结构化字段；必须显式指定 box，且 draft/revised 状态只能在草稿箱 draft，body/final 状态只能在正文箱 main；正文箱还必须指定 volumeId。已有章节禁止通过 content 或 replaceAll 整章覆盖：局部修改用 edit_chapter，末尾续写用 append_chapter。新章节可直接提交完整 content。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapter: AGENT_CHAPTER_SCHEMA }, required: ['chapter'] } },
+  { name: 'edit_chapter', description: '按唯一片段或精确行范围对章节做局部删改；每次最多修改 12000 字符且不超过章节正文的 25%，整章或大范围覆盖会被工具拒绝；replacement 为空时删除指定行；必须提供 baseRevision，避免整章覆盖。需要用户确认。', parameters: AGENT_CHAPTER_EDIT_SCHEMA },
+  { name: 'append_chapter', description: '续写已有章节时只提交新增正文，不要重新生成或传回原有章节。必须先读取章节取得 baseRevision 和 baseReadRevision；在末尾追加并保持已有内容不变。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string', minLength: 1 }, baseRevision: { type: 'string', minLength: 1, description: '来自 get_chapter 或 search_project 的 writeRevision' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA, appendText: { type: 'string', minLength: 1, maxLength: 30000, description: '仅新增的正文，不包含已有章节内容' } }, required: ['chapterId', 'baseRevision', 'appendText'] } },
+  { name: 'save_setting', description: '新建或更新设定。title、summary、content 是设定节点的标题、简述、详情；tagDetails 给每个标签保存简述和详情。tags 与 tagParents 构成多级树，parentId 连接父设定。需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { setting: AGENT_SETTING_SCHEMA }, required: ['setting'] } },
   { name: 'save_note', description: '新建或更新便签；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { note: AGENT_NOTE_SCHEMA }, required: ['note'] } },
   { name: 'delete_note', description: '只有用户明确同意删除已完成便签后才能调用；将便签移入回收站，需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { noteId: { type: 'string', description: '要删除的便签 id' }, baseRevision: { type: 'string' } }, required: ['noteId'] } }
-  ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['chapterId', 'box'] } }
+  ,{ name: 'move_chapter', description: '移动章节到草稿箱或正文卷，并自动将不兼容状态改为草稿或正文；读取后传 baseRevision 和 baseReadRevision，需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { chapterId: { type: 'string' }, box: { type: 'string', enum: ['draft', 'main'] }, volumeId: { type: 'string' }, baseRevision: { type: 'string' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA }, required: ['chapterId', 'box'] } }
   ,{ name: 'restore_from_trash', description: '从回收站恢复资料；旧事件无连接快照时必须提供 placement；需要用户确认。', parameters: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, baseRevision: { type: 'string' }, placement: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['mainline-tail', 'after'] }, previousId: { type: 'string' }, branchFromId: { type: 'string' } }, required: ['kind'] } }, required: ['id'] } }
   ,{ name: 'delete_event', description: '删除一条事件；必须先由用户明确同意；只会生成待确认变更，确认后将事件移入回收站并自动修复主线或分支连接。', parameters: { type: 'object', additionalProperties: false, properties: { eventId: { type: 'string', description: '要删除的事件 id' }, baseRevision: { type: 'string' } }, required: ['eventId'] } }
-  ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' }, baseRevision: { type: 'string' } }, required: ['kind', 'id'] } }
+  ,{ name: 'delete_entity', description: '删除一条项目资料；必须先由用户确认。章节/大纲读取后传 baseRevision 和 baseReadRevision。支持回收站的资料会移入回收站，项目文档确认后直接删除。', parameters: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['character', 'outline', 'event', 'chapter', 'setting', 'note', 'projectDoc'] }, id: { type: 'string' }, baseRevision: { type: 'string' }, baseReadRevision: DOCUMENT_READ_BASELINE_SCHEMA }, required: ['kind', 'id'] } }
   ,...PROJECT_DOC_TOOL_DEFS
+  ,...DOCUMENT_TOOL_DEFS
+  ,...CONTENT_EDIT_TOOL_DEFS
+  ,...DOCUMENT_HISTORY_TOOL_DEFS
 ]
 
 const TOOL_DEF_BY_NAME = new Map(TOOL_DEFS.map((definition) => [definition.name, definition]))
 
-export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'save_setting', 'save_note', 'delete_note', 'delete_event', 'delete_entity', 'move_chapter', 'restore_from_trash', 'save_project_doc'])
+export const WRITE_TOOLS = new Set(['save_character', 'save_relationship', 'save_event', 'save_outline_doc', 'save_chapter', 'edit_chapter', 'append_chapter', 'edit_content', 'save_setting', 'save_note', 'delete_note', 'delete_event', 'delete_entity', 'move_chapter', 'restore_from_trash', 'save_project_doc', 'rename_project_doc', 'create_volume'])
 
 async function readTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   const ok = (text: string): ToolOutcome => ({ kind: 'result', ok: true, text, preview: clip(text) })
   const fail = (text: string): ToolOutcome => ({ kind: 'result', ok: false, text, preview: clip(text) })
   switch (name) {
     case 'list_characters': return ok(json((await listCharacters(store)).map(({ id, name, aliases, role, faction, tags, summary }) => ({ id, name, aliases, role, faction, tags, summary }))))
-    case 'get_character': { const c = await findCharacter(store, { id: a.characterId, name: a.name }); return c ? ok(json({ ...c, revision: contentRevision(serializeCharacter(c)) })) : fail(`未找到人物：${a.name ?? a.characterId}`) }
-    case 'search_project': return a.query ? ok(json(await searchProjectPage(store, {
+    case 'get_character': { const c = await findCharacter(store, { id: a.characterId, name: a.name }); return c ? ok(json({ ...c, writeRevision: contentRevision(serializeCharacter(c)), revision: contentRevision(serializeCharacter(c)) })) : fail(`未找到人物：${a.name ?? a.characterId}`) }
+    case 'search_project': {
+      if (!a.query) return fail('query 不能为空')
+      const result = await searchProjectPage(store, {
       query: String(a.query),
       kinds: Array.isArray(a.kinds) ? a.kinds as import('../retrieval/projectCorpus').CorpusKind[] : undefined,
-      includeProjectDocs: Boolean(a.includeProjectDocs),
+      // Project docs are the user's temporary reference shelf. Include them by
+      // default so an agent/skill does not silently search an empty corpus.
+      includeProjectDocs: a.includeProjectDocs !== false,
       caseSensitive: Boolean(a.caseSensitive),
       limit: typeof a.limit === 'number' ? a.limit : undefined,
       cursor: typeof a.cursor === 'string' ? a.cursor : undefined
-    }))) : fail('query 不能为空')
-    case 'get_outline': return ok(json((await listOutline(store)).filter((doc) => (doc.kind ?? 'total') === 'total').map((doc) => ({ id: doc.id, title: doc.title, order: doc.order, summary: clip(doc.content, 400), revision: contentRevision(serializeOutlineDoc(doc)) }))))
+      })
+      for (const hit of result.hits) if ((hit.kind === 'chapter' || hit.kind === 'outline') && hit.readRevision) rememberDocumentReadRevision(store, hit.kind, hit.id, hit.writeRevision, hit.readRevision)
+      return ok(json(result))
+    }
+    case 'get_outline': return ok(json(await Promise.all((await listOutline(store)).filter((doc) => (doc.kind ?? 'total') === 'total').map(async (listed) => {
+      const snapshot = await getDocumentSnapshot(store, 'outline', listed.id)
+      const doc = snapshot.document
+      const { readRevision } = checkDocumentReadRevision(store, 'outline', doc.id, snapshot.sourceText, snapshot.writeRevision)
+      return { id: doc.id, title: doc.title, order: doc.order, summary: clip(doc.content, 400), writeRevision: snapshot.writeRevision, readRevision, revision: readRevision }
+    }))))
     case 'get_outline_doc': return ok(json(await readOutlineSlice(store, { outlineId: String(a.outlineId) }, {
       offset: typeof a.offset === 'number' ? a.offset : undefined,
       maxChars: typeof a.maxChars === 'number' ? a.maxChars : undefined,
       expectedRevision: typeof a.expectedRevision === 'string' ? a.expectedRevision : undefined
     })))
     case 'list_events': { const chars = await listCharacters(store); const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id; return ok(json((await listEvents(store)).map((e) => ({ id: e.id, title: e.title, storyTime: e.storyTime, characters: e.characterIds.map(nameOf), summary: clip(e.content, 80) })))) }
-    case 'get_event': { const events = await listEvents(store); const e = (a.eventId ? events.find((x) => x.id === a.eventId) : undefined) ?? (a.title ? events.find((x) => x.title.includes(String(a.title))) : undefined); return e ? ok(json({ ...e, revision: eventGraphRevision(events) })) : fail(`未找到事件：${a.title ?? a.eventId}`) }
+    case 'get_event': { const events = await listEvents(store); const e = (a.eventId ? events.find((x) => x.id === a.eventId) : undefined) ?? (a.title ? events.find((x) => x.title.includes(String(a.title))) : undefined); return e ? ok(json({ ...e, writeRevision: eventGraphRevision(events), revision: eventGraphRevision(events) })) : fail(`未找到事件：${a.title ?? a.eventId}`) }
     case 'get_relations': { const rels = await loadRelationships(store); const chars = await listCharacters(store); const nameOf = (id: string) => chars.find((c) => c.id === id)?.name ?? id; const filtered = a.characterId ? rels.filter((r) => r.fromId === a.characterId || r.toId === a.characterId) : rels; return ok(json(filtered.map((r) => ({ ...r, fromName: nameOf(r.fromId), toName: nameOf(r.toId) })))) }
     case 'list_chapters': return ok(json(await listChapters(store)))
     case 'list_volumes': return ok(json(await listVolumes(store)))
+    case 'web_search': return ok(json(await webSearch(String(a.query), { limit: typeof a.limit === 'number' ? a.limit : undefined })))
+    case 'web_extract': return ok(json(await webExtract(String(a.url), { mode: 'free', maxChars: typeof a.maxChars === 'number' ? a.maxChars : undefined })))
     case 'list_trash': return ok(json(await listTrash(store)))
     case 'get_chapter': return ok(json(await readChapterSlice(store, { chapterId: typeof a.chapterId === 'string' ? a.chapterId : undefined, title: typeof a.title === 'string' ? a.title : undefined }, {
       offset: typeof a.offset === 'number' ? a.offset : undefined,
@@ -115,9 +149,9 @@ async function readTool(store: FileStore, name: string, a: Record<string, any>):
     case 'get_chapter_context': return a.chapterId ? ok(json(await getChapterContext(store, String(a.chapterId), { radius: a.radius, maxChars: a.maxChars }))) : fail('chapterId 不能为空')
     case 'lookup_term': return a.term ? ok(json(await lookupTerm(store, String(a.term)))) : fail('term 不能为空')
     case 'list_settings': return ok(json(await listSettings(store)))
-    case 'get_setting': { const value = a.settingId ? await getSetting(store, String(a.settingId)) : null; return value ? ok(json({ ...value, revision: contentRevision(JSON.stringify(value, null, 2)) })) : fail(`未找到设定：${a.settingId}`) }
+    case 'get_setting': { const value = a.settingId ? await getSetting(store, String(a.settingId)) : null; return value ? ok(json({ ...value, writeRevision: contentRevision(JSON.stringify(value, null, 2)), revision: contentRevision(JSON.stringify(value, null, 2)) })) : fail(`未找到设定：${a.settingId}`) }
     case 'list_notes': return ok(json(await listNotes(store)))
-    case 'get_note': { const value = a.noteId ? await getNote(store, String(a.noteId)) : null; return value ? ok(json({ ...value, revision: contentRevision(JSON.stringify(value, null, 2)) })) : fail(`未找到便签：${a.noteId}`) }
+    case 'get_note': { const value = a.noteId ? await getNote(store, String(a.noteId)) : null; return value ? ok(json({ ...value, writeRevision: contentRevision(JSON.stringify(value, null, 2)), revision: contentRevision(JSON.stringify(value, null, 2)) })) : fail(`未找到便签：${a.noteId}`) }
     case 'list_chapter_outlines': return ok(json((await listOutline(store)).filter((doc) => doc.kind === 'chapter' && (!a.chapterId || doc.chapterId === a.chapterId)).map(({ content: _content, ...meta }) => meta)))
     case 'get_chapter_outline': return ok(json(await readOutlineSlice(store, { outlineId: typeof a.outlineId === 'string' ? a.outlineId : undefined, chapterId: typeof a.chapterId === 'string' ? a.chapterId : undefined, kind: 'chapter' }, {
       offset: typeof a.offset === 'number' ? a.offset : undefined,
@@ -151,6 +185,7 @@ function requireBaseRevision(id: string | undefined, value: unknown, label: stri
 function cleanRevision<T extends Record<string, any>>(value: T): T {
   const next = { ...value }
   delete next.baseRevision
+  delete next.baseReadRevision
   return next
 }
 
@@ -177,12 +212,48 @@ async function applyUnchanged(
   })
 }
 
+function locateChapterEdit(content: string, edit: { expectedText?: unknown; lineStart?: unknown; lineEnd?: unknown; replacement: string }): { content: string; lineStart: number; lineEnd: number } {
+  if (typeof edit.expectedText === 'string') {
+    const first = content.indexOf(edit.expectedText)
+    if (first < 0) throw new Error('章节编辑前置文本不存在，请重新读取目标片段')
+    if (content.indexOf(edit.expectedText, first + edit.expectedText.length) >= 0) throw new Error('章节编辑前置文本出现多次，请改用 lineStart/lineEnd 精确定位')
+    assertLocalChapterEdit(content.length, edit.expectedText.length, edit.replacement.length)
+    const lineStart = content.slice(0, first).split('\n').length
+    const lineEnd = lineStart + edit.expectedText.split('\n').length - 1
+    return { content: `${content.slice(0, first)}${edit.replacement}${content.slice(first + edit.expectedText.length)}`, lineStart, lineEnd }
+  }
+  const lineStart = Number(edit.lineStart)
+  const lineEnd = Number(edit.lineEnd)
+  const lines = content.split('\n')
+  if (lineStart < 1 || lineEnd < lineStart || lineEnd > lines.length) throw new Error(`章节编辑行范围超出正文：${lineStart}-${lineEnd}`)
+  const sourceFragment = lines.slice(lineStart - 1, lineEnd).join('\n')
+  assertLocalChapterEdit(content.length, sourceFragment.length, edit.replacement.length)
+  const replacementLines = edit.replacement === '' ? [] : edit.replacement.split('\n')
+  const nextLines = [...lines.slice(0, lineStart - 1), ...replacementLines, ...lines.slice(lineEnd)]
+  return { content: nextLines.join('\n'), lineStart, lineEnd }
+}
+
+function assertLocalChapterEdit(chapterChars: number, fragmentChars: number, replacementChars: number): void {
+  const maxFragmentChars = Math.min(MAX_CHAPTER_EDIT_CHARS, Math.floor(chapterChars * MAX_CHAPTER_EDIT_RATIO))
+  if (Math.max(fragmentChars, replacementChars) > maxFragmentChars || (chapterChars > 0 && fragmentChars >= chapterChars)) {
+    throw new Error(`edit_chapter 只允许局部片段（原文和替换文本各最多 ${maxFragmentChars} 字符，且不超过章节正文的 25%）；请缩小修改范围，避免整章覆盖`)
+  }
+}
+
+function appendChapterContent(content: string, addition: string): string {
+  if (!addition.trim()) throw new Error('append_chapter 的 appendText 不能为空')
+  if (addition.length > 30000) throw new Error('append_chapter 的 appendText 最多 30000 字符，请分段续写')
+  if (!content) return addition
+  const separator = content.endsWith('\n') || addition.startsWith('\n') ? '' : '\n\n'
+  return `${content}${separator}${addition}`
+}
+
 /** 除 restore_from_trash 外，工具名直接决定实体类型；restore 用回收站条目的真实 kind（见 Simulated.entityKind）。 */
 function kindOfTool(name: string): EntityKind | 'relationship' {
   if (name === 'save_character') return 'character'
   if (name === 'save_relationship') return 'relationship'
   if (name === 'save_event') return 'event'
-  if (name === 'save_chapter' || name === 'move_chapter') return 'chapter'
+  if (name === 'save_chapter' || name === 'edit_chapter' || name === 'append_chapter' || name === 'move_chapter') return 'chapter'
   if (name === 'save_setting') return 'setting'
   if (name === 'save_note' || name === 'delete_note') return 'note'
   return 'outline'
@@ -190,7 +261,22 @@ function kindOfTool(name: string): EntityKind | 'relationship' {
 
 async function writeTool(store: FileStore, name: string, a: Record<string, any>): Promise<ToolOutcome> {
   let sim: Simulated
-  if (name === 'save_character') {
+  let sourcePath: string | undefined
+  if (name === 'create_volume') {
+    const title = String(a.title ?? '').trim()
+    if (!title) throw new Error('分卷标题不能为空')
+    const existing = (await listVolumes(store)).find((volume) => volume.title === title)
+    if (existing) throw new Error(`卷名已存在：${title}`)
+    const after = { title, order: typeof a.order === 'number' ? a.order : undefined }
+    sim = {
+      entityKind: 'chapter',
+      entityId: `volume:${title}`,
+      title: `创建分卷：${title}`,
+      beforeText: JSON.stringify(await listVolumes(store)),
+      afterText: JSON.stringify(after),
+      commit: async () => { const volume = await saveVolume(store, after); return { ok: true, text: `已创建分卷「${volume.title}」（${volume.id}）` } }
+    }
+  } else if (name === 'save_character') {
     validateAgentCharacterWrite(a.character)
     const patch = a.character as Partial<CharacterDoc> & { id?: string; baseRevision?: string }
     const old = patch.id ? await findCharacter(store, { id: patch.id }) : null
@@ -279,12 +365,14 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const patch = a.doc as Partial<OutlineDoc> & { id?: string; baseRevision?: string }
     validateAgentOutlineWrite(patch)
     const all = await listOutline(store)
-    const old = patch.id ? all.find((outline) => outline.id === patch.id) : null
-    if (patch.id && !old) throw new Error(`未找到大纲：${patch.id}。请重新读取后再更新。`)
+    const listed = patch.id ? all.find((outline) => outline.id === patch.id) : null
+    if (patch.id && !listed) throw new Error(`未找到大纲：${patch.id}。请重新读取后再更新。`)
+    const snapshot = listed ? await getDocumentSnapshot(store, 'outline', listed.id) : undefined
+    const old = snapshot?.document ?? null
     const baseRevision = requireBaseRevision(patch.id, patch.baseRevision, '大纲')
-    const beforeText = old ? serializeOutlineDoc(old) : ''
+    const beforeText = snapshot?.sourceText ?? ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('大纲版本已变化，请重新读取')
-    if (patch.kind === 'chapter' && !(await listChapters(store)).some((chapter) => chapter.id === patch.chapterId)) throw new Error(`未找到章纲关联的章节：${patch.chapterId}`)
+    if (patch.kind === 'chapter' && patch.chapterId?.trim() && !(await listChapters(store)).some((chapter) => chapter.id === patch.chapterId)) throw new Error(`未找到章纲关联的章节：${patch.chapterId}`)
     const clean = cleanRevision(patch)
     const after = (old ? { ...old, ...clean } : { id: genId('out'), title: clean.title, order: clean.order ?? (all.length ? Math.max(...all.map((outline) => outline.order)) + 1 : 1), kind: clean.kind, chapterId: clean.chapterId, content: clean.content ?? '' }) as OutlineDoc
     sim = {
@@ -307,19 +395,30 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
         : async () => ({ ok: true, text: `已保存大纲「${(await saveOutlineDoc(store, { ...clean, id: after.id })).title}」` })
     }
   } else if (name === 'save_chapter') {
-    const patch = a.chapter as Partial<ChapterDoc> & { id?: string; baseRevision?: string }
+    const patch = a.chapter as Partial<ChapterDoc> & { id?: string; baseRevision?: string; replaceAll?: boolean }
     validateAgentChapterWrite(patch)
     if (patch.box === 'main' && !(await listVolumes(store)).some((volume) => volume.id === patch.volumeId)) throw new Error(`未找到目标卷：${patch.volumeId}`)
-    const metas = await listChapters(store)
-    const meta = patch.id ? metas.find((chapter) => chapter.id === patch.id) : null
-    if (patch.id && !meta) throw new Error(`未找到章节：${patch.id}。请重新读取后再更新。`)
-    const old = meta ? ({ ...meta, content: (await getChapterBody(store, meta.id)) ?? '' } as ChapterDoc) : null
+    const storedChapters = await loadChapterDocuments(store)
+    const stored = patch.id ? storedChapters.find((chapter) => chapter.doc.id === patch.id) : null
+    if (stored) sourcePath = `chapters/${stored.fileName}`
+    if (patch.id && !stored) throw new Error(`未找到章节：${patch.id}。请重新读取后再更新。`)
+    const metas = storedChapters.map(({ doc: { content: _content, ...meta } }) => meta)
+    const snapshot = stored ? await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath) : undefined
+    const old = snapshot?.document ?? null
     const baseRevision = requireBaseRevision(patch.id, patch.baseRevision, '章节')
-    const beforeText = old ? serializeChapter(old) : ''
+    const beforeText = snapshot?.sourceText ?? ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('章节版本已变化，请重新读取')
     const clean = cleanRevision(patch)
+    const hasContent = Object.prototype.hasOwnProperty.call(clean, 'content')
+    const replaceAll = clean.replaceAll === true
+    delete clean.replaceAll
+    if (old && (hasContent || replaceAll)) {
+      throw new Error('为避免覆盖用户手改内容，save_chapter 不允许更新已有章节的正文或使用 replaceAll；局部修改必须使用 edit_chapter，末尾续写必须使用 append_chapter')
+    }
     const content = Object.prototype.hasOwnProperty.call(clean, 'content') ? clean.content ?? '' : old?.content ?? ''
-    const after = (old ? { ...old, ...clean, content, wordCount: countWords(content) } : { id: genId('cha'), title: clean.title, volume: clean.volume ?? '第一卷', volumeId: clean.volumeId, order: clean.order ?? (metas.length ? Math.max(...metas.map((chapter) => chapter.order)) + 1 : 1), box: clean.box, status: clean.status ?? 'draft', wordCount: countWords(content), content }) as ChapterDoc
+    const placement = resolveChapterPlacement(old, clean)
+    const savePatch = { ...clean, ...placement }
+    const after = (old ? { ...old, ...savePatch, content, wordCount: countWords(content) } : { id: genId('cha'), title: clean.title, volume: clean.volume ?? '第一卷', volumeId: clean.volumeId, order: clean.order ?? (metas.length ? Math.max(...metas.map((chapter) => chapter.order)) + 1 : 1), ...placement, wordCount: countWords(content), content }) as ChapterDoc
     sim = {
       entityId: after.id,
       title: `${old ? '更新' : '新建'}章节：${after.title}`,
@@ -332,13 +431,92 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
           '章节',
           beforeText,
           async () => {
-            const latestMeta = (await listChapters(store)).find((chapter) => chapter.id === after.id)
-            const latest = latestMeta ? ({ ...latestMeta, content: (await getChapterBody(store, after.id)) ?? '' } as ChapterDoc) : null
-            return latest ? serializeChapter(latest) : null
+            const latest = await readChapterDocumentAt(store, stored!.fileName)
+            return latest ? serializeChapter(latest.doc) : null
           },
-          async () => `已保存章节「${(await saveChapter(store, { ...clean, id: after.id })).title}」`
+          async () => {
+            const pathAffecting = (
+              (Object.prototype.hasOwnProperty.call(clean, 'title') && clean.title !== stored!.doc.title) ||
+              (Object.prototype.hasOwnProperty.call(clean, 'order') && clean.order !== stored!.doc.order) ||
+              placement.box !== stored!.doc.box ||
+              (Object.prototype.hasOwnProperty.call(clean, 'volumeId') && clean.volumeId !== stored!.doc.volumeId)
+            )
+            const saved = pathAffecting
+              ? await saveChapter(store, { ...savePatch, id: after.id })
+              : await saveChapterInPlace(store, stored!.fileName, { ...savePatch, id: after.id })
+            return `已保存章节「${saved.title}」`
+          }
         )
-        : async () => ({ ok: true, text: `已保存章节「${(await saveChapter(store, { ...clean, id: after.id })).title}」` })
+        : async () => ({ ok: true, text: `已保存章节「${(await saveChapter(store, { ...savePatch, id: after.id })).title}」` })
+    }
+  } else if (name === 'edit_chapter') {
+    validateAgentChapterEdit(a)
+    const edit = a as { chapterId: string; baseRevision: string; expectedText?: string; lineStart?: number; lineEnd?: number; replacement: string }
+    const stored = (await loadChapterDocuments(store)).find((item) => item.doc.id === edit.chapterId)
+    if (!stored) throw new Error(`未找到章节：${edit.chapterId}。请重新读取后再编辑。`)
+    sourcePath = `chapters/${stored.fileName}`
+    const snapshot = await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath)
+    const old = snapshot.document
+    const beforeText = snapshot.sourceText
+    if (contentRevision(beforeText) !== edit.baseRevision) throw new Error('章节版本已变化，请重新读取后再编辑')
+    const located = locateChapterEdit(old.content, edit)
+    const after = { ...old, content: located.content, wordCount: countWords(located.content) }
+    const afterText = serializeChapter(after)
+    sim = {
+      entityId: old.id,
+      entityKind: 'chapter',
+      title: `精确编辑章节：${old.title}（第 ${located.lineStart}-${located.lineEnd} 行）`,
+      beforeText,
+      afterText,
+      commit: () => coordinatorFor(store).run(`chapter:${old.id}`, async () => {
+        const latestStored = await readChapterDocumentAt(store, stored.fileName)
+        if (!latestStored || latestStored.doc.id !== old.id) return conflict('章节')
+        const latestText = serializeChapter(latestStored.doc)
+        if (contentRevision(latestText) !== contentRevision(beforeText)) return conflict('章节')
+        const latestEdit = locateChapterEdit(latestStored.doc.content, edit)
+        const latestAfter = { ...latestStored.doc, content: latestEdit.content, wordCount: countWords(latestEdit.content) }
+        const result = await commitTextChanges(store, `chapter-edit-${old.id}-${Date.now()}`, [{
+          path: `chapters/${latestStored.fileName}`,
+          beforeText: latestText,
+          afterText: serializeChapter(latestAfter)
+        }])
+        if (!result.ok) return { ok: false, text: result.text }
+        await invalidateProjectIndex(store)
+        return { ok: true, text: `已精确编辑章节「${old.title}」（第 ${latestEdit.lineStart}-${latestEdit.lineEnd} 行）` }
+      })
+    }
+  } else if (name === 'append_chapter') {
+    const input = a as { chapterId: string; baseRevision: string; appendText: string }
+    const stored = (await loadChapterDocuments(store)).find((item) => item.doc.id === input.chapterId)
+    if (!stored) throw new Error(`未找到章节：${input.chapterId}。请重新读取后再续写。`)
+    sourcePath = `chapters/${stored.fileName}`
+    const snapshot = await readCurrentDocument(store, 'chapter', stored.doc.id, sourcePath)
+    const beforeText = snapshot.sourceText
+    if (contentRevision(beforeText) !== input.baseRevision) throw new Error('章节版本已变化，请重新读取后再续写')
+    const content = appendChapterContent(snapshot.document.content, input.appendText)
+    const after = { ...snapshot.document, content, wordCount: countWords(content) }
+    sim = {
+      entityId: stored.doc.id,
+      entityKind: 'chapter',
+      title: `续写章节：${snapshot.document.title}`,
+      beforeText,
+      afterText: serializeChapter(after),
+      commit: () => coordinatorFor(store).run(`chapter:${stored.doc.id}`, async () => {
+        const latestStored = await readChapterDocumentAt(store, stored.fileName)
+        if (!latestStored || latestStored.doc.id !== stored.doc.id) return conflict('章节')
+        const latestText = serializeChapter(latestStored.doc)
+        if (contentRevision(latestText) !== contentRevision(beforeText)) return conflict('章节')
+        const latestContent = appendChapterContent(latestStored.doc.content, input.appendText)
+        const latestAfter = { ...latestStored.doc, content: latestContent, wordCount: countWords(latestContent) }
+        const result = await commitTextChanges(store, `chapter-append-${stored.doc.id}-${Date.now()}`, [{
+          path: `chapters/${latestStored.fileName}`,
+          beforeText: latestText,
+          afterText: serializeChapter(latestAfter)
+        }])
+        if (!result.ok) return { ok: false, text: result.text }
+        await invalidateProjectIndex(store)
+        return { ok: true, text: `已续写章节「${stored.doc.title}」` }
+      })
     }
   } else if (name === 'save_setting') {
     validateAgentSettingWrite(a.setting)
@@ -349,7 +527,9 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const beforeText = old ? JSON.stringify(old, null, 2) : ''
     if (baseRevision && contentRevision(beforeText) !== baseRevision) throw new Error('设定版本已变化，请重新读取')
     const clean = cleanRevision(patch)
-    const after = (old ? { ...old, ...clean } : { id: genId('set'), title: clean.title, category: clean.category === 'other' ? 'other' : 'background', tags: clean.tags ?? [], content: clean.content ?? '' }) as SettingDoc
+    const after = (old ? { ...old, ...clean } : { id: genId('set'), title: clean.title, summary: clean.summary, category: clean.category === 'other' ? 'other' : 'background', tags: clean.tags ?? [], tagParents: clean.tagParents, tagDetails: clean.tagDetails, parentId: clean.parentId, content: clean.content ?? '' }) as SettingDoc
+    validateSettingTagParents(after.tags, after.tagParents)
+    validateSettingTagDetails(after.tags, after.tagDetails)
     sim = {
       entityId: after.id,
       title: `${old ? '更新' : '新建'}设定：${after.title}`,
@@ -432,29 +612,18 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     const current = (await listChapters(store)).find((chapter) => chapter.id === chapterId); if (!current) throw new Error(`未找到章节：${chapterId}`)
     const target = { box, ...(a.volumeId ? { volumeId: String(a.volumeId) } : {}) } as { box: 'draft' | 'main'; volumeId?: string }
     if (target.box === 'main' && target.volumeId && !(await listVolumes(store)).some((volume) => volume.id === target.volumeId)) throw new Error(`未找到目标卷：${target.volumeId}`)
-    const currentWithBody = { ...current, content: (await getChapterBody(store, chapterId)) ?? '' }
-    const beforeText = serializeChapter(currentWithBody)
+    const snapshot = await getDocumentSnapshot(store, 'chapter', chapterId)
+    const beforeText = snapshot.sourceText
     if (typeof a.baseRevision === 'string' && contentRevision(beforeText) !== a.baseRevision) throw new Error('章节版本已变化，请重新读取')
     sim = {
       entityId: chapterId,
-      title: `移动章节：${current.title}`,
+      title: `移动章节：${snapshot.document.title}`,
       beforeText,
-      afterText: JSON.stringify({ ...current, ...target }, null, 2),
-      commit: () => applyUnchanged(
-        store,
-        `chapter:${chapterId}`,
-        '章节',
-        beforeText,
-        async () => {
-          const latestMeta = (await listChapters(store)).find((chapter) => chapter.id === chapterId)
-          const latest = latestMeta ? { ...latestMeta, content: (await getChapterBody(store, chapterId)) ?? '' } : null
-          return latest ? serializeChapter(latest) : null
-        },
-        async () => {
-          await moveChapter(store, chapterId, target)
-          return `已移动章节「${current.title}」`
-        }
-      )
+      afterText: serializeChapter({ ...snapshot.document, ...target, ...resolveChapterPlacement(snapshot.document, { box: target.box }) }),
+      commit: async () => {
+        await saveDocument(store, 'chapter', { id: chapterId, ...target, ...resolveChapterPlacement(snapshot.document, { box: target.box }) }, { baseRevision: snapshot.writeRevision, baseText: beforeText })
+        return { ok: true, text: `已移动章节「${current.title}」` }
+      }
     }
   } else if (name === 'restore_from_trash') {
     const id = String(a.id ?? ''); const entry = (await listTrash(store)).find((item) => item.id === id); if (!entry) throw new Error(`回收站中未找到实体：${id}`)
@@ -509,6 +678,26 @@ async function writeTool(store: FileStore, name: string, a: Record<string, any>)
     }
   }
   const change: PendingChange = { id: genId('chg'), toolName: name, entityKind: sim.entityKind ?? kindOfTool(name), entityId: sim.entityId, title: sim.title, beforeText: sim.beforeText, afterText: sim.afterText }
+  if (['save_chapter', 'edit_chapter', 'append_chapter', 'save_outline_doc', 'move_chapter'].includes(name)) {
+    const readOptions = name === 'save_chapter' ? a.chapter : name === 'save_outline_doc' ? a.doc : a
+    if (change.beforeText) assertDocumentReadSourceUnchanged(store, change.entityKind, change.entityId, change.beforeText, contentRevision(change.beforeText), readOptions.baseReadRevision)
+    change.historyEligible = true
+    return { kind: 'pending', change, apply: async (decision) => {
+      if (typeof decision?.saveHistory !== 'boolean') throw new Error('请选择是否保存为长期历史版本')
+      const parsed = parseFrontMatter(change.afterText)
+      const documentKind = change.entityKind === 'chapter' ? 'chapter' : 'outline'
+      try {
+      const saved = await saveDocument(store, documentKind, { ...parsed.data, id: change.entityId, content: parsed.content.replace(/^\n+/, '') }, {
+        sourcePath,
+        ...(change.beforeText ? { baseRevision: contentRevision(change.beforeText), baseText: change.beforeText } : {}),
+        ...(decision.saveHistory ? { history: { source: 'agent' as const } } : {})
+      })
+      return { ok: true, text: `已保存${documentKind === 'chapter' ? '章节' : '大纲'}「${saved.title}」${decision.saveHistory ? '并保存为新版本' : ''}` }
+      } catch (error) {
+        return { ok: false, text: `提交失败，请重新读取：${error instanceof Error ? error.message : String(error)}` }
+      }
+    } }
+  }
   return { kind: 'pending', change, apply: sim.commit }
 }
 
@@ -525,7 +714,10 @@ export async function executeTool(store: FileStore, name: string, argsJson: stri
         : outcome
     }
     if (name === 'delete_entity') return await executeDeleteEntityTool(store, args)
-    if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc') return await executeProjectDocTool(store, name, args)
+    if (DOCUMENT_HISTORY_TOOL_DEFS.some((def) => def.name === name)) return await executeDocumentHistoryTool(store, name, args)
+    if (name === 'read_content_lines' || name === 'edit_content') return await executeContentEditTool(store, name, args)
+    if (DOCUMENT_TOOL_DEFS.some((def) => def.name === name)) return await executeDocumentTool(store, name, args)
+    if (name === 'list_project_docs' || name === 'read_project_doc' || name === 'save_project_doc' || name === 'rename_project_doc') return await executeProjectDocTool(store, name, args)
     return WRITE_TOOLS.has(name) ? await writeTool(store, name, args) : await readTool(store, name, args)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -544,8 +736,11 @@ export async function executeTool(store: FileStore, name: string, argsJson: stri
       message.includes('未找到') ? 'NOT_FOUND' :
       'INVALID_ARGUMENT'
     const code = (explicitCode || prefixedCode || mappedCode) as ToolFailureCode
-    const retryable = code === 'PROJECT_CHANGED' || code === 'SOURCE_CHANGED' || code === 'CONFLICT'
-    const failure: ToolFailure = { schemaVersion: 2, error: { code, message, retryable } }
+    const retryable = code === 'PROJECT_CHANGED' || code === 'SOURCE_CHANGED' || code === 'CONFLICT' || code === 'INVALID_ARGUMENT'
+    const details = message.includes('maxChars')
+      ? { parameter: 'maxChars', minimum: 1, maximum: 20000, correction: '将 maxChars 调整为不超过 20000，并使用 nextOffset/expectedRevision 分页读取' }
+      : undefined
+    const failure: ToolFailure = { schemaVersion: 2, error: { code, message, retryable, ...(details ? { details } : {}) } }
     const text = JSON.stringify(failure)
     return { kind: 'result', ok: false, text, preview: clip(message) }
   }

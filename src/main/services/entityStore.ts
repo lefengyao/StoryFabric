@@ -124,7 +124,7 @@ export async function saveOutlineDoc(root: string, input: Partial<OutlineDoc> & 
   const store = storeOf(root)
   const legacy = await usesLegacyFlatLayout(root)
   const saved = await coreSaveOutlineDoc(store, input)
-  if (legacy) await flattenLegacyFile(store, saved.kind === 'chapter' ? `outline/chapters/${saved.chapterId}` : 'outline/total', 'outline', saved.id)
+  if (legacy) await flattenLegacyFile(store, saved.kind === 'chapter' ? saved.chapterId ? `outline/chapters/${saved.chapterId}` : 'outline/unassigned' : 'outline/total', 'outline', saved.id)
   return saved
 }
 

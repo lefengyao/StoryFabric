@@ -52,7 +52,7 @@ describe('audit: 29 个工具端到端可用性', () => {
         matrix.push({ tool: name, ok: false, note: `未产出待确认：${JSON.stringify(outcome).slice(0, 80)}` })
         return
       }
-      const applied = await outcome.apply()
+      const applied = await outcome.apply({ saveHistory: false })
       matrix.push({ tool: name, ok: applied.ok, note: `${outcome.change.title} / ${applied.text}`.slice(0, 80) })
     }
 
@@ -116,7 +116,7 @@ describe('audit: 29 个工具端到端可用性', () => {
     const pendingRelationship = await executeTool(store, 'save_relationship', JSON.stringify({ relationship: { fromCharacterId: a.id, toCharacterId: b.id, type: '并发前' } }))
     if (pendingRelationship.kind !== 'pending') throw new Error('关系工具未产出待确认变更')
     await saveRelationships(store, [{ id: 'rel_concurrent', fromId: a.id, toId: b.id, type: '并发新增', label: '', description: '', directed: false }])
-    await pendingRelationship.apply()
+    await pendingRelationship.apply({ saveHistory: false })
     expect((await loadRelationships(store)).map((item) => item.type)).toEqual(expect.arrayContaining(['并发新增', '并发前']))
 
     // ---- 写入类错误路径 ----

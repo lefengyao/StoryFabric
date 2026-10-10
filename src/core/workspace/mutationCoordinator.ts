@@ -15,8 +15,22 @@ export class MutationCoordinator {
 }
 
 const coordinators = new WeakMap<FileStore, MutationCoordinator>()
+const sharedCoordinators = new Map<string, MutationCoordinator>()
+
+export function normalizedStorageIdentity(store: FileStore): string | undefined {
+  const identity = store.storageIdentity?.()
+  if (!identity) return undefined
+  const normalized = identity.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
+}
 
 export function coordinatorFor(store: FileStore): MutationCoordinator {
+  const identity = normalizedStorageIdentity(store)
+  if (identity) {
+    let shared = sharedCoordinators.get(identity)
+    if (!shared) { shared = new MutationCoordinator(); sharedCoordinators.set(identity, shared) }
+    return shared
+  }
   const existing = coordinators.get(store)
   if (existing) return existing
   const created = new MutationCoordinator()

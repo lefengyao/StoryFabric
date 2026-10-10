@@ -1,3 +1,5 @@
+import { getPlatformApi } from '../platform/platformApi'
+
 export interface ClipboardWriter {
   writeText: (text: string) => Promise<void>
 }
@@ -6,9 +8,25 @@ export interface ClipboardReader {
   readText: () => Promise<string>
 }
 
+function platformWriter(): ClipboardWriter | undefined {
+  if (typeof window === 'undefined') return undefined
+  const platform = getPlatformApi()
+  return typeof platform.clipboardWriteText === 'function'
+    ? { writeText: platform.clipboardWriteText.bind(platform) }
+    : undefined
+}
+
+function platformReader(): ClipboardReader | undefined {
+  if (typeof window === 'undefined') return undefined
+  const platform = getPlatformApi()
+  return typeof platform.clipboardReadText === 'function'
+    ? { readText: platform.clipboardReadText.bind(platform) }
+    : undefined
+}
+
 /** 复制纯文本；剪贴板不可用时提供明确错误，避免界面假装成功。 */
 export async function copyPlainText(text: string, writer?: ClipboardWriter): Promise<void> {
-  const target = writer ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined)
+  const target = writer ?? platformWriter() ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined)
   if (target?.writeText) {
     try {
       await target.writeText(text)
@@ -23,7 +41,7 @@ export async function copyPlainText(text: string, writer?: ClipboardWriter): Pro
 
 /** 读取纯文本；桌面端由 Electron 原生剪贴板桥接，Web/移动端使用 Clipboard API。 */
 export async function readPlainText(reader?: ClipboardReader): Promise<string> {
-  const target = reader ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined)
+  const target = reader ?? platformReader() ?? (typeof navigator !== 'undefined' ? navigator.clipboard : undefined)
   if (target?.readText) return target.readText()
   throw new Error('当前环境不支持读取剪贴板')
 }

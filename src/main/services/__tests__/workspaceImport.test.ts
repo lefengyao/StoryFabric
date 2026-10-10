@@ -16,7 +16,7 @@ afterEach(async () => {
 
 async function makeArchive() {
   const source = new MemoryFileStore()
-  await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '导入源' }))
+  await source.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 5, name: '导入源' }))
   await source.writeText('characters/林晚.md', '# 林晚')
   return exportWorkspaceArchive(source, '导入源')
 }

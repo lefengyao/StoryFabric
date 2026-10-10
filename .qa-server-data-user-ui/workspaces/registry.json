@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "id": "default",
+      "name": "StoryFabric",
+      "createdAt": 1791097855175,
+      "updatedAt": 1791097855175
+    },
+    {
+      "id": "ws_23a542131397",
+      "name": "OAuth 测试工作区",
+      "createdAt": 1791171147847,
+      "updatedAt": 1791171147847
+    }
+  ]
+}

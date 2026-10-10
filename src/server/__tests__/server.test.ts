@@ -1,13 +1,14 @@
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { request as httpRequest, type ClientRequest } from 'node:http'
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
 import { initializeWorkspace } from '../../core/workspace/workspaceService'
-import { createStoryFabricServer, recordRecentWorkspaceBestEffort } from '../server'
+import { cloudCallbackUrl, createStoryFabricServer, recordRecentWorkspaceBestEffort } from '../server'
 import { ServerSettingsStore } from '../settingsStore'
+import { WorkspaceRegistry } from '../workspaceRegistry'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -16,10 +17,54 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<
 }
 
 describe('linux web server', () => {
+  it('keeps the configured HTTPS origin for OAuth callbacks behind an HTTP proxy', () => {
+    const request = { url: '/api/cloud/callback?code=code-1&state=state-1', headers: { host: '127.0.0.1:8787' } } as IncomingMessage
+    expect(cloudCallbackUrl(request, 'https://storyfabric.example/api/cloud/callback').href).toBe('https://storyfabric.example/api/cloud/callback?code=code-1&state=state-1')
+  })
+
+  it('uses the forwarded HTTPS protocol when no callback base is configured', () => {
+    const request = { url: '/api/cloud/callback?code=code-1', headers: { host: 'storyfabric.example', 'x-forwarded-proto': 'https, http' } } as unknown as IncomingMessage
+    expect(cloudCallbackUrl(request).origin).toBe('https://storyfabric.example')
+  })
+
   it('contains recent workspace recording failures without changing the operation result', async () => {
     await expect(recordRecentWorkspaceBestEffort(async () => { throw new Error('settings unavailable') })).resolves.toBe(false)
     await expect(recordRecentWorkspaceBestEffort(async () => undefined)).resolves.toBe(true)
   })
+
+  it('aborts a request body that stops making progress', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-request-timeout-'))
+    const workspaceRegistry = await WorkspaceRegistry.open(root)
+    const server = createStoryFabricServer({ accessKey: 'request-timeout-test-key', dataDir: root, workspaceRegistry, bodyIdleTimeoutMs: 1_000 })
+
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+
+    try {
+      const address = server.address() as AddressInfo
+      const closed = new Promise<void>((resolve, reject) => {
+        const request = httpRequest(`http://127.0.0.1:${address.port}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-length': '3' }
+        })
+        const timer = setTimeout(() => {
+          request.destroy()
+          reject(new Error('request body timeout was not enforced'))
+        }, 5_000)
+        const finish = (): void => { clearTimeout(timer); resolve() }
+        request.once('error', finish)
+        request.once('close', finish)
+        request.write('{')
+      })
+      await closed
+      expect((await fetch(`http://127.0.0.1:${address.port}/healthz`)).status).toBe(200)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    }
+  }, 15_000)
 
   it('rolls back an imported workspace when the client disconnects after registry publish', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-import-cancel-'))
@@ -108,11 +153,22 @@ describe('linux web server', () => {
       expect(login.status).toBe(200)
       const cookie = login.headers.get('set-cookie')?.split(';', 1)[0]
       expect(cookie).toMatch(/^storyfabric_session=/)
+      expect(login.headers.get('set-cookie')).toContain('SameSite=Lax')
 
       const listed = await fetch(`${base}/api/workspaces`, { headers: { cookie: cookie ?? '' } })
       expect(listed.status).toBe(200)
       const workspaces = await listed.json() as Array<{ path: string; name: string }>
       expect(workspaces).toMatchObject([{ path: 'default', name: '服务测试' }])
+
+      // Global settings must be available immediately after login. The web
+      // shell loads them before a workspace is selected.
+      const settingsBeforeOpen = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookie ?? '' },
+        body: JSON.stringify({ method: 'getSettings', args: [] })
+      })
+      expect(settingsBeforeOpen.status).toBe(200)
+      expect((await settingsBeforeOpen.json() as { result: { providers: unknown[] } }).result.providers).toEqual([])
 
       const opened = await fetch(`${base}/api/workspaces/default/open`, { method: 'POST', headers: { cookie: cookie ?? '' } })
       expect(opened.status).toBe(200)
@@ -404,6 +460,7 @@ describe('linux web server', () => {
     const staticDir = join(root, 'web')
     await mkdir(staticDir)
     await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>StoryFabric</title>')
+    await writeFile(join(staticDir, 'pdf.worker.mjs'), 'export const worker = true')
     const server = createStoryFabricServer({ accessKey: 'static-test-key', dataDir: join(root, 'data'), staticDir })
 
     await new Promise<void>((resolve, reject) => {
@@ -417,6 +474,8 @@ describe('linux web server', () => {
       const page = await fetch(`${base}/`)
       expect(page.status).toBe(200)
       expect(await page.text()).toContain('StoryFabric')
+      const worker = await fetch(`${base}/pdf.worker.mjs`)
+      expect(worker.headers.get('content-type')).toContain('javascript')
       expect((await fetch(`${base}/api/rpc`, { method: 'POST' })).status).toBe(401)
 
       const login = await fetch(`${base}/api/auth/login`, {

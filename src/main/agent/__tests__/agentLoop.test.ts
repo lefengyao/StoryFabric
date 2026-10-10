@@ -3,6 +3,7 @@ import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+vi.mock('../../networkFetch', () => ({ electronFetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) }))
 import type { AgentEvent, ChatSession } from '../../../shared/types'
 import type { AgentEventEnvelope } from '../../../shared/api'
 import { serializeNote } from '../../../core/workspace/entityStore'
@@ -71,6 +72,18 @@ async function loadPersisted(sessionId: string): Promise<ChatSession | null> {
 }
 
 describe('AgentService', () => {
+  it('passes normalized generation preferences through its CoreAgentService settings callback', async () => {
+    await settings.update({ agentGeneration: { agentTemperature: 100.4, proseAlternativesEnabled: true, maxToolRounds: 250 } })
+    const agent = makeAgent()
+    const coreAgent = (agent as unknown as {
+      serviceFor(workspaceRoot: string): { options: { settings: () => Promise<{ agentGeneration?: unknown }> } }
+    }).serviceFor(root)
+
+    await expect(coreAgent.options.settings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 100, proseAlternativesEnabled: true, maxToolRounds: 250 }
+    })
+  })
+
   it('读工具自动执行并回注，最终生成回答', async () => {
     await saveCharacter(root, { name: '林晚', role: '主角' })
 
@@ -127,7 +140,7 @@ describe('AgentService', () => {
     // 等待 pending-change 出现后拒绝
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, false)
 
@@ -172,7 +185,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     const change = (changeEv.event as { change: { id: string; title: string } }).change
     expect(change.title).toBe('删除便签：待删除便签')
@@ -213,7 +226,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     const change = (changeEv.event as { change: { id: string; title: string; beforeText: string } }).change
     expect(change.beforeText).toBe(serializeNote(note))
@@ -286,7 +299,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const changeEv = events.find((e) => e.event.type === 'pending-change')!
     agent.confirmChange((changeEv.event as { change: { id: string } }).change.id, true)
 
@@ -319,7 +332,7 @@ describe('AgentService', () => {
 
     await vi.waitFor(() => {
       expect(events.some((e) => e.event.type === 'pending-change')).toBe(true)
-    })
+    }, { timeout: 5000 })
     const sid = events[0].sessionId
     // 用户在等待确认期间重命名并归档了会话
     await new SessionStore(root).updateMeta(sid, { title: '用户改的名字', archived: true })

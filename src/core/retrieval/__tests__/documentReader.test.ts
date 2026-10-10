@@ -5,6 +5,15 @@ import { getChapterBody, saveChapter, saveOutlineDoc } from '../../workspace/ent
 import { readChapterSlice, readOutlineSlice } from '../documentReader'
 
 describe('versioned document slices', () => {
+  it('reads an unbound chapter outline by outlineId before a chapter exists', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '独立章纲')
+    const outline = await saveOutlineDoc(store, { title: '序章章纲', kind: 'chapter', content: '场景与转折' })
+    const page = await readOutlineSlice(store, { outlineId: outline.id })
+    expect(page.content).toBe('场景与转折')
+    expect(page.sourcePath).toContain('outline/unassigned/')
+  })
+
   it('reassembles long chapters exactly without truncation notices', async () => {
     const store = new MemoryFileStore()
     await initializeWorkspace(store, '分页读取')

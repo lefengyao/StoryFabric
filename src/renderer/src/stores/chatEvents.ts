@@ -1,12 +1,24 @@
 import type { AgentEventEnvelope } from '../../../shared/api'
-import type { ChatMessage, ChatSession } from '../../../shared/types'
+import type { AgentBudgetSnapshot, ChatMessage, ChatSession, OrchestrationRunRecord } from '../../../shared/types'
 
-export function sessionEventPatch(activeId: string | null, envelope: AgentEventEnvelope): { activeId?: string; messages: ChatMessage[] } | null {
+export interface SessionEventPatch {
+  activeId?: string
+  messages: ChatMessage[]
+  orchestrationRuns?: OrchestrationRunRecord[]
+  budget?: AgentBudgetSnapshot | null
+}
+
+export function sessionEventPatch(activeId: string | null, envelope: AgentEventEnvelope): SessionEventPatch | null {
   if (envelope.event.type !== 'session') return null
   if (activeId && envelope.sessionId !== activeId) return null
+  const session = envelope.event.session
+  const latestRun = session.orchestrationRuns?.at(-1)
   return {
     ...(activeId ? {} : { activeId: envelope.sessionId }),
-    messages: envelope.event.session.messages
+    messages: session.messages,
+    ...(session.orchestrationRuns !== undefined
+      ? { orchestrationRuns: session.orchestrationRuns, budget: latestRun?.budget ?? null }
+      : {})
   }
 }
 

@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+@import './android-workbench.css';
+@import './writing-tools.css';
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -156,6 +158,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+
 h1,
 h2,
 h3 {
@@ -179,13 +182,6 @@ button {
   html,
   body {
     overflow-x: hidden;
-  }
-
-  /* Android 15/Capacitor may draw the WebView edge-to-edge. Keep app chrome
-     and the composer below the system status/navigation bars. */
-  body {
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   button,
@@ -356,6 +352,53 @@ button {
   animation: chat-message-enter 220ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
+/* 会话字号只在完整聊天页和小窗口的 chat-surface 内生效，不污染全局 UI 或编辑器。 */
+.chat-surface {
+  font-size: var(--chat-ui-font-size, var(--chat-font-size, 14px));
+}
+
+.chat-surface [class~="text-xs"],
+.chat-surface [class~="text-[13px]"] {
+  font-size: var(--chat-ui-meta-size, var(--chat-font-meta-size, 12px));
+}
+
+.chat-surface [class~="text-sm"],
+.chat-surface [class~="text-[15px]"],
+.chat-surface [class~="text-[16px]"] {
+  font-size: var(--chat-ui-font-size, var(--chat-font-size, 14px));
+}
+
+.chat-surface [class~="text-[9px]"],
+.chat-surface [class~="text-[10px]"],
+.chat-surface [class~="text-[11px]"],
+.chat-surface [class~="text-[12px]"] {
+  font-size: var(--chat-ui-micro-size, var(--chat-font-micro-size, 10px));
+}
+
+.chat-surface .chat-text-body {
+  font-size: var(--chat-ui-font-size, var(--chat-font-size, 14px));
+}
+
+.chat-selectable-text {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.chat-user-message-text::selection,
+.chat-user-message-text ::selection {
+  color: #1c1917;
+  background: #fde68a;
+}
+
+.chat-surface .chat-text-meta {
+  font-size: var(--chat-ui-meta-size, var(--chat-font-meta-size, 12px));
+}
+
+.chat-surface .chat-text-micro {
+  font-size: var(--chat-ui-micro-size, var(--chat-font-micro-size, 10px));
+}
+
 .event-timeline-node {
   cursor: pointer;
 }
@@ -392,14 +435,6 @@ button {
   pointer-events: none !important;
 }
 
-.context-meter {
-  min-width: 7rem;
-  padding: 0.35rem 0.55rem;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-}
-
 [data-app-shell] button:not(:disabled),
 [data-app-shell] a[href] {
   transition-property: color, background-color, border-color, box-shadow, opacity, transform;
@@ -409,7 +444,8 @@ button {
 
 [data-app-shell] button:not(:disabled):active,
 [data-app-shell] a[href]:active {
-  transform: scale(0.97);
+  /* Do not scale controls: moving their edges during a held press can drop the click on release. */
+  opacity: 0.82;
 }
 
 [data-app-shell] button:not(:disabled):hover > svg,
@@ -508,6 +544,169 @@ button {
   font-family: var(--editor-font, var(--font-sans)) !important;
   font-size: var(--editor-font-size, 14px);
   line-height: var(--editor-line-height, 1.75) !important;
+}
+
+.action-panel {
+  top: 4.5rem;
+  right: 1rem;
+  width: 24rem;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 6rem);
+  border-radius: 1rem;
+}
+
+.chapter-compact-tools,
+.workspace-compact-tools {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .action-panel,
+  .android-native .action-panel {
+    top: auto;
+    right: env(safe-area-inset-right, 0px);
+    bottom: env(safe-area-inset-bottom, 0px);
+    left: env(safe-area-inset-left, 0px);
+    width: auto;
+    max-width: none;
+    max-height: calc(85vh - env(safe-area-inset-top, 0px));
+    max-height: calc(85dvh - env(safe-area-inset-top, 0px));
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  .action-panel-content {
+    padding-bottom: 1.25rem;
+  }
+
+  .chapter-desktop-tools,
+  .workspace-home-action,
+  .workspace-header-version {
+    display: none;
+  }
+
+  .chapter-compact-tools,
+  .workspace-compact-tools {
+    display: block;
+  }
+
+  [data-chapter-toolbar] {
+    flex-wrap: nowrap;
+    padding: 8px;
+  }
+
+  [data-chapter-toolbar] .chapter-title {
+    flex: 1;
+    width: 0;
+    max-width: none;
+    height: 40px;
+  }
+
+  [data-chapter-toolbar] .chapter-save,
+  [data-chapter-toolbar] .chapter-more {
+    height: 40px;
+    min-width: 40px;
+  }
+
+  [data-chapter-editor] {
+    padding: 8px;
+  }
+}
+
+/* Native tablets use the same focused writing controls as native phones. */
+.android-native .chapter-desktop-tools,
+.android-native .workspace-home-action,
+.android-native .workspace-header-version {
+  display: none;
+}
+
+.android-native .chapter-compact-tools,
+.android-native .workspace-compact-tools {
+  display: block;
+}
+
+.android-native [data-chapter-toolbar] {
+  flex-wrap: nowrap;
+  padding: 6px 8px;
+}
+
+.android-native [data-chapter-toolbar] .chapter-title {
+  flex: 1;
+  width: 0;
+  max-width: none;
+  font-size: 14px;
+}
+
+.android-native .action-panel-content button,
+.android-native .action-panel-content input,
+.android-native .action-panel-content select {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.android-native .action-panel-content button {
+  min-height: 44px;
+}
+
+.android-native .action-panel-content label {
+  font-size: 12px;
+}
+
+.android-native [data-chapter-editor] {
+  padding: 6px 8px;
+}
+
+.android-native [data-android-app-header] .workspace-compact-tools button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+@media (max-width: 639px) {
+  [data-chapter-writing="true"] [data-chapter-directory-toggle] {
+    display: flex;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] {
+    height: auto;
+    min-height: 0;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] > div {
+    display: none;
+  }
+
+  [data-chapter-writing="true"][data-chapter-directory-open="true"] [data-android-list-pane] {
+    height: 240px;
+    min-height: 0;
+    max-height: 40vh;
+  }
+}
+
+@media (orientation: portrait) {
+  .android-native [data-chapter-writing="true"] [data-chapter-directory-toggle] {
+    display: flex;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] {
+    height: auto;
+    min-height: 0;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="false"] [data-android-list-pane] > div {
+    display: none;
+  }
+
+  .android-native [data-chapter-writing="true"][data-chapter-directory-open="true"] [data-android-list-pane] {
+    height: 240px;
+    min-height: 0;
+    max-height: 40vh;
+  }
+}
+
+@media (orientation: landscape) {
+  .android-native [data-android-chapter-actions] [role="tablist"] svg,
+  .android-native [data-chapter-list-heading] > div > span {
+    display: none;
+  }
 }
 
 /* 手机端底部导航需要和 Android 系统导航区明确分层，避免误触返回/主页。 */

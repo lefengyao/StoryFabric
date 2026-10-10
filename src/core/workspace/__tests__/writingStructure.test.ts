@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { MemoryFileStore } from '../../storage/fileStore'
-import { deleteChapter, deleteCharacter, getNote, getSetting, listCharacters, listChapters, listEvents, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveNote, saveRelationships, saveSetting } from '../entityStore'
+import { deleteChapter, deleteCharacter, deleteSetting, getNote, getSetting, listCharacters, listChapters, listEvents, listNotes, listSettings, loadRelationships, saveChapter, saveCharacter, saveNote, saveRelationships, saveSetting } from '../entityStore'
 import { initializeWorkspace, listVolumes, moveChapter, saveVolume } from '../workspaceService'
-import { listTrash, restoreFromTrash } from '../trash'
+import { listTrash, purgeTrashEntry, restoreFromTrash } from '../trash'
 import { stringifyFrontMatter } from '../frontMatter'
 
 describe('writing structure', () => {
@@ -20,6 +20,73 @@ describe('writing structure', () => {
     expect((await getSetting(store, setting.id))?.content).toContain('星门规则')
     expect((await getNote(store, note.id))?.content).toContain('补充星门')
     expect((await listVolumes(store)).map((item) => item.title)).toEqual(['第一卷', '第二卷'])
+  })
+
+  it('persists a setting parent and clears it from front matter', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const root = await saveSetting(store, { title: '世界观', content: '' })
+    const child = await saveSetting(store, { title: '地理', parentId: root.id, content: '' })
+
+    expect((await getSetting(store, child.id))?.parentId).toBe(root.id)
+    expect((await listSettings(store)).find((item) => item.id === child.id)?.parentId).toBe(root.id)
+    expect(await store.readText('settings/background/地理.md')).toContain(`parentId: ${root.id}`)
+
+    await saveSetting(store, { id: child.id, parentId: '' })
+    expect((await getSetting(store, child.id))?.parentId).toBeUndefined()
+    expect(await getSetting(store, child.id)).not.toHaveProperty('parentId')
+    expect(await store.readText('settings/background/地理.md')).not.toContain('parentId:')
+  })
+
+  it('rejects setting parent cycles without changing the saved document', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const root = await saveSetting(store, { title: '世界观' })
+    const child = await saveSetting(store, { title: '地理', parentId: root.id })
+    const nested = await saveSetting(store, { title: '港口', parentId: child.id })
+
+    await expect(saveSetting(store, { id: root.id, parentId: nested.id })).rejects.toThrow('循环')
+    await expect(saveSetting(store, { id: root.id, parentId: root.id })).rejects.toThrow('循环')
+    expect((await getSetting(store, root.id))?.parentId).toBeUndefined()
+  })
+
+  it('rejects a missing setting parent but still loads historical orphans', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    await expect(saveSetting(store, { title: '孤立设定', parentId: 'set_missing' })).rejects.toThrow('父级')
+    expect(await listSettings(store)).toEqual([])
+
+    const root = await saveSetting(store, { title: '世界观' })
+    const child = await saveSetting(store, { title: '地理', parentId: root.id })
+    await deleteSetting(store, root.id)
+    expect((await getSetting(store, child.id))?.parentId).toBe(root.id)
+  })
+
+  it('edits a historical orphan while rejecting a different missing parent', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const root = await saveSetting(store, { title: '世界观' })
+    const child = await saveSetting(store, { title: '地理', parentId: root.id, content: '原文' })
+    await deleteSetting(store, root.id)
+
+    const edited = await saveSetting(store, { id: child.id, title: '新地理', content: '新正文' })
+    expect(edited.parentId).toBe(root.id)
+    expect((await getSetting(store, child.id))?.content).toBe('新正文')
+    expect((await getSetting(store, child.id))?.parentId).toBe(root.id)
+    await expect(saveSetting(store, { id: child.id, parentId: 'set_another_missing' })).rejects.toThrow('父级')
+    expect((await getSetting(store, child.id))?.parentId).toBe(root.id)
+  })
+
+  it('treats invalid legacy setting parents as root nodes', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    await store.writeText('settings/background/旧设定.md', stringifyFrontMatter('正文', {
+      id: 'set_legacy', title: '旧设定', category: 'background', tags: [], parentId: 42
+    }))
+
+    expect((await getSetting(store, 'set_legacy'))?.parentId).toBeUndefined()
+    expect(await getSetting(store, 'set_legacy')).not.toHaveProperty('parentId')
+    expect((await listSettings(store))[0].parentId).toBeUndefined()
   })
 
   it('writes chapter prose with full-width paragraph indentation', async () => {
@@ -42,17 +109,31 @@ describe('writing structure', () => {
     expect((await listChapters(store))[0].title).toBe('可恢复')
   })
 
-  it('reads legacy flat chapter metadata with v2 defaults', async () => {
+  it('permanently removes a deleted chapter from the trash index and file store', async () => {
+    const store = new MemoryFileStore()
+    await initializeWorkspace(store, '测试')
+    const chapter = await saveChapter(store, { title: '永久删除', box: 'draft', content: '正文' })
+    await deleteChapter(store, chapter.id)
+
+    await purgeTrashEntry(store, chapter.id)
+
+    expect(await listTrash(store)).toEqual([])
+    expect(await store.readText(`.storyfabric/trash/chapter/${chapter.id}.md`)).toBeNull()
+  })
+
+  it('preserves legacy flat chapter metadata when initialization requires format-5 rewriting', async () => {
     const store = new MemoryFileStore()
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 1, name: '旧项目' }))
     await store.writeText('chapters/0001-开端.md', stringifyFrontMatter('正文', { id: 'cha_1', title: '开端', order: 1, volume: '第一卷' }))
-    await initializeWorkspace(store, '旧项目')
+    await expect(initializeWorkspace(store, '旧项目')).rejects.toThrow('格式 5')
     const chapter = (await listChapters(store))[0]
     expect(chapter.box).toBe('main')
     expect(chapter.volumeId).toBe('vol_default')
+    expect(await store.readText('chapters/0001-开端.md')).toContain('正文')
+    expect(await store.exists('chapters/main')).toBe(false)
   })
 
-  it('migrates legacy events into the first workspace volume', async () => {
+  it('preserves legacy event files when initialization requires format-5 rewriting', async () => {
     const store = new MemoryFileStore()
     await store.writeText('storyfabric.json', JSON.stringify({ app: 'storyfabric', version: 2, name: '旧事件项目' }))
     await store.writeText('chapters/volumes.json', JSON.stringify([{ id: 'vol_two', title: '第二卷', order: 2 }]))
@@ -64,11 +145,13 @@ describe('writing structure', () => {
       nextIds: []
     }))
 
-    await initializeWorkspace(store, '旧事件项目')
+    const original = await store.readText('events/旧事件.md')
+    await expect(initializeWorkspace(store, '旧事件项目')).rejects.toThrow('格式 5')
 
     const migrated = (await listEvents(store))[0]
-    expect(migrated.volumeId).toBe('vol_two')
+    expect(migrated.volumeId).toBe('vol_default')
     expect(migrated.branchIds).toEqual([])
+    expect(await store.readText('events/旧事件.md')).toBe(original)
   })
 
   it('persists a new primary character under the primary tier', async () => {

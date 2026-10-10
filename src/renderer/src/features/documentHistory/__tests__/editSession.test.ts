@@ -1,0 +1,137 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DocumentEditSession, HISTORY_INTERVAL_MS } from '../editSession'
+
+describe('document history edit session', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0) })
+  afterEach(() => vi.useRealTimers())
+  const setup = (persist = vi.fn(async (doc: string, _source?: 'manual' | 'automatic') => doc)) => {
+    const session = new DocumentEditSession({ initial: '原文', persist, fingerprint: (doc: string) => doc })
+    return { session, persist }
+  }
+  it('captures continuous editing at five and ten minutes even after ordinary saves', async () => {
+    const { session, persist } = setup()
+    session.update('一')
+    for (let minute = 1; minute <= 4; minute++) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      session.update(`第${minute}分钟`)
+      await session.saveCurrent()
+    }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(persist.mock.calls.filter((call) => call[1] === 'automatic')).toEqual([['第4分钟', 'automatic']])
+    session.update('继续输入')
+    await vi.advanceTimersByTimeAsync(HISTORY_INTERVAL_MS)
+    expect(persist.mock.calls.filter((call) => call[1] === 'automatic')).toHaveLength(2)
+  })
+  it('defers an overdue capture until composition ends, then takes the committed text once', async () => {
+    const { session, persist } = setup()
+    session.update('正在输入')
+    session.setComposing(true)
+    await vi.advanceTimersByTimeAsync(HISTORY_INTERVAL_MS)
+    expect(persist).not.toHaveBeenCalled()
+    session.update('确认后的中文')
+    session.setComposing(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(persist).toHaveBeenCalledExactlyOnceWith('确认后的中文', 'automatic')
+  })
+  it('starts the next deadline from a successful manual version, not an ordinary save', async () => {
+    const { session, persist } = setup()
+    session.update('手动版本')
+    await vi.advanceTimersByTimeAsync(240_000)
+    await session.capture('manual')
+    session.update('下一版')
+    await vi.advanceTimersByTimeAsync(299_999)
+    expect(persist.mock.calls.filter((call) => call[1] === 'automatic')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(persist.mock.calls.filter((call) => call[1] === 'automatic')).toHaveLength(1)
+  })
+  it('awaits an in-flight capture and preserves edits made during that request before leaving', async () => {
+    let finish!: (doc: string) => void
+    const persist = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve })).mockImplementation(async (doc: string) => doc)
+    const { session } = setup(persist)
+    session.update('第一版')
+    const first = session.capture('automatic')
+    await Promise.resolve()
+    session.update('第二版')
+    let left = false
+    const leave = session.beforeLeave().then(() => { left = true })
+    expect(left).toBe(false)
+    finish('第一版')
+    await first
+    await leave
+    expect(persist.mock.calls).toEqual([['第一版', 'automatic'], ['第二版', 'automatic']])
+  })
+  it('pauses failed automatic writes until explicit retry and keeps the draft', async () => {
+    const persist = vi.fn().mockRejectedValueOnce(new Error('SOURCE_CHANGED')).mockImplementation(async (doc: string) => doc)
+    const { session } = setup(persist)
+    session.update('本地草稿')
+    await vi.advanceTimersByTimeAsync(HISTORY_INTERVAL_MS)
+    expect(session.state.error).toContain('SOURCE_CHANGED')
+    expect(session.state.pendingHistory).toBe(true)
+    await vi.advanceTimersByTimeAsync(HISTORY_INTERVAL_MS)
+    expect(persist).toHaveBeenCalledTimes(1)
+    await session.retry()
+    expect(persist).toHaveBeenCalledTimes(2)
+    expect(session.state.pendingHistory).toBe(false)
+  })
+  it('resumes overdue history once and never writes after session disposal', async () => {
+    const { session, persist } = setup()
+    session.update('离线输入')
+    vi.setSystemTime(HISTORY_INTERVAL_MS + 10)
+    await session.resume()
+    await session.resume()
+    expect(persist).toHaveBeenCalledTimes(1)
+    session.update('旧文档草稿')
+    session.dispose()
+    await vi.advanceTimersByTimeAsync(HISTORY_INTERVAL_MS)
+    expect(persist).toHaveBeenCalledTimes(1)
+  })
+  it('keeps waiting when the user changes the document during the leave checkpoint', async () => {
+    let finish!: (document: string) => void
+    const persist = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve })).mockImplementation(async (document: string) => document)
+    const { session } = setup(persist)
+    session.update('离开时草稿')
+    const leave = session.beforeLeave()
+    await Promise.resolve()
+    session.update('留存请求期间的新输入')
+    finish('离开时草稿')
+    await leave
+    expect(persist.mock.calls).toEqual([['离开时草稿', 'automatic'], ['留存请求期间的新输入', 'automatic']])
+  })
+  it('explicit overwrite writes a clean local draft after the caller rereads the current revision', async () => {
+    const { session, persist } = setup()
+    await session.saveCurrent(true)
+    expect(persist).toHaveBeenCalledExactlyOnceWith('原文', undefined)
+  })
+  it('persists a revert to the last history text before leaving after an ordinary save', async () => {
+    const { session, persist } = setup()
+    session.update('已普通保存的新文')
+    await session.saveCurrent()
+    session.update('原文')
+    expect(session.state.pendingHistory).toBe(false)
+    expect(session.dirty).toBe(true)
+    await session.beforeLeave()
+    expect(persist.mock.calls).toEqual([['已普通保存的新文', undefined], ['原文', undefined]])
+    expect(session.dirty).toBe(false)
+  })
+  it('blocks leaving when persisting a revert fails and retries that ordinary save', async () => {
+    const persist = vi.fn().mockResolvedValueOnce('已保存').mockRejectedValueOnce(new Error('写入失败')).mockImplementation(async (document: string) => document)
+    const { session } = setup(persist)
+    session.update('已保存')
+    await session.saveCurrent()
+    session.update('原文')
+    await expect(session.beforeLeave()).rejects.toThrow('写入失败')
+    expect(session.dirty).toBe(true)
+    await session.retry()
+    expect(persist.mock.calls).toEqual([['已保存', undefined], ['原文', undefined], ['原文', undefined]])
+    expect(session.dirty).toBe(false)
+  })
+  it('retries a failed manual version even when the editor has no unsaved changes', async () => {
+    const persist = vi.fn().mockRejectedValueOnce(new Error('存储暂时不可用')).mockImplementation(async (document: string) => document)
+    const { session } = setup(persist)
+    await expect(session.capture('manual')).rejects.toThrow('存储暂时不可用')
+    await session.retry()
+    expect(persist.mock.calls).toEqual([['原文', 'manual'], ['原文', 'manual']])
+    expect(session.state.error).toBeNull()
+    expect(session.state.lastHistoryAt).not.toBeNull()
+  })
+})

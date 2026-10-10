@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { markRecentWorkspace, orderRecentWorkspacePaths } from '../recentWorkspaces'
+import { forgetRecentWorkspace, markRecentWorkspace, orderRecentWorkspacePaths } from '../recentWorkspaces'
 
 describe('recent workspace records', () => {
+  it('forgets one path and its timestamp without touching other entries', () => {
+    const state = { recentWorkspaces: ['first', 'second'], recentWorkspaceOpenedAt: { first: '2026-09-01T00:00:00.000Z', second: '2026-09-02T00:00:00.000Z' } }
+    expect(forgetRecentWorkspace(state, 'first')).toEqual({ recentWorkspaces: ['second'], recentWorkspaceOpenedAt: { second: '2026-09-02T00:00:00.000Z' } })
+    expect(state.recentWorkspaces).toEqual(['first', 'second'])
+  })
   it('deduplicates and moves a successfully opened path to the front', () => {
     const next = markRecentWorkspace(
       {

@@ -8,24 +8,21 @@ import {
   deleteOutlineDoc,
   deleteSetting,
   findCharacter,
-  getChapterBody,
   getNote,
   getSetting,
   genId,
-  listChapters,
   listEvents,
-  listOutline,
-  serializeChapter,
   serializeCharacter,
   serializeEvent,
   serializeNote,
-  serializeOutlineDoc,
   serializeSetting
 } from '../workspace/entityStore'
 import { normalizeProjectDocPath } from '../workspace/projectDocs'
 import { contentRevision } from '../workspace/resourceRevision'
 import { coordinatorFor } from '../workspace/mutationCoordinator'
 import type { ToolOutcome } from './registry'
+import { readCurrentDocument } from '../workspace/documentWrites'
+import { assertDocumentReadSourceUnchanged } from '../retrieval/documentReadRevision'
 
 export type DeleteEntityKind = Exclude<EntityKind, 'projectDoc'> | 'projectDoc'
 
@@ -77,9 +74,12 @@ async function resolveTarget(store: FileStore, kind: DeleteEntityKind, id: strin
     return { id: value.id, kind, title: value.name, beforeText: serializeCharacter(value), commit: async () => { await deleteCharacter(store, value.id); return { ok: true, text: `已将人物卡「${value.name}」移入回收站` } } }
   }
   if (kind === 'outline') {
-    const value = (await listOutline(store)).find((item) => item.id === id)
-    if (!value) fail(`未找到大纲：${id}`)
-    return { id: value.id, kind, title: value.title, beforeText: serializeOutlineDoc(value), commit: async () => { await deleteOutlineDoc(store, value.id); return { ok: true, text: `已将大纲「${value.title}」移入回收站` } } }
+    const snapshot = await readCurrentDocument(store, kind, id).catch((error: unknown) => {
+      if (error instanceof Error && error.message.startsWith('NOT_FOUND')) fail(`NOT_FOUND：未找到大纲：${id}`)
+      throw error
+    })
+    const value = snapshot.document
+    return { id: value.id, kind, title: value.title, beforeText: snapshot.sourceText, commit: async () => { await deleteOutlineDoc(store, value.id); return { ok: true, text: `已将大纲「${value.title}」移入回收站` } } }
   }
   if (kind === 'event') {
     const events = await listEvents(store)
@@ -90,10 +90,12 @@ async function resolveTarget(store: FileStore, kind: DeleteEntityKind, id: strin
     return { id: value.id, kind, title: value.title, beforeText: serializeEvent(value), commit: async () => { await deleteEvent(store, value.id); return { ok: true, text: `已将事件「${value.title}」移入回收站` } } }
   }
   if (kind === 'chapter') {
-    const meta = (await listChapters(store)).find((item) => item.id === id)
-    if (!meta) fail(`未找到章节：${id}`)
-    const value = { ...meta, content: (await getChapterBody(store, meta.id)) ?? '' }
-    return { id: value.id, kind, title: value.title, beforeText: serializeChapter(value), commit: async () => { await deleteChapter(store, value.id); return { ok: true, text: `已将章节「${value.title}」移入回收站` } } }
+    const snapshot = await readCurrentDocument(store, kind, id).catch((error: unknown) => {
+      if (error instanceof Error && error.message.startsWith('NOT_FOUND')) fail(`NOT_FOUND：未找到章节：${id}`)
+      throw error
+    })
+    const value = snapshot.document
+    return { id: value.id, kind, title: value.title, beforeText: snapshot.sourceText, commit: async () => { await deleteChapter(store, value.id); return { ok: true, text: `已将章节「${value.title}」移入回收站` } } }
   }
   if (kind === 'setting') {
     const value = await getSetting(store, id)
@@ -129,6 +131,7 @@ export async function executeDeleteEntityTool(store: FileStore, rawArgs: Record<
   if (typeof rawArgs.baseRevision === 'string' && contentRevision(target.beforeText) !== rawArgs.baseRevision) {
     fail('资料版本已变化，请重新读取后再删除')
   }
+  if (kind === 'chapter' || kind === 'outline') assertDocumentReadSourceUnchanged(store, kind, id, target.beforeText, contentRevision(target.beforeText), rawArgs.baseReadRevision as string | undefined)
   const trashBacked = TRASH_KINDS.has(kind as Exclude<EntityKind, 'projectDoc'>)
   const change: PendingChange = {
     id: genId('chg'),
@@ -142,10 +145,10 @@ export async function executeDeleteEntityTool(store: FileStore, rawArgs: Record<
   return {
     kind: 'pending',
     change,
-    apply: () => coordinatorFor(store).run(`delete:${kind}:${id}`, async () => {
+    apply: () => coordinatorFor(store).run(kind === 'chapter' || kind === 'outline' ? `${kind}:${id}` : `delete:${kind}:${id}`, async () => {
       try {
         const latest = await resolveTarget(store, kind, id)
-        if (contentRevision(latest.beforeText) !== contentRevision(target.beforeText)) {
+        if (latest.beforeText !== target.beforeText) {
           return { ok: false, text: '资料已在等待期间修改，请重新读取后生成变更' }
         }
       } catch {

@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { NodeFileStore } from '../core/storage/nodeFileStore'
 import { importWorkspaceArchive } from '../core/workspace/archive'
 import { listCharacters, listChapters, listEvents, listNotes, listOutline, listSettings, loadRelationships } from '../core/workspace/entityStore'
-import { CURRENT_WORKSPACE_VERSION } from '../core/workspace/migration'
+import { CURRENT_WORKSPACE_VERSION, migrateWorkspace, type WorkspaceMigrationOptions } from '../core/workspace/migration'
 import { listTrash } from '../core/workspace/trash'
 import { initializeWorkspace, loadSummary, loadWorkspaceListItem, setWorkspaceName, validateWorkspace } from '../core/workspace/workspaceService'
 import type { FileStore } from '../core/storage/fileStore'
@@ -100,6 +100,8 @@ export class RevalidatedFileStore implements FileStore {
   async writeBytes(path: string, bytes: Uint8Array): Promise<void> { return (await this.loadStore()).writeBytes(path, bytes) }
   async move(from: string, to: string): Promise<void> { return (await this.loadStore()).move(from, to) }
   async remove(path: string): Promise<void> { return (await this.loadStore()).remove(path) }
+  async removeFile(path: string): Promise<void> { return (await this.loadStore()).removeFile(path) }
+  async fileSize(path: string): Promise<number | null> { return (await this.loadStore()).fileSize(path) }
   async modifiedAt(path: string): Promise<number | null> { return (await this.loadStore()).modifiedAt(path) }
   async listFiles(dir: string, extension?: string): Promise<string[]> { return (await this.loadStore()).listFiles(dir, extension) }
   async listDirs(dir: string): Promise<string[]> { return (await this.loadStore()).listDirs(dir) }
@@ -266,7 +268,7 @@ export class WorkspaceRegistry {
     if (await exists(target)) throw new Error('检测到旧工作区，但默认受管工作区已存在；为避免覆盖，服务未启动')
 
     await fs.rename(legacy, target)
-    const summary = await loadSummary(new NodeFileStore(target, this.managedRootBoundary), basename(target), 'default')
+    const summary = await loadWorkspaceListItem(new NodeFileStore(target, this.managedRootBoundary), basename(target), 'default')
     const now = Date.now()
     this.records.push({ id: 'default', name: summary.name, createdAt: now, updatedAt: now })
     await this.saveRecords()
@@ -298,10 +300,33 @@ export class WorkspaceRegistry {
     return new RevalidatedFileStore(async () => new NodeFileStore(this.rootOf(record), this.managedRootBoundary))
   }
 
-  async summary(id: string): Promise<WorkspaceSummary> {
+  async summary(id: string, options?: WorkspaceMigrationOptions): Promise<WorkspaceSummary> {
     await this.ensureReady()
     const record = this.getRecord(id)
-    return loadSummary(new NodeFileStore(this.rootOf(record), this.managedRootBoundary), record.name, id)
+    return loadSummary(new NodeFileStore(this.rootOf(record), this.managedRootBoundary), record.name, id, options)
+  }
+
+  async rename(id: string, name: string): Promise<WorkspaceListItem> {
+    await this.ensureReady()
+    return this.mutate(async () => {
+      const record = this.getRecord(id)
+      const store = new NodeFileStore(this.rootOf(record), this.managedRootBoundary)
+      const previousName = (await loadWorkspaceListItem(store, record.name, id)).name
+      await setWorkspaceName(store, name)
+      const oldRecordName = record.name
+      const oldUpdatedAt = record.updatedAt
+      record.name = name.trim()
+      record.updatedAt = Date.now()
+      try {
+        await this.saveRecords()
+      } catch (error) {
+        record.name = oldRecordName
+        record.updatedAt = oldUpdatedAt
+        await setWorkspaceName(store, previousName).catch(() => undefined)
+        throw error
+      }
+      return loadWorkspaceListItem(store, record.name, id)
+    })
   }
 
   async create(name: string): Promise<WorkspaceSummary> {
@@ -331,7 +356,7 @@ export class WorkspaceRegistry {
     })
   }
 
-  async importArchive(bytes: Uint8Array, suggestedName?: string, signal?: AbortSignal): Promise<WorkspaceSummary> {
+  async importArchive(bytes: Uint8Array, suggestedName?: string, signal?: AbortSignal, options?: WorkspaceMigrationOptions): Promise<WorkspaceSummary> {
     await this.ensureReady()
     return this.mutate(async () => {
       throwIfWorkspaceRequestAborted(signal)
@@ -342,7 +367,7 @@ export class WorkspaceRegistry {
       let recordAdded = false
       try {
         const stagingStore = new NodeFileStore(staging, this.managedRootBoundary)
-        await importWorkspaceArchive(stagingStore, bytes)
+        await importWorkspaceArchive(stagingStore, bytes, options)
         throwIfWorkspaceRequestAborted(signal)
         const imported = await loadSummary(stagingStore, '导入工作区', 'pending')
         id = `ws_${randomUUID().replace(/-/g, '').slice(0, 12)}`
@@ -413,7 +438,7 @@ export class WorkspaceRegistry {
     }
   }
 
-  async openPath(input: string, signal?: AbortSignal): Promise<WorkspaceSummary> {
+  async openPath(input: string, signal?: AbortSignal, options?: WorkspaceMigrationOptions): Promise<WorkspaceSummary> {
     await this.ensureReady()
     return this.mutate(async () => {
       throwIfWorkspaceRequestAborted(signal)
@@ -432,6 +457,8 @@ export class WorkspaceRegistry {
 
       const targetIdentity = this.canonicalPath(target)
       const store = this.storeForPath(target)
+      await migrateWorkspace(store, options)
+      throwIfWorkspaceRequestAborted(signal)
       for (const record of this.records) {
         try {
           if (this.canonicalPath(this.rootOf(record)) === targetIdentity) return loadReadOnlySummary(store, record.name, record.id)

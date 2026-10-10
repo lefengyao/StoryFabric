@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ServerSettingsStore } from '../settingsStore'
 
 const roots: string[] = []
@@ -11,6 +11,27 @@ afterEach(async () => {
 })
 
 describe('server settings store', () => {
+  it('preserves the owner of managed model preferences across server reloads and offline edits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-model-scope-'))
+    roots.push(root)
+    const file = join(root, 'settings.json'), store = new ServerSettingsStore(file)
+    await store.saveTrailblazerProvider({ models: ['custom-model'], modelSettings: {}, modelScope: 'b'.repeat(64) })
+    const restored = new ServerSettingsStore(file)
+    expect(await restored.managedProviderPreferences()).toEqual({ models: ['custom-model'], modelSettings: {}, modelScope: 'b'.repeat(64) })
+    await restored.saveTrailblazerProvider({ models: ['offline-edit'], modelSettings: {} })
+    expect((await restored.managedProviderPreferences()).modelScope).toBe('b'.repeat(64))
+  })
+  it('forgets a recent workspace without changing another recent record', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-recent-forget-'))
+    roots.push(root)
+    const settings = new ServerSettingsStore(join(root, 'settings.json'))
+    await settings.recordRecentWorkspace('first')
+    await settings.recordRecentWorkspace('second')
+    await settings.forgetRecentWorkspace('first')
+    const loaded = await settings.load()
+    expect(loaded.recentWorkspaces).toEqual(['second'])
+    expect(loaded.recentWorkspaceOpenedAt).not.toHaveProperty('first')
+  })
   it('normalizes malformed provider fields before public settings consumers use them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-provider-normalize-'))
     roots.push(root)
@@ -156,5 +177,61 @@ describe('server settings store', () => {
       baseUrl: 'https://attacker.example/v1',
       apiKey: 'sk-attacker'
     })).resolves.toEqual({ protocol: 'gemini', baseUrl: 'https://saved.example/v1beta', apiKey: 'sk-attacker' })
+  })
+
+  it('adds generation preferences to legacy server settings', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-generation-legacy-'))
+    roots.push(root)
+    const path = join(root, 'settings.json')
+    await writeFile(path, JSON.stringify({ providers: [], customPrompt: 'legacy' }))
+
+    await expect(new ServerSettingsStore(path).load()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false }
+    })
+  })
+
+  it('persists normalized generation preferences and passes them to the core agent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-generation-write-'))
+    roots.push(root)
+    const store = new ServerSettingsStore(join(root, 'settings.json'))
+
+    await expect(store.update({ agentGeneration: { agentTemperature: -1, proseAlternativesEnabled: true, maxToolRounds: 250 } })).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 0, proseAlternativesEnabled: true, maxToolRounds: 250 }
+    })
+    await expect(store.agentSettings()).resolves.toMatchObject({
+      agentGeneration: { agentTemperature: 0, proseAlternativesEnabled: true, maxToolRounds: 250 }
+    })
+  })
+
+  it('consumes the legacy global prompt once after migration succeeds', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-legacy-prompt-'))
+    roots.push(root)
+    const path = join(root, 'settings.json')
+    await writeFile(path, JSON.stringify({ providers: [], customPrompt: 'legacy project voice' }))
+    const store = new ServerSettingsStore(path)
+    const migrate = vi.fn(async () => undefined)
+
+    await expect(store.consumeLegacyCustomPrompt(migrate)).resolves.toBe('legacy project voice')
+    await expect(store.consumeLegacyCustomPrompt(migrate)).resolves.toBeUndefined()
+    expect(migrate).toHaveBeenCalledOnce()
+    await expect(store.load()).resolves.toMatchObject({ customPrompt: '' })
+  })
+
+  it('returns isolated generation defaults after a malformed settings fallback', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-settings-generation-isolation-'))
+    roots.push(root)
+    const path = join(root, 'settings.json')
+    await writeFile(path, '{')
+    const store = new ServerSettingsStore(path)
+    const first = await store.load()
+    try {
+      first.agentGeneration.agentTemperature = 0
+
+      await expect(store.load()).resolves.toMatchObject({
+        agentGeneration: { agentTemperature: 70, proseAlternativesEnabled: false }
+      })
+    } finally {
+      first.agentGeneration.agentTemperature = 70
+    }
   })
 })

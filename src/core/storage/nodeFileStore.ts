@@ -9,6 +9,8 @@ export class NodeFileStore implements FileStore {
 
   constructor(private readonly root: string, private readonly boundaryRoot = root) {}
 
+  storageIdentity(): string { const root = resolve(this.root); return `node:${process.platform === 'win32' ? root.toLocaleLowerCase() : root}` }
+
   private resolveLexically(path: string, allowRoot = false): string {
     const safePath = normalizeRelativePath(path, allowRoot)
     if (isAbsolute(safePath)) throw new Error('FileStore 只接受工作区内相对路径')
@@ -193,6 +195,24 @@ export class NodeFileStore implements FileStore {
     const safePath = normalizeRelativePath(path)
     if (!safePath) throw new Error('禁止删除工作区根目录')
     await fs.rm(await this.secureResolve(safePath), { recursive: true, force: true })
+  }
+
+  async removeFile(path: string): Promise<void> {
+    const target = await this.secureResolve(path)
+    const info = await fs.lstat(target)
+    if (!info.isFile()) throw new Error('目标不是文件')
+    // unlink never recursively removes a directory, including if the path changes after lstat.
+    await fs.unlink(await this.revalidateAbsolute(target))
+  }
+
+  async fileSize(path: string): Promise<number | null> {
+    try {
+      const info = await fs.stat(await this.secureResolve(path))
+      return info.isFile() ? info.size : null
+    } catch (error) {
+      if (this.isBoundaryError(error)) throw error
+      return null
+    }
   }
 
   async listFiles(dir: string, extension?: string): Promise<string[]> {

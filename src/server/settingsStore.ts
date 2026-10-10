@@ -1,23 +1,31 @@
 import { promises as fs } from 'node:fs'
+import { normalizeUpdatePreferences } from '../shared/updates'
 import { dirname } from 'node:path'
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
-import type { AppSettings, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
+import type { AppSettings, ManagedProviderPreferences, ModelSettings, ProviderInput, ProviderPublic, ProviderStored, PublicAppSettings } from '../shared/types'
 import { pruneModelSettings } from '../core/llm/modelCatalog'
 import { keyPreview } from '../shared/keyPreview'
-import { markRecentWorkspace } from '../shared/recentWorkspaces'
+import { forgetRecentWorkspace, markRecentWorkspace } from '../shared/recentWorkspaces'
 import { throwIfWorkspaceRequestAborted } from '../shared/api'
+import { DEFAULT_ORCHESTRATION_PREFERENCES, normalizeOrchestrationPreferences } from '../shared/creative'
+import { DEFAULT_AGENT_GENERATION_PREFERENCES, normalizeAgentGenerationPreferences, type AgentGenerationPreferences } from '../shared/agentGeneration'
 
 interface ServerProvider extends Omit<ProviderStored, 'apiKeyEncrypted'> {
   apiKey: string
 }
 
-interface ServerSettings extends Omit<AppSettings, 'providers'> {
+interface ServerSettings extends Omit<AppSettings, 'providers' | 'trailblazerProvider'> {
   providers: ServerProvider[]
+  trailblazerProvider: ManagedProviderPreferences
 }
 
 const DEFAULT_SETTINGS: ServerSettings = {
+  updatePreferences: normalizeUpdatePreferences(undefined),
   providers: [],
+  trailblazerProvider: { models: [], modelSettings: {} },
+  orchestrationDefaults: { ...DEFAULT_ORCHESTRATION_PREFERENCES, enabledStageIds: [...DEFAULT_ORCHESTRATION_PREFERENCES.enabledStageIds], modelByStage: {} },
+  agentGeneration: { ...DEFAULT_AGENT_GENERATION_PREFERENCES },
   theme: 'system',
   recentWorkspaces: [],
   recentWorkspaceOpenedAt: {},
@@ -31,11 +39,28 @@ const DEFAULT_SETTINGS: ServerSettings = {
   editorFontFamily: 'sans',
   autosaveSeconds: 0,
   sendShortcut: 'enter',
-  chatDensity: 'comfortable'
+  chatDensity: 'comfortable',
+  chatFontSize: 14
+}
+
+function defaultSettings(): ServerSettings {
+  return { ...DEFAULT_SETTINGS, providers: [], agentGeneration: normalizeAgentGenerationPreferences({}) }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function normalizeManagedProviderPreferences(value: unknown): ManagedProviderPreferences {
+  if (!isRecord(value)) return { models: [], modelSettings: {} }
+  const models = Array.isArray(value.models)
+    ? [...new Set(value.models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0))]
+    : []
+  const modelSettings = isRecord(value.modelSettings)
+    ? Object.fromEntries(Object.entries(value.modelSettings).filter((entry) => isRecord(entry[1]))) as ManagedProviderPreferences['modelSettings']
+    : {}
+  const modelScope = typeof value.modelScope === 'string' && /^[a-f0-9]{64}$/.test(value.modelScope) ? value.modelScope : undefined
+  return { models, modelSettings: pruneModelSettings(models, modelSettings), ...(modelScope ? { modelScope } : {}) }
 }
 
 function isFileNotFound(error: unknown): boolean {
@@ -115,8 +140,12 @@ export class ServerSettingsStore {
       ...DEFAULT_SETTINGS,
       ...parsed,
       providers,
+      trailblazerProvider: normalizeManagedProviderPreferences(parsed.trailblazerProvider),
       recentWorkspaces,
-      recentWorkspaceOpenedAt
+      recentWorkspaceOpenedAt,
+      updatePreferences: normalizeUpdatePreferences(parsed.updatePreferences),
+      orchestrationDefaults: normalizeOrchestrationPreferences(parsed.orchestrationDefaults),
+      agentGeneration: normalizeAgentGenerationPreferences(parsed.agentGeneration)
     }
   }
 
@@ -124,7 +153,7 @@ export class ServerSettingsStore {
     try {
       return await this.loadRawStrict()
     } catch {
-      return { ...DEFAULT_SETTINGS, providers: [] }
+      return defaultSettings()
     }
   }
 
@@ -132,7 +161,7 @@ export class ServerSettingsStore {
     try {
       return await this.loadRawStrict()
     } catch (error) {
-      if (isFileNotFound(error)) return { ...DEFAULT_SETTINGS, providers: [] }
+      if (isFileNotFound(error)) return defaultSettings()
       throw error
     }
   }
@@ -151,6 +180,7 @@ export class ServerSettingsStore {
   }
 
   private toPublic(settings: ServerSettings): PublicAppSettings {
+    const { trailblazerProvider: _trailblazerProvider, ...publicSettings } = settings
     const providers: ProviderPublic[] = settings.providers.map((provider) => ({
       id: provider.id,
       name: provider.name,
@@ -161,16 +191,38 @@ export class ServerSettingsStore {
       keyPreview: keyPreview(provider.apiKey),
       modelSettings: provider.modelSettings ?? {}
     }))
-    return { ...settings, providers }
+    return { ...publicSettings, agentGeneration: normalizeAgentGenerationPreferences(settings.agentGeneration), providers }
   }
 
   load(): Promise<PublicAppSettings> {
     return this.serialized(async () => this.toPublic(await this.loadRaw()))
   }
 
+  managedProviderPreferences(): Promise<ManagedProviderPreferences> {
+    return this.serialized(async () => (await this.loadRaw()).trailblazerProvider)
+  }
+
+  consumeLegacyCustomPrompt(migrate: (prompt: string) => Promise<void>): Promise<string | undefined> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      const prompt = settings.customPrompt.trim()
+      if (!prompt) return undefined
+      await migrate(prompt)
+      await this.persist({ ...settings, customPrompt: '' })
+      return prompt
+    })
+  }
+
   update(patch: SettingsPatch): Promise<PublicAppSettings> {
     return this.serialized(async () => {
-      const next = { ...(await this.loadRawForMutation()), ...patch }
+      const current = await this.loadRawForMutation()
+      const next = {
+        ...current,
+        ...patch,
+        updatePreferences: normalizeUpdatePreferences(patch.updatePreferences ?? current.updatePreferences),
+        orchestrationDefaults: normalizeOrchestrationPreferences(patch.orchestrationDefaults ?? current.orchestrationDefaults),
+        agentGeneration: normalizeAgentGenerationPreferences(patch.agentGeneration ?? current.agentGeneration)
+      }
       return this.toPublic(await this.persist(next))
     })
   }
@@ -187,6 +239,13 @@ export class ServerSettingsStore {
         if (signal?.aborted) await this.saveRaw(settings)
         throw error
       }
+    })
+  }
+
+  forgetRecentWorkspace(path: string): Promise<void> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      await this.persist({ ...settings, ...forgetRecentWorkspace(settings, path) })
     })
   }
 
@@ -221,23 +280,32 @@ export class ServerSettingsStore {
     })
   }
 
+  saveTrailblazerProvider(input: Pick<ProviderInput, 'models' | 'modelSettings'> & { modelScope?: string }): Promise<PublicAppSettings> {
+    return this.serialized(async () => {
+      const settings = await this.loadRawForMutation()
+      const models = [...new Set(input.models.filter((model) => typeof model === 'string' && model.trim().length > 0))]
+      const next = { ...settings, trailblazerProvider: { models, modelSettings: pruneModelSettings(models, input.modelSettings ?? settings.trailblazerProvider.modelSettings), ...((input.modelScope ?? settings.trailblazerProvider.modelScope) ? { modelScope: input.modelScope ?? settings.trailblazerProvider.modelScope } : {}) } }
+      return this.toPublic(await this.persist(next))
+    })
+  }
+
   deleteProvider(id: string): Promise<PublicAppSettings> {
     return this.serialized(async () => {
       const settings = await this.loadRawForMutation()
       const next = {
         ...settings,
         providers: settings.providers.filter((provider) => provider.id !== id),
-        defaultChatModel: settings.defaultChatModel?.providerId === id ? undefined : settings.defaultChatModel,
-        quickActionModel: settings.quickActionModel?.providerId === id ? undefined : settings.quickActionModel
+        defaultChatModel: settings.defaultChatModel?.providerId === id ? undefined : settings.defaultChatModel
       }
       return this.toPublic(await this.persist(next))
     })
   }
 
-  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string }> {
+  async agentSettings(): Promise<{ providers: Array<{ id: string; protocol: 'openai' | 'anthropic' | 'gemini'; baseUrl: string; apiKey: string; name?: string; modelSettings?: Record<string, ModelSettings> }>; customPrompt?: string; agentGeneration: AgentGenerationPreferences }> {
     const settings = await this.loadRaw()
     return {
       customPrompt: settings.customPrompt,
+      agentGeneration: settings.agentGeneration,
       providers: settings.providers.map(({ id, protocol, baseUrl, apiKey, name, modelSettings }) => ({ id, protocol, baseUrl, apiKey, name, modelSettings }))
     }
   }

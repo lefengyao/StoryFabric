@@ -3,7 +3,10 @@ import { promises as fs } from 'fs'
 import { basename, join, relative, resolve, sep } from 'path'
 import { workspaceStore } from './workspaceRuntime'
 import { NodeFileStore } from '../../core/storage/nodeFileStore'
+import { readWritingTools as coreReadWritingTools, writeWritingTools as coreWriteWritingTools } from '../../core/workspace/writingTools'
+import type { WritingToolsPreferences } from '../../shared/writingTools'
 import { importWorkspaceArchive } from '../../core/workspace/archive'
+import type { WorkspaceMigrationOptions } from '../../core/workspace/migration'
 import {
   initializeWorkspace as coreInitializeWorkspace,
   loadSummary as coreLoadSummary,
@@ -90,7 +93,7 @@ async function reserveWorkspaceDirectory(target: string, name: string): Promise<
 }
 
 /** Import into a freshly reserved sibling directory without replacing an existing path. */
-export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+export async function importWorkspaceIntoNewFolder(parentDir: string, name: string, bytes: Uint8Array, signal?: AbortSignal, options?: WorkspaceMigrationOptions): Promise<string> {
   throwIfWorkspaceRequestAborted(signal)
   const parent = resolve(parentDir)
   const safeName = safeWorkspaceName(name)
@@ -103,7 +106,7 @@ export async function importWorkspaceIntoNewFolder(parentDir: string, name: stri
     await reserveWorkspaceDirectory(target, basename(target))
     try {
       const targetStore = new NodeFileStore(target, parent)
-      await importWorkspaceArchive(targetStore, bytes)
+      await importWorkspaceArchive(targetStore, bytes, options)
       throwIfWorkspaceRequestAborted(signal)
       await coreSetWorkspaceName(targetStore, safeName)
       throwIfWorkspaceRequestAborted(signal)
@@ -115,12 +118,19 @@ export async function importWorkspaceIntoNewFolder(parentDir: string, name: stri
   })
 }
 
-export function loadSummary(root: string): Promise<WorkspaceSummary> {
-  return coreLoadSummary(storeOf(root), basename(root), root)
+export function loadSummary(root: string, options?: WorkspaceMigrationOptions): Promise<WorkspaceSummary> {
+  return coreLoadSummary(storeOf(root), basename(root), root, options)
 }
 
 export function loadWorkspaceListItem(root: string): Promise<WorkspaceListItem> {
   return coreLoadWorkspaceListItem(storeOf(root), basename(root), root)
+}
+
+export async function renameWorkspace(root: string, name: string): Promise<WorkspaceListItem> {
+  const valid = await validateWorkspace(root)
+  if (!valid.ok) throw new Error(valid.reason)
+  await coreSetWorkspaceName(storeOf(root), name)
+  return loadWorkspaceListItem(root)
 }
 
 /** Enumerate valid local workspaces below the user's documents root. */
@@ -163,6 +173,8 @@ export function restoreTrash(root: string, id: string): Promise<void> { return c
 export function purgeTrash(root: string, id: string): Promise<void> { return corePurgeTrash(storeOf(root), id) }
 
 export type GraphLayout = Record<string, { x: number; y: number }>
+export function readWritingTools(root: string): Promise<WritingToolsPreferences> { return coreReadWritingTools(storeOf(root)) }
+export function writeWritingTools(root: string, preferences: WritingToolsPreferences): Promise<void> { return coreWriteWritingTools(storeOf(root), preferences) }
 
 export function readGraphLayout(root: string): Promise<GraphLayout> {
   return coreReadGraphLayout(storeOf(root))

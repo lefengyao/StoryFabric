@@ -45,6 +45,34 @@ describe('context window planning', () => {
     expect(plan?.estimatedAfterTokens).toBeLessThan(plan?.beforeTokens ?? 0)
   })
 
+  it('allows manual compression below the automatic threshold', () => {
+    const messages = Array.from({ length: 12 }, (_, index) =>
+      message(`manual-${index}`, index % 2 === 0 ? 'user' : 'assistant', `消息 ${index}：${'内容'.repeat(20)}`)
+    )
+    const plan = planContextCompression({
+      messages,
+      contextTokens: 10000,
+      maxOutputTokens: 1000,
+      force: true
+    })
+
+    expect(plan).not.toBeNull()
+    expect(plan?.oldMessages.length).toBeGreaterThan(0)
+    expect(plan?.recentMessages.length).toBeGreaterThan(0)
+  })
+
+  it('reports remaining input capacity after reserving output tokens', () => {
+    const usage = resolveContextUsage({
+      messages: [message('m1', 'user', '短消息')],
+      contextTokens: 10000,
+      maxOutputTokens: 2000
+    })
+
+    expect(usage.inputBudgetTokens).toBe(8000)
+    expect(usage.remainingTokens).toBeLessThan(8000)
+    expect(usage.ratio).toBeGreaterThan(0)
+  })
+
   it('does not compress a short conversation', () => {
     expect(planContextCompression({
       messages: [message('m1', 'user', '你好'), message('m2', 'assistant', '你好，请告诉我需要做什么。')],

@@ -60,8 +60,10 @@ export function resolveContextUsage(options: {
     usedTokens,
     contextTokens: options.contextTokens,
     inputBudgetTokens,
-    remainingTokens: Math.max(0, options.contextTokens - usedTokens),
-    ratio: usedTokens / Math.max(1, options.contextTokens)
+    // Reserve the configured output budget; this is the capacity available
+    // for the next prompt, not the raw provider window.
+    remainingTokens: Math.max(0, inputBudgetTokens - usedTokens),
+    ratio: usedTokens / Math.max(1, inputBudgetTokens)
   }
 }
 
@@ -76,11 +78,13 @@ export function planContextCompression(options: {
   summaryThrough?: string
   summaryTokens?: number
   systemTokens?: number
+  /** Manual compression bypasses the automatic threshold. */
+  force?: boolean
 }): CompressionPlan | null {
   const active = messagesAfterSummary(options.messages, options.summaryThrough)
   const beforeTokens = resolveContextUsage(options).usedTokens
   const inputBudgetTokens = Math.max(1024, options.contextTokens - options.maxOutputTokens)
-  if (beforeTokens < inputBudgetTokens * 0.78) return null
+  if (!options.force && beforeTokens < inputBudgetTokens * 0.78) return null
 
   const keepBudget = Math.max(3000, Math.min(inputBudgetTokens * 0.35, options.contextTokens * 0.3))
   let keepStart = active.length
@@ -94,11 +98,16 @@ export function planContextCompression(options: {
 
   const lastUserIndex = active.findLastIndex((message) => message.role === 'user')
   if (lastUserIndex >= 0) keepStart = Math.min(keepStart, lastUserIndex)
+  if (options.force && keepStart < 2 && active.length >= 4) {
+    // A manual request should do useful work even when automatic compression
+    // would not trigger yet: retain the newest half and summarize the rest.
+    keepStart = Math.max(1, Math.floor(active.length / 2))
+  }
   if (keepStart < 2) return null
 
   const oldMessages = active.slice(0, keepStart)
   const recentMessages = active.slice(keepStart)
-  const throughMessageId = oldMessages.at(-1)?.id
+  const throughMessageId = oldMessages[oldMessages.length - 1]?.id
   if (!throughMessageId) return null
 
   return {
@@ -111,6 +120,7 @@ export function planContextCompression(options: {
 }
 
 export function summaryTranscriptChunks(messages: ChatMessage[], maxChars = 24000): string[] {
+  const safeMaxChars = Math.max(2000, Math.floor(maxChars))
   const chunks: string[] = []
   let current = ''
   for (const message of messages) {
@@ -123,7 +133,7 @@ export function summaryTranscriptChunks(messages: ChatMessage[], maxChars = 2400
       calls ? `工具调用：${calls}` : '',
       files ? `附件：${files}` : ''
     ].filter(Boolean).join('\n')
-    if (current && current.length + text.length + 2 > maxChars) {
+    if (current && current.length + text.length + 2 > safeMaxChars) {
       chunks.push(current)
       current = ''
     }

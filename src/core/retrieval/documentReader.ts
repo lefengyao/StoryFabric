@@ -1,12 +1,15 @@
-import type { ChapterDoc, OutlineDoc } from '../../shared/types'
 import type { FileStore } from '../storage/fileStore'
-import { getChapterBody, listChapters, listOutline } from '../workspace/entityStore'
-import { resourceRevision } from '../workspace/resourceRevision'
+import { loadChapterDocuments, loadOutlineDocuments } from '../workspace/entityStore'
+import { readCurrentDocument } from '../workspace/documentWrites'
+import { coordinatorFor } from '../workspace/mutationCoordinator'
+import { checkDocumentReadRevision } from './documentReadRevision'
 
 export interface DocumentSlice {
   id: string
   title: string
   sourcePath: string
+  writeRevision: string
+  readRevision: string
   revision: string
   offset: number
   content: string
@@ -53,13 +56,11 @@ function sliceDocument(input: {
   title: string
   sourcePath: string
   content: string
-  revision: string
+  writeRevision: string
+  readRevision: string
 }, options: ReadSliceOptions): DocumentSlice {
   const offset = boundedInteger(options.offset, 0, 'offset', 0, Number.MAX_SAFE_INTEGER)
   const maxChars = boundedInteger(options.maxChars, DEFAULT_MAX_CHARS, 'maxChars', 1, MAX_MAX_CHARS)
-  if (options.expectedRevision && options.expectedRevision !== input.revision) {
-    throw new DocumentReaderError('SOURCE_CHANGED', '源文档已变化，请从第一页重新读取')
-  }
   if (offset > input.content.length) {
     throw new DocumentReaderError('INVALID_ARGUMENT', `offset 超出文档长度：${input.content.length}`)
   }
@@ -70,7 +71,9 @@ function sliceDocument(input: {
     id: input.id,
     title: input.title,
     sourcePath: input.sourcePath,
-    revision: input.revision,
+    writeRevision: input.writeRevision,
+    readRevision: input.readRevision,
+    revision: input.readRevision,
     offset,
     content,
     returnedChars: content.length,
@@ -80,39 +83,28 @@ function sliceDocument(input: {
   }
 }
 
-function chapterRevision(chapter: ChapterDoc, chapterPath: string): string {
-  return resourceRevision(chapterPath, chapter.id, chapter.title, chapter.volumeId ?? '', chapter.box ?? '', chapter.order, chapter.status ?? '', chapter.content)
-}
-
-function outlineRevision(outline: OutlineDoc, sourcePath: string): string {
-  return resourceRevision(sourcePath, outline.id, outline.title, outline.kind ?? 'total', outline.chapterId ?? '', outline.order, outline.content)
-}
-
 export async function readChapterSlice(
   store: FileStore,
   ref: { chapterId?: string; title?: string },
   options: ReadSliceOptions = {}
 ): Promise<DocumentSlice> {
-  const metas = await listChapters(store)
+  const chapters = await loadChapterDocuments(store)
   let matches = ref.chapterId
-    ? metas.filter((chapter) => chapter.id === ref.chapterId)
+    ? chapters.filter(({ doc }) => doc.id === ref.chapterId)
     : ref.title?.trim()
-      ? metas.filter((chapter) => chapter.title === ref.title?.trim() || chapter.title.includes(ref.title!.trim()))
+      ? chapters.filter(({ doc }) => doc.title === ref.title?.trim() || doc.title.includes(ref.title!.trim()))
       : []
   if (!matches.length) throw new DocumentReaderError('NOT_FOUND', `未找到章节：${ref.chapterId ?? ref.title ?? ''}`)
-  if (!ref.chapterId && new Set(matches.map((chapter) => chapter.id)).size > 1) {
-    throw new DocumentReaderError('AMBIGUOUS_TARGET', `章节标题存在多个候选：${matches.map((chapter) => `${chapter.id} ${chapter.title}`).join('；')}`)
+  if (!ref.chapterId && new Set(matches.map(({ doc }) => doc.id)).size > 1) {
+    throw new DocumentReaderError('AMBIGUOUS_TARGET', `章节标题存在多个候选：${matches.map(({ doc }) => `${doc.id} ${doc.title}`).join('；')}`)
   }
-  const meta = matches[0]
-  const content = (await getChapterBody(store, meta.id)) ?? ''
-  const sourcePath = `chapters/${meta.box ?? 'main'}/${meta.id}.md`
-  return sliceDocument({
-    id: meta.id,
-    title: meta.title,
-    sourcePath,
-    content,
-    revision: chapterRevision({ ...meta, content } as ChapterDoc, sourcePath)
-  }, options)
+  const { doc, fileName } = matches[0]
+  return coordinatorFor(store).run(`chapter:${doc.id}`, async () => {
+    const snapshot = await readCurrentDocument(store, 'chapter', doc.id, `chapters/${fileName}`)
+    const revision = checkDocumentReadRevision(store, 'chapter', doc.id, snapshot.sourceText, snapshot.writeRevision, options.expectedRevision)
+    if (!revision.matches) throw new DocumentReaderError('SOURCE_CHANGED', '源文档已变化，请从第一页重新读取')
+    return sliceDocument({ id: doc.id, title: snapshot.document.title, sourcePath: snapshot.path, content: snapshot.document.content, writeRevision: snapshot.writeRevision, readRevision: revision.readRevision }, options)
+  })
 }
 
 export async function readOutlineSlice(
@@ -120,27 +112,23 @@ export async function readOutlineSlice(
   ref: { outlineId?: string; chapterId?: string; kind?: 'total' | 'chapter' },
   options: ReadSliceOptions = {}
 ): Promise<DocumentSlice> {
-  const outlines = await listOutline(store)
+  const outlines = await loadOutlineDocuments(store)
   let matches = ref.outlineId
-    ? outlines.filter((outline) => outline.id === ref.outlineId)
+    ? outlines.filter(({ doc }) => doc.id === ref.outlineId)
     : ref.chapterId
-      ? outlines.filter((outline) => outline.kind === 'chapter' && outline.chapterId === ref.chapterId)
+      ? outlines.filter(({ doc }) => doc.kind === 'chapter' && doc.chapterId === ref.chapterId)
       : ref.kind
-        ? outlines.filter((outline) => (outline.kind ?? 'total') === ref.kind)
+        ? outlines.filter(({ doc }) => (doc.kind ?? 'total') === ref.kind)
         : []
   if (!matches.length) throw new DocumentReaderError('NOT_FOUND', '未找到大纲文档')
   if (matches.length > 1) {
-    throw new DocumentReaderError('AMBIGUOUS_TARGET', `大纲目标存在多个候选：${matches.map((outline) => `${outline.id} ${outline.title}`).join('；')}`)
+    throw new DocumentReaderError('AMBIGUOUS_TARGET', `大纲目标存在多个候选：${matches.map(({ doc }) => `${doc.id} ${doc.title}`).join('；')}`)
   }
-  const outline = matches[0]
-  const sourcePath = outline.kind === 'chapter'
-    ? `outline/chapters/${outline.chapterId ?? 'unknown'}/${outline.id}.md`
-    : `outline/total/${outline.id}.md`
-  return sliceDocument({
-    id: outline.id,
-    title: outline.title,
-    sourcePath,
-    content: outline.content,
-    revision: outlineRevision(outline, sourcePath)
-  }, options)
+  const { doc: outline, fileName } = matches[0]
+  return coordinatorFor(store).run(`outline:${outline.id}`, async () => {
+    const snapshot = await readCurrentDocument(store, 'outline', outline.id, `outline/${fileName}`)
+    const revision = checkDocumentReadRevision(store, 'outline', outline.id, snapshot.sourceText, snapshot.writeRevision, options.expectedRevision)
+    if (!revision.matches) throw new DocumentReaderError('SOURCE_CHANGED', '源文档已变化，请从第一页重新读取')
+    return sliceDocument({ id: outline.id, title: snapshot.document.title, sourcePath: snapshot.path, content: snapshot.document.content, writeRevision: snapshot.writeRevision, readRevision: revision.readRevision }, options)
+  })
 }

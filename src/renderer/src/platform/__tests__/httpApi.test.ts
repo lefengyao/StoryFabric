@@ -2,6 +2,59 @@ import { describe, expect, it, vi } from 'vitest'
 import { HttpPlatformApi, WebAuthRequiredError } from '../httpApi'
 
 describe('web platform api', () => {
+  it('loads supplier pricing through the authenticated cloud RPC', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ result: [] }), { headers: { 'content-type': 'application/json' } }))
+    const api = new HttpPlatformApi(fetcher)
+    await expect(api.cloudAccount.getSupplierLobby!()).resolves.toEqual([])
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ method: 'cloudSupplierLobby', args: [] })
+  })
+  it('opens account authorization in a popup and keeps the app page alive', async () => {
+    const originalWindow = (globalThis as { window?: unknown }).window
+    const popup = { focus: vi.fn() }
+    const open = vi.fn(() => popup)
+    const assign = vi.fn()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { open, location: { assign } } })
+    try {
+      let call = 0
+      const api = new HttpPlatformApi(async () => {
+        call += 1
+        return call === 1
+          ? new Response(JSON.stringify({ url: 'https://accounts.example/oauth/authorize' }), { status: 200 })
+          : new Response(JSON.stringify({ result: { phase: 'authorizing', persistent: false } }), { status: 200 })
+      })
+
+      await expect(api.cloudAccount.beginLogin()).resolves.toMatchObject({ phase: 'authorizing' })
+      expect(open).toHaveBeenCalledWith('https://accounts.example/oauth/authorize', 'storyfabric-account-login', 'popup,width=520,height=760,resizable=yes,scrollbars=yes')
+      expect(popup.focus).toHaveBeenCalledOnce()
+      expect(assign).not.toHaveBeenCalled()
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window
+      else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
+  })
+
+  it('falls back to same-tab navigation when the authorization popup is blocked', async () => {
+    const originalWindow = (globalThis as { window?: unknown }).window
+    const open = vi.fn(() => null)
+    const assign = vi.fn()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { open, location: { assign } } })
+    try {
+      let call = 0
+      const api = new HttpPlatformApi(async () => {
+        call += 1
+        return call === 1
+          ? new Response(JSON.stringify({ url: 'https://accounts.example/oauth/authorize' }), { status: 200 })
+          : new Response(JSON.stringify({ result: { phase: 'authorizing', persistent: false } }), { status: 200 })
+      })
+
+      await api.cloudAccount.beginLogin()
+      expect(assign).toHaveBeenCalledWith('https://accounts.example/oauth/authorize')
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window
+      else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
+  })
+
   it('maps StoryFabric calls to authenticated RPC requests', async () => {
     const requests: Array<{ url: string; body: string }> = []
     const api = new HttpPlatformApi(async (input, init) => {
@@ -27,6 +80,20 @@ describe('web platform api', () => {
     expect(requests[0].init?.credentials).toBe('include')
   })
 
+  it('sends rename and recent-list removal through authenticated RPC', async () => {
+    const calls: unknown[] = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ result: null }), { status: 200 })
+    })
+    await api.renameWorkspace('ws_1', '新名称')
+    await api.forgetRecentWorkspace('ws_1')
+    expect(calls).toEqual([
+      { method: 'renameWorkspace', args: ['ws_1', '新名称'] },
+      { method: 'forgetRecentWorkspace', args: ['ws_1'] }
+    ])
+  })
+
   it('invokes the default browser fetch with the global receiver', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = function (this: unknown, _input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
@@ -46,6 +113,15 @@ describe('web platform api', () => {
     const api = new HttpPlatformApi(async () => new Response(JSON.stringify({ error: '需要登录' }), { status: 401 }))
 
     await expect(api.getCurrentWorkspace()).rejects.toBeInstanceOf(WebAuthRequiredError)
+  })
+
+  it('explains when a web host returns HTML instead of the StoryFabric API response', async () => {
+    const api = new HttpPlatformApi(async () => new Response('<!doctype html><title>Vite</title>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' }
+    }))
+
+    await expect(api.getCurrentWorkspace()).rejects.toThrow('未连接到 StoryFabric 服务')
   })
 
   it('uploads raw workspace ZIP bytes to the binary endpoint', async () => {
@@ -98,6 +174,20 @@ describe('web platform api', () => {
     await expect(api.openWorkspaceByPath('  ')).rejects.toThrow('请输入工作区路径')
   })
 
+  it('forwards explicit upgrade consent for IDs, paths and archive imports', async () => {
+    const requests: RequestInit[] = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      requests.push(init!)
+      return new Response(JSON.stringify({ name: '升级后', path: 'ws_upgraded', version: 5 }), { headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example')
+    await api.openWorkspace('ws_old', { upgradeLegacy: true })
+    await api.openWorkspaceByPath('/srv/workspaces/old', { upgradeLegacy: true })
+    await api.importWorkspace(new Uint8Array([1]), 'old.storyfabric.zip', undefined, { upgradeLegacy: true })
+    expect(JSON.parse(String(requests[0].body))).toEqual({ upgradeLegacy: true })
+    expect(JSON.parse(String(requests[1].body))).toEqual({ path: '/srv/workspaces/old', upgradeLegacy: true })
+    expect(requests[2].headers).toMatchObject({ 'x-storyfabric-upgrade-legacy': 'true' })
+  })
+
   it('aborts a bearer SSE request when unsubscribing', async () => {
     let request: RequestInit | undefined
     const api = new HttpPlatformApi(async (_input, init) => {
@@ -110,5 +200,64 @@ describe('web platform api', () => {
     expect(request?.signal?.aborted).toBe(false)
     unsubscribe()
     expect(request?.signal?.aborted).toBe(true)
+  })
+
+  it('recovers unified runtime events from a sequence cursor', async () => {
+    const requests: string[] = []
+    const api = new HttpPlatformApi(async (input) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({ replayable: true, events: [], snapshotSeq: 8 }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }, 'https://server.example', { kind: 'bearer', token: 't'.repeat(32) })
+
+    await expect(api.recoverRunEvents('run/1', 7)).resolves.toMatchObject({ replayable: true, snapshotSeq: 8 })
+    expect(requests[0]).toBe('https://server.example/api/runs/run%2F1/events?after=7')
+  })
+
+  it('forwards creative preferences through the session update RPC', async () => {
+    const requests: Array<{ url: string; body: string }> = []
+    const api = new HttpPlatformApi(async (input, init) => {
+      requests.push({ url: String(input), body: String(init?.body ?? '') })
+      return new Response(JSON.stringify({ result: undefined }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const creativePreferences = {
+      mode: 'orchestration' as const,
+      orchestrationEnabled: true,
+      subagentsEnabled: false,
+      intensity: 'standard' as const,
+      selectedSkillIds: [],
+      selectedRuleSetIds: [],
+      orchestration: {
+        mode: 'single' as const,
+        enabled: true,
+        subagentsEnabled: false,
+        enabledStageIds: ['write'],
+        modelByStage: {}
+      }
+    }
+
+    await api.updateSession('session-1', { creativePreferences })
+
+    expect(JSON.parse(requests[0].body)).toEqual({
+      method: 'updateSession',
+      args: ['session-1', { creativePreferences }]
+    })
+  })
+
+  it('forwards structured question answers and Skill candidate decisions', async () => {
+    const requests: Array<{ method: string; args: unknown[] }> = []
+    const api = new HttpPlatformApi(async (_input, init) => {
+      const payload = JSON.parse(String(init?.body ?? '{}')) as { method: string; args: unknown[] }
+      requests.push(payload)
+      return new Response(JSON.stringify({ result: undefined }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const answer = { questionId: 'question-1', answers: { direction: 'a' } }
+    await api.agentAnswerQuestion(answer)
+    await api.agentResolveSkillCandidate('candidate-1', 'install-enable')
+
+    expect(requests).toEqual([
+      { method: 'agentAnswerQuestion', args: [answer] },
+      { method: 'agentResolveSkillCandidate', args: ['candidate-1', 'install-enable'] }
+    ])
   })
 })

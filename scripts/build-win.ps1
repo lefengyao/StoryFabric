@@ -6,12 +6,25 @@ $ErrorActionPreference = 'Stop'
 $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
 $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 
-# 先产出随包分发的服务端部署包（electron-builder 的 extraResources 依赖它）
-npm run server:bundle
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# electron-builder 26.15 still has transitive spawn sites without
+# windowsHide.  Preload a tiny child_process shim for this build only so
+# package-manager, 7za and NSIS helpers do not open a console window.
+$previousNodeOptions = $env:NODE_OPTIONS
+$buildHidePreload = (Join-Path $PSScriptRoot 'hide-windows-child-processes.cjs').Replace('\', '/')
+$env:NODE_OPTIONS = if ([string]::IsNullOrWhiteSpace($previousNodeOptions)) {
+    "--require=`"$buildHidePreload`""
+} else {
+    "$previousNodeOptions --require=`"$buildHidePreload`""
+}
 
-npx electron-vite build
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+try {
+    npx electron-vite build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-npx electron-builder --win
-exit $LASTEXITCODE
+    # Native optional dependencies are not rebuilt during packaging.
+    npx electron-builder --win --config.npmRebuild=false
+    exit $LASTEXITCODE
+}
+finally {
+    $env:NODE_OPTIONS = $previousNodeOptions
+}

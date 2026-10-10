@@ -14,35 +14,63 @@ import type {
 import type { FetchModelsInput, SettingsPatch } from '../shared/api'
 
 const api: StoryFabricApi = {
+  cloudAccount: {
+    getState: () => ipcRenderer.invoke(IPC.CloudState), beginLogin: () => ipcRenderer.invoke(IPC.CloudLogin),
+    cancelLogin: () => ipcRenderer.invoke(IPC.CloudCancel), logout: () => ipcRenderer.invoke(IPC.CloudLogout),
+    retryOnboarding: () => ipcRenderer.invoke(IPC.CloudOnboard), getAccount: () => ipcRenderer.invoke(IPC.CloudAccount),
+    getUsage: (page) => ipcRenderer.invoke(IPC.CloudUsage, page), getChannels: () => ipcRenderer.invoke(IPC.CloudChannels),
+    getGroups: () => ipcRenderer.invoke(IPC.CloudGroups), getSupplierLobby: () => ipcRenderer.invoke(IPC.CloudSupplierLobby), redeem: (input) => ipcRenderer.invoke(IPC.CloudRedeem, input),
+    getRedeemHistory: () => ipcRenderer.invoke(IPC.CloudRedeemHistory), selectGroup: (input) => ipcRenderer.invoke(IPC.CloudGroup, input),
+    rotateConnection: (input) => ipcRenderer.invoke(IPC.CloudRotate, input),
+    getConfig: () => ipcRenderer.invoke(IPC.CloudConfig),
+    setPlatformWebUrl: (value) => ipcRenderer.invoke(IPC.CloudConfigUpdate, value)
+  },
+  checkAppUpdate: () => ipcRenderer.invoke(IPC.CheckAppUpdate),
+  getUpdateDownloadState: () => ipcRenderer.invoke(IPC.GetUpdateDownloadState),
+  downloadAppUpdate: () => ipcRenderer.invoke(IPC.DownloadAppUpdate),
+  cancelAppUpdateDownload: () => ipcRenderer.invoke(IPC.CancelAppUpdateDownload),
+  installAppUpdate: () => ipcRenderer.invoke(IPC.InstallAppUpdate),
   clipboardReadText: () => ipcRenderer.invoke(IPC.ClipboardReadText),
   clipboardWriteText: (text) => ipcRenderer.invoke(IPC.ClipboardWriteText, text),
 
   pickFolder: () => ipcRenderer.invoke(IPC.PickFolder),
   listWorkspaces: () => ipcRenderer.invoke(IPC.ListWorkspaces),
   listRecentWorkspaces: () => ipcRenderer.invoke(IPC.ListRecentWorkspaces),
+  renameWorkspace: (path, name) => ipcRenderer.invoke(IPC.RenameWorkspace, path, name),
+  forgetRecentWorkspace: (path) => ipcRenderer.invoke(IPC.ForgetRecentWorkspace, path),
   getDefaultWorkspaceDir: () => ipcRenderer.invoke(IPC.GetDefaultDir),
   createWorkspace: (parentDir, name) => ipcRenderer.invoke(IPC.CreateWorkspace, parentDir, name),
-  openWorkspace: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspace, path, options?.requestId),
-  openWorkspaceByPath: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspaceByPath, path, options?.requestId),
+  openWorkspace: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspace, path, options?.requestId, options?.upgradeLegacy === true),
+  openWorkspaceByPath: (path, options) => ipcRenderer.invoke(IPC.OpenWorkspaceByPath, path, options?.requestId, options?.upgradeLegacy === true),
   closeWorkspace: () => ipcRenderer.invoke(IPC.CloseWorkspace),
   getCurrentWorkspace: () => ipcRenderer.invoke(IPC.GetCurrentWorkspace),
   refreshWorkspace: () => ipcRenderer.invoke(IPC.RefreshWorkspace),
   exportWorkspace: () => ipcRenderer.invoke(IPC.ExportWorkspace),
-  importWorkspace: (bytes, fileName, target, options) => ipcRenderer.invoke(IPC.ImportWorkspace, bytes, fileName, target, options?.requestId),
+  importWorkspace: (bytes, fileName, target, options) => ipcRenderer.invoke(IPC.ImportWorkspace, bytes, fileName, target, options?.requestId, options?.upgradeLegacy === true),
   cancelWorkspaceRequest: (requestId) => ipcRenderer.invoke(IPC.CancelWorkspaceRequest, requestId),
   getChapterBody: (id) => ipcRenderer.invoke(IPC.GetChapterBody, id),
+  getDocumentSnapshot: (kind, id) => ipcRenderer.invoke(IPC.GetDocumentSnapshot, kind, id),
+  saveHistoryVersion: (kind, id, options) => ipcRenderer.invoke(IPC.SaveHistoryVersion, kind, id, options),
+  listHistoryVersions: (kind, id) => ipcRenderer.invoke(IPC.ListHistoryVersions, kind, id),
+  getHistoryVersion: (kind, id, versionId) => ipcRenderer.invoke(IPC.GetHistoryVersion, kind, id, versionId),
+  updateHistoryVersion: (kind, id, versionId, patch) => ipcRenderer.invoke(IPC.UpdateHistoryVersion, kind, id, versionId, patch),
+  deleteHistoryVersion: (kind, id, versionId, allowPinned) => ipcRenderer.invoke(IPC.DeleteHistoryVersion, kind, id, versionId, allowPinned),
+  restoreHistoryVersion: (kind, id, versionId, baseRevision, baseText) => ipcRenderer.invoke(IPC.RestoreHistoryVersion, kind, id, versionId, baseRevision, baseText),
+  saveImageFile: (name, bytes) => ipcRenderer.invoke(IPC.SaveImageFile, name, bytes),
   searchProject: (query) => ipcRenderer.invoke(IPC.SearchProject, query),
   getGraphLayout: () => ipcRenderer.invoke(IPC.GetGraphLayout),
   saveGraphLayout: (layout) => ipcRenderer.invoke(IPC.SaveGraphLayout, layout),
+  getWritingTools: () => ipcRenderer.invoke(IPC.GetWritingTools),
+  saveWritingTools: (preferences) => ipcRenderer.invoke(IPC.SaveWritingTools, preferences),
 
   saveCharacter: (doc: Partial<CharacterDoc>) => ipcRenderer.invoke(IPC.SaveCharacter, doc),
   deleteCharacter: (id) => ipcRenderer.invoke(IPC.DeleteCharacter, id),
   saveRelationships: (list: Relationship[]) => ipcRenderer.invoke(IPC.SaveRelationships, list),
-  saveOutlineDoc: (doc: Partial<OutlineDoc>) => ipcRenderer.invoke(IPC.SaveOutlineDoc, doc),
+  saveOutlineDoc: (doc: Partial<OutlineDoc>, options) => ipcRenderer.invoke(IPC.SaveOutlineDoc, doc, options),
   deleteOutlineDoc: (id) => ipcRenderer.invoke(IPC.DeleteOutlineDoc, id),
   saveEvent: (doc: Partial<StoryEvent>) => ipcRenderer.invoke(IPC.SaveEvent, doc),
   deleteEvent: (id) => ipcRenderer.invoke(IPC.DeleteEvent, id),
-  saveChapter: (doc: Partial<ChapterDoc>) => ipcRenderer.invoke(IPC.SaveChapter, doc),
+  saveChapter: (doc: Partial<ChapterDoc>, options) => ipcRenderer.invoke(IPC.SaveChapter, doc, options),
   deleteChapter: (id) => ipcRenderer.invoke(IPC.DeleteChapter, id),
   listVolumes: () => ipcRenderer.invoke(IPC.ListVolumes),
   saveVolume: (input) => ipcRenderer.invoke(IPC.SaveVolume, input),
@@ -62,14 +90,41 @@ const api: StoryFabricApi = {
 
   getSettings: () => ipcRenderer.invoke(IPC.GetSettings),
   updateSettings: (patch: SettingsPatch) => ipcRenderer.invoke(IPC.UpdateSettings, patch),
+  getMemory: (scope: import('../shared/memory').MemoryScope) => ipcRenderer.invoke(IPC.GetMemory, scope),
+  updateMemory: (scope: import('../shared/memory').MemoryScope, patch: import('../shared/memory').MemoryUpdate) => ipcRenderer.invoke(IPC.UpdateMemory, scope, patch),
   getUsageRecords: () => ipcRenderer.invoke(IPC.GetUsageRecords),
+  getUsageBuckets: () => ipcRenderer.invoke(IPC.GetUsageBuckets),
+  getWritingDays: () => ipcRenderer.invoke(IPC.GetWritingDays),
   saveProvider: (input) => ipcRenderer.invoke(IPC.SaveProvider, input),
   deleteProvider: (id) => ipcRenderer.invoke(IPC.DeleteProvider, id),
   fetchModels: (input: FetchModelsInput) => ipcRenderer.invoke(IPC.FetchModels, input),
+  getCapabilities: () => ipcRenderer.invoke(IPC.GetCapabilities),
+  listCreativePackages: () => ipcRenderer.invoke(IPC.ListCreativePackages),
+  installCreativePackage: (input) => ipcRenderer.invoke(IPC.InstallCreativePackage, input),
+  setCreativePackageEnabled: (id, version, enabled) => ipcRenderer.invoke(IPC.SetCreativePackageEnabled, id, version, enabled),
+  listCreativeRules: () => ipcRenderer.invoke(IPC.ListCreativeRules),
+  saveCreativeRules: (layers) => ipcRenderer.invoke(IPC.SaveCreativeRules, layers),
+  listInspirationSources: () => ipcRenderer.invoke(IPC.ListInspirationSources),
+  importInspirationSource: (input) => ipcRenderer.invoke(IPC.ImportInspirationSource, input),
+  importInspirationPath: (path) => ipcRenderer.invoke(IPC.ImportInspirationPath, path),
+  removeInspirationSource: (id) => ipcRenderer.invoke(IPC.RemoveInspirationSource, id),
+  extractInspirationSource: (id) => ipcRenderer.invoke(IPC.ExtractInspirationSource, id),
+  readInspirationSource: (id, maxChars) => ipcRenderer.invoke(IPC.ReadInspirationSource, id, maxChars),
+  readInspirationDoc: (name) => ipcRenderer.invoke(IPC.ReadInspirationDoc, name),
+  saveInspirationDoc: (name, content) => ipcRenderer.invoke(IPC.SaveInspirationDoc, name, content),
+  saveInspirationArtifact: (input) => ipcRenderer.invoke(IPC.SaveInspirationArtifact, input),
 
   agentRun: (req: RunAgentRequest) => ipcRenderer.invoke(IPC.AgentRun, req),
-  agentConfirm: (changeId, approved) => ipcRenderer.invoke(IPC.AgentConfirm, changeId, approved),
+  compressSessionContext: (sessionId, providerId, model) => ipcRenderer.invoke(IPC.CompressSessionContext, sessionId, providerId, model),
+  agentConfirm: (sessionId, changeId, approved, decision) => ipcRenderer.invoke(IPC.AgentConfirm, sessionId, changeId, approved, decision),
   agentAbort: (sessionId) => ipcRenderer.invoke(IPC.AgentAbort, sessionId),
+  agentAnswerQuestion: (answer) => ipcRenderer.invoke(IPC.AgentAnswerQuestion, answer),
+  agentResolveSkillCandidate: (candidateId, action) => ipcRenderer.invoke(IPC.AgentResolveSkillCandidate, candidateId, action),
+  listGoals: () => ipcRenderer.invoke(IPC.ListGoals),
+  getGoal: (id) => ipcRenderer.invoke(IPC.GetGoal, id),
+  continueGoal: (id) => ipcRenderer.invoke(IPC.ContinueGoal, id),
+  stopGoal: (id) => ipcRenderer.invoke(IPC.StopGoal, id),
+  replanGoal: (id) => ipcRenderer.invoke(IPC.ReplanGoal, id),
   listSessions: () => ipcRenderer.invoke(IPC.ListSessions),
   createSession: () => ipcRenderer.invoke(IPC.CreateSession),
   exportSession: (id) => ipcRenderer.invoke(IPC.ExportSession, id),
@@ -78,26 +133,18 @@ const api: StoryFabricApi = {
   deleteSession: (id) => ipcRenderer.invoke(IPC.DeleteSession, id),
   updateSession: (id, patch) => ipcRenderer.invoke(IPC.UpdateSession, id, patch),
   updateSessionModelPreference: (id, value) => ipcRenderer.invoke(IPC.UpdateSessionModelPreference, id, value),
+  recoverRunEvents: (runId, afterSeq) => ipcRenderer.invoke(IPC.RecoverRunEvents, runId, afterSeq),
   onAgentEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
     ipcRenderer.on(IPC.AgentEvent, listener)
     return () => ipcRenderer.removeListener(IPC.AgentEvent, listener)
   },
+  onRuntimeAgentEvent: (cb) => {
+    const listener = (_e: IpcRendererEvent, envelope: unknown) => cb(envelope as Parameters<typeof cb>[0])
+    ipcRenderer.on(IPC.RuntimeAgentEvent, listener)
+    return () => ipcRenderer.removeListener(IPC.RuntimeAgentEvent, listener)
+  },
 
-  deployTestConnection: (input) => ipcRenderer.invoke(IPC.DeployTestConnection, input),
-  deployInstall: (input) => ipcRenderer.invoke(IPC.DeployInstall, input),
-  deployUpdate: (targetId) => ipcRenderer.invoke(IPC.DeployUpdate, targetId),
-  deployCancel: () => ipcRenderer.invoke(IPC.DeployCancel),
-  deployLogs: (targetId) => ipcRenderer.invoke(IPC.DeployLogs, targetId),
-  deployUninstall: (targetId) => ipcRenderer.invoke(IPC.DeployUninstall, targetId),
-  deployListTargets: () => ipcRenderer.invoke(IPC.DeployListTargets),
-  deploySaveTarget: (input) => ipcRenderer.invoke(IPC.DeploySaveTarget, input),
-  deployDeleteTarget: (id) => ipcRenderer.invoke(IPC.DeployDeleteTarget, id),
-  onDeployEvent: (cb) => {
-    const listener = (_e: IpcRendererEvent, progress: unknown) => cb(progress as Parameters<typeof cb>[0])
-    ipcRenderer.on(IPC.DeployEvent, listener)
-    return () => ipcRenderer.removeListener(IPC.DeployEvent, listener)
-  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

@@ -63,6 +63,21 @@ describe('FileStore contract', () => {
     }
   })
 
+  it('removes only files through the file-only primitive and refuses directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-file-only-'))
+    try {
+      const store = new NodeFileStore(root)
+      await store.writeText('imports/source.txt', 'source')
+      await store.writeText('imports/hand-folder/hand-note.txt', 'preserve')
+      await expect(store.removeFile('imports/hand-folder')).rejects.toThrow()
+      expect(await store.readText('imports/hand-folder/hand-note.txt')).toBe('preserve')
+      await store.removeFile('imports/source.txt')
+      expect(await store.readText('imports/source.txt')).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects every NodeFileStore operation through a nested external symlink', async () => {
     const root = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-link-'))
     const outside = await mkdtemp(join(tmpdir(), 'storyfabric-filestore-outside-'))

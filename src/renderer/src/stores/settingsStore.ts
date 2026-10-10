@@ -4,6 +4,7 @@ import type { SettingsPatch } from '../../../shared/api'
 import { getPlatformApi } from '../platform/platformApi'
 import { accentStyle } from '../lib/accent'
 import { editorStyle } from '../lib/editorStyle'
+import { chatTypographyStyle } from '../lib/chatTypography'
 
 interface SettingsState {
   settings: PublicAppSettings | null
@@ -11,6 +12,14 @@ interface SettingsState {
   update: (patch: SettingsPatch) => Promise<void>
   /** 取色器拖动时的即时预览：只改 CSS 变量，不落盘。 */
   previewAccent: (base: string) => void
+}
+
+type SettingsUpdatedListener = (settings: PublicAppSettings, patch: SettingsPatch) => void | Promise<void>
+const settingsUpdatedListeners = new Set<SettingsUpdatedListener>()
+
+export function onSettingsUpdated(listener: SettingsUpdatedListener): () => void {
+  settingsUpdatedListeners.add(listener)
+  return () => settingsUpdatedListeners.delete(listener)
 }
 
 const ACCENT_VARS = ['--accent', '--accent-strong', '--accent-soft', '--accent-fg']
@@ -36,6 +45,7 @@ function applyAppearance(settings: PublicAppSettings | null): void {
   applyTheme(settings?.theme)
   applyAccent(settings)
   applyEditor(settings)
+  applyChatTypography(settings)
 }
 
 const EDITOR_VARS = ['--editor-font-size', '--editor-line-height', '--editor-font']
@@ -44,6 +54,13 @@ const EDITOR_VARS = ['--editor-font-size', '--editor-line-height', '--editor-fon
 function applyEditor(settings: PublicAppSettings | null): void {
   const style = editorStyle(settings ?? {})
   for (const key of EDITOR_VARS) document.documentElement.style.setProperty(key, style[key])
+}
+
+const CHAT_TYPOGRAPHY_VARS = ['--chat-font-size', '--chat-font-meta-size', '--chat-font-micro-size']
+
+function applyChatTypography(settings: PublicAppSettings | null): void {
+  const style = chatTypographyStyle(settings ?? {})
+  for (const key of CHAT_TYPOGRAPHY_VARS) document.documentElement.style.setProperty(key, style[key])
 }
 
 export const useSettings = create<SettingsState>((set) => ({
@@ -59,6 +76,7 @@ export const useSettings = create<SettingsState>((set) => ({
     const s = await getPlatformApi().updateSettings(patch)
     applyAppearance(s)
     set({ settings: s })
+    await Promise.all([...settingsUpdatedListeners].map((listener) => Promise.resolve(listener(s, patch)).catch(() => undefined)))
   },
 
   previewAccent: (base) => {

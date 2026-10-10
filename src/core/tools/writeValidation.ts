@@ -1,3 +1,6 @@
+import { resolveChapterPlacement } from '../../shared/chapterPlacement'
+import type { ChapterBox, ChapterStatus } from '../../shared/types'
+
 type RecordValue = Record<string, unknown>
 
 function asRecord(value: unknown, label: string): RecordValue {
@@ -26,6 +29,7 @@ export function validateAgentChapterWrite(value: unknown): void {
   if (chapter.box === 'main' && !nonEmptyString(chapter.volumeId)) {
     throw new Error('save_chapter 写入正文箱时必须明确指定有效的 volumeId；移动已有章节请使用 move_chapter')
   }
+  resolveChapterPlacement(null, { box: chapter.box as ChapterBox, status: chapter.status as ChapterStatus | undefined })
 }
 
 export function validateAgentChapterMove(value: unknown): void {
@@ -36,6 +40,20 @@ export function validateAgentChapterMove(value: unknown): void {
   if (target.box === 'main' && !nonEmptyString(target.volumeId)) {
     throw new Error('move_chapter 移入正文箱时必须指定 volumeId')
   }
+}
+
+export function validateAgentChapterEdit(value: unknown): void {
+  const edit = asRecord(value, 'edit_chapter')
+  if (!nonEmptyString(edit.chapterId)) throw new Error('edit_chapter 必须提供有效 chapterId')
+  if (!nonEmptyString(edit.baseRevision)) throw new Error('edit_chapter 必须提供 baseRevision；请先读取章节')
+  if (typeof edit.replacement !== 'string') throw new Error('edit_chapter 必须提供 replacement 字符串')
+  const hasExpected = typeof edit.expectedText === 'string'
+  const hasLines = Number.isInteger(edit.lineStart) || Number.isInteger(edit.lineEnd)
+  if (hasExpected === hasLines) throw new Error('edit_chapter 必须在 expectedText 或 lineStart+lineEnd 中二选一')
+  if (hasLines && (!Number.isInteger(edit.lineStart) || !Number.isInteger(edit.lineEnd) || Number(edit.lineStart) < 1 || Number(edit.lineEnd) < Number(edit.lineStart))) {
+    throw new Error('edit_chapter 的 lineStart/lineEnd 必须是有效的 1 起始行范围')
+  }
+  if (hasExpected && !String(edit.expectedText).length) throw new Error('edit_chapter 的 expectedText 不能为空')
 }
 
 export function validateAgentCharacterWrite(value: unknown): void {
@@ -94,8 +112,8 @@ export function validateAgentOutlineWrite(value: unknown): void {
   if (doc.kind !== 'total' && doc.kind !== 'chapter') {
     throw new Error('save_outline_doc 必须明确指定 kind：total（总纲）或 chapter（章纲），不能省略')
   }
-  if (doc.kind === 'chapter' && !nonEmptyString(doc.chapterId)) {
-    throw new Error('章纲必须明确指定 chapterId；请先用 list_chapters 获取目标章节 id')
+  if (doc.kind === 'chapter' && doc.chapterId !== undefined && typeof doc.chapterId !== 'string') {
+    throw new Error('章纲的 chapterId 必须是字符串；省略或留空表示尚未关联章节')
   }
   if (doc.kind === 'total' && doc.chapterId !== undefined) {
     throw new Error('总纲不能携带 chapterId；章纲请使用 kind: chapter')

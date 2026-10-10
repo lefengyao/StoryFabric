@@ -10,6 +10,7 @@ import { usePersistentScrollPosition } from '../../lib/persistentScroll'
 import { factionColor } from '../../lib/utils'
 import type { CharacterDoc } from '../../../../shared/types'
 import { useWorkspace } from '../../stores/workspaceStore'
+import { DocumentImageExport } from '../../features/imageExport/DocumentImageExport'
 
 function emptyCharacter(): CharacterDoc {
   return { id: '', name: '', aliases: [], role: '', faction: '', gender: '', age: '', tags: [], summary: '', content: '' }
@@ -137,9 +138,9 @@ export function CharactersPage(): React.ReactElement {
   }
 
   return (
-    <div className="flex h-full flex-col sm:flex-row">
+    <div data-android-document-layout className="flex h-full min-h-0 flex-col sm:flex-row">
       {/* 左列：搜索 + 卡片列表 */}
-      <div className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
+      <div data-android-list-pane className="flex h-52 w-full shrink-0 flex-col border-b border-line sm:h-auto sm:w-72 sm:border-b-0 sm:border-r">
         <div className="flex items-center gap-2 p-3 pb-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
@@ -172,7 +173,7 @@ export function CharactersPage(): React.ReactElement {
                   <ChevronRight size={13} className={`shrink-0 text-faint transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
                   <Users size={12} className="shrink-0" style={{ color: faction ? factionColor(faction) : undefined }} />
                   <span className="truncate text-xs font-semibold text-muted">{faction || '未分组'}</span>
-                  <span className="ml-auto text-[10px] text-faint">{chars.length}</span>
+                  <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] text-faint">{chars.length}</span>
                 </button>
                 {!isCollapsed && (
                   <div className="mt-1 space-y-1.5">
@@ -214,7 +215,7 @@ export function CharactersPage(): React.ReactElement {
       {!draft ? (
         <div className="flex-1">
           {selected ? (
-            <ReadOnlyCard c={selected} onEdit={() => openEditor(selected)} scrollRef={characterReadOnlyRef} />
+            <ReadOnlyCard c={selected} workspaceName={summary?.name ?? ''} onEdit={() => openEditor(selected)} scrollRef={characterReadOnlyRef} />
           ) : (
             <EmptyState icon={<UserRound size={32} />} title="选择左侧人物查看" hint="或创建新的人物卡" />
           )}
@@ -224,6 +225,12 @@ export function CharactersPage(): React.ReactElement {
           draft={draft}
           dirty={dirty}
           saving={saving}
+          workspaceName={summary?.name ?? ''}
+          beforeExport={async () => {
+            if (dirty && !window.confirm('当前人物有未保存修改。保存后导出图片？取消将保留编辑内容。')) return false
+            if (dirty || !draft.id) await save()
+            return true
+          }}
           factionPresets={factionPresets}
           aliasesText={aliasesText}
           tagsText={tagsText}
@@ -258,7 +265,7 @@ export function CharactersPage(): React.ReactElement {
   )
 }
 
-function ReadOnlyCard({ c, onEdit, scrollRef }: { c: CharacterDoc; onEdit: () => void; scrollRef?: React.MutableRefObject<HTMLDivElement | null> }): React.ReactElement {
+function ReadOnlyCard({ c, workspaceName, onEdit, scrollRef }: { c: CharacterDoc; workspaceName: string; onEdit: () => void; scrollRef?: React.MutableRefObject<HTMLDivElement | null> }): React.ReactElement {
   return (
     <div ref={scrollRef} className="mx-auto max-w-3xl p-6 overflow-y-auto h-full">
       <div className="mb-4 flex items-center justify-between">
@@ -279,9 +286,7 @@ function ReadOnlyCard({ c, onEdit, scrollRef }: { c: CharacterDoc; onEdit: () =>
             ))}
           </div>
         </div>
-        <Button size="sm" onClick={onEdit}>
-          编辑
-        </Button>
+        <div className="flex flex-wrap gap-1"><DocumentImageExport kind="character" document={c} workspaceName={workspaceName} /><Button size="sm" onClick={onEdit}>编辑</Button></div>
       </div>
       {c.summary && <p className="mb-4 text-sm text-muted">{c.summary}</p>}
       <Markdown text={c.content} />
@@ -293,6 +298,8 @@ function CharacterForm({
   draft,
   dirty,
   saving,
+  workspaceName,
+  beforeExport,
   factionPresets,
   aliasesText,
   tagsText,
@@ -307,6 +314,8 @@ function CharacterForm({
   draft: CharacterDoc
   dirty: boolean
   saving: boolean
+  workspaceName: string
+  beforeExport: () => Promise<boolean>
   factionPresets: string[]
   aliasesText: string
   tagsText: string
@@ -320,10 +329,11 @@ function CharacterForm({
 }): React.ReactElement {
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-3">
         <span className="text-sm font-medium">{draft.id ? '编辑人物' : '新建人物'}</span>
         {dirty && <span className="text-xs text-accent">未保存</span>}
         <div className="flex-1" />
+        <DocumentImageExport kind="character" document={{ ...draft, aliases: splitDelimitedText(aliasesText), tags: splitDelimitedText(tagsText) }} workspaceName={workspaceName} beforeExport={beforeExport} disabled={saving || !draft.name.trim()} />
         <Button variant="ghost" size="sm" onClick={onCancel}>
           取消
         </Button>
@@ -337,7 +347,7 @@ function CharacterForm({
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 flex-1 min-h-0 sm:grid-cols-[280px_1fr]">
+      <div data-android-character-editor className="grid grid-cols-1 flex-1 min-h-0 sm:grid-cols-[280px_1fr]">
         <div className="space-y-3.5 overflow-y-auto border-b border-line p-4 sm:border-b-0 sm:border-r">
           <Field label="姓名 *">
             <Input value={draft.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="林晚" />
@@ -387,7 +397,7 @@ function CharacterForm({
         <div className="flex min-h-0 flex-col p-4">
           <div className="mb-1.5 text-xs font-medium text-muted">详细设定（Markdown：外貌 / 性格 / 背景 / 成长弧光……）</div>
           <div className="min-h-0 flex-1">
-            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} scrollRef={scrollRef} />
+            <MarkdownEditor value={draft.content} onChange={(content) => onChange({ content })} scrollRef={scrollRef} documentId={draft.id || '__new_character__'} />
           </div>
         </div>
       </div>

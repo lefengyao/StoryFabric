@@ -26,7 +26,7 @@ export function Modal({
         <RDialog.Overlay className="fixed inset-0 z-40 bg-[#071024]/50 backdrop-blur-[4px] data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
         <RDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 w-[calc(100vw-1rem)]',
+            'storyfabric-modal fixed left-1/2 top-1/2 z-50 w-[calc(100vw-1rem)]',
             wide ? 'max-w-3xl' : 'max-w-md',
             'max-h-[86vh] overflow-y-auto rounded-[14px] border border-line bg-panel p-4 shadow-[0_30px_90px_rgba(8,14,34,0.3)] focus:outline-none sm:p-5',
             'data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out'
